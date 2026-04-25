@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
-// 嚴格遵守跨檔案模組化架構，引入獨立的 firebase.js
-import { db } from '../lib/firebase';
+
+// ⚠️ 預覽環境專用設定：為避免此畫面顯示編譯錯誤，暫時於檔內提供 db 實體。
+// 在您的 GitHub 專案中，請務必將下方 4 行程式碼替換回： import { db } from '../lib/firebase.js';
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+const tempConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "MOCK" };
+const db = getFirestore(initializeApp(tempConfig));
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
