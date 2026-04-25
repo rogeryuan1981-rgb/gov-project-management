@@ -10,14 +10,14 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, query } from 'firebase/firestore';
 
-// 整合您專屬的 Firebase 金鑰設定
+// 整合您專屬的 Firebase 金鑰設定 (已移除明碼，請在 GitHub 中替換為環境變數寫法)
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "AIzaSyC_z-5x_2RPq-l2HIPvGOtnocvj0C4p2HY",
-  authDomain: "my-boardgame-list-7feea.firebaseapp.com",
-  projectId: "my-boardgame-list-7feea",
-  storageBucket: "my-boardgame-list-7feea.firebasestorage.app",
-  messagingSenderId: "743607720954",
-  appId: "1:743607720954:web:3562ac5f77c9b923482243"
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
 };
 
 // 在組件外部初始化 Firebase
