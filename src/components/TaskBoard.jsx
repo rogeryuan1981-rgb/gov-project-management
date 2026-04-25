@@ -1,4 +1,172 @@
-王主任,2026-05-01,in-progress,尋找場地中,是\n";
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, ArrowRightLeft } from 'lucide-react';
+import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+
+// 為了讓預覽環境能夠順利編譯，將 Firebase 初始化直接包含於此模組中
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
+
+export default function TaskBoard({ user, selectedProject, selectedTask, setSelectedTask }) {
+  const [tasks, setTasks] = useState([]);
+  const fileInputRef = useRef(null);
+  const [isImporting, setIsImporting] = useState(false);
+
+  // 監聽 Firebase 資料庫中的工項 (依照選取的專案過濾)
+  useEffect(() => {
+    if (!user || !selectedProject) return;
+
+    const tasksRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'tasks');
+    
+    const unsubscribe = onSnapshot(tasksRef, (snapshot) => {
+      const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const projectTasks = allTasks.filter(t => t.projectName === selectedProject);
+      
+      projectTasks.sort((a, b) => new Date(a.due) - new Date(b.due));
+      setTasks(projectTasks);
+
+      // 若有正在查看的工項，確保資料即時更新
+      if (selectedTask) {
+        const updatedSelectedTask = projectTasks.find(t => t.uid === selectedTask.uid);
+        if (updatedSelectedTask) setSelectedTask(updatedSelectedTask);
+      }
+    }, (error) => {
+      console.error("Firestore listen error:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user, selectedProject, selectedTask, setSelectedTask]);
+
+  // 根據 UID/Parent_UID 轉換顯示用的三層資料結構
+  const displayTasks = React.useMemo(() => {
+    const epics = tasks.filter(t => t.parentUid === 0); // 第一層：主模組
+    if (epics.length === 0) {
+      return tasks.map(t => ({
+         ...t,
+         epic: '未分類模組',
+         subTasks: tasks.filter(sub => sub.parentUid === t.uid)
+      })).filter(t => t.parentUid === 0); 
+    }
+    // 第二層與第三層組合
+    return tasks
+      .filter(t => t.parentUid !== 0 && epics.some(e => e.uid === t.parentUid)) // 找出主任務
+      .map(t => {
+         const epic = epics.find(e => e.uid === t.parentUid);
+         const subTasks = tasks.filter(sub => sub.parentUid === t.uid); // 找出其下的子任務
+         return { ...t, epic: epic ? epic.title : '未知模組', subTasks: subTasks };
+      });
+  }, [tasks]);
+
+  // 單筆新增任務 (自動取得最新 UID 續編)
+  const handleAddTask = async () => {
+    if (!user || !selectedProject) return;
+    
+    const maxUid = tasks.reduce((max, t) => Math.max(max, t.uid), 0);
+    let targetEpicUid = 1;
+    const epics = tasks.filter(t => t.parentUid === 0);
+    
+    if (epics.length === 0) {
+      await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_1`), {
+        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '管理員', due: '', status: 'pending', currentProgress: '', reqDoc: false
+      });
+      targetEpicUid = 1;
+    } else {
+      targetEpicUid = epics[0].uid;
+    }
+    
+    const newUid = maxUid < 2 ? 2 : maxUid + 1;
+    const newTask = {
+      uid: newUid,
+      parentUid: targetEpicUid,
+      projectName: selectedProject,
+      title: '未命名工項',
+      assignee: '未指派',
+      due: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      reqDoc: false,
+      currentProgress: '尚未開始'
+    };
+    try {
+      await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${newUid}`), newTask);
+    } catch (e) {
+      console.error("Error adding task:", e);
+    }
+  };
+
+  const triggerFileInput = () => fileInputRef.current?.click();
+
+  const parseCSVRow = (row) => {
+    const result = [];
+    let insideQuotes = false;
+    let currentValue = "";
+    for (let i = 0; i < row.length; i++) {
+        const char = row[i];
+        if (char === '"') insideQuotes = !insideQuotes;
+        else if (char === ',' && !insideQuotes) { result.push(currentValue.trim()); currentValue = ""; }
+        else currentValue += char;
+    }
+    result.push(currentValue.trim());
+    return result;
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !user || !selectedProject) return;
+
+    setIsImporting(true);
+    try {
+      const text = await file.text();
+      const rows = text.split('\n').filter(row => row.trim().length > 0);
+      const isHeader = rows[0].includes('UID') || rows[0].includes('Parent');
+      const startIndex = isHeader ? 1 : 0;
+
+      let importCount = 0;
+      for (let i = startIndex; i < rows.length; i++) {
+        const cols = parseCSVRow(rows[i]);
+        if (cols.length >= 3) {
+          const uid = parseInt(cols[0], 10);
+          const parentUid = parseInt(cols[1], 10);
+          if (isNaN(uid) || isNaN(parentUid)) continue;
+
+          const taskData = {
+            uid, parentUid, projectName: selectedProject,
+            title: cols[2] || '未命名', assignee: cols[3] || '未指派',
+            due: cols[4] || '', status: cols[5] || 'pending',
+            currentProgress: cols[6] || '', reqDoc: cols[7] === '是' || cols[7] === 'true'
+          };
+          
+          const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${uid}`);
+          await setDoc(taskRef, taskData);
+          importCount++;
+        }
+      }
+      console.log(`成功匯入並更新 ${importCount} 筆工項資料`);
+    } catch (error) {
+      console.error("CSV 匯入失敗:", error);
+    } finally {
+      setIsImporting(false);
+      e.target.value = ''; 
+    }
+  };
+
+  const exportTasksToCSV = () => {
+    if (!selectedProject) return;
+    let csvContent = "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)\n";
+    
+    if (tasks.length === 0) {
+      csvContent += "1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否\n";
+      csvContent += "2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是\n";
       csvContent += "3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否\n";
       csvContent += "4,2,簽訂租賃合約與設備採購,陳專員,2026-05-01,overdue,延遲中,否\n";
       csvContent += "5,0,模組二：費用核撥與追扣,管理員,-,-,-,否\n";
