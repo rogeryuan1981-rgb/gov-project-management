@@ -2,25 +2,15 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-// 安全讀取環境變數的函式，防止在預覽環境中因為找不到變數而崩潰
-const getEnv = (key) => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      return import.meta.env[key];
-    }
-  } catch (e) {
-    return undefined;
-  }
-  return undefined;
-};
-
+// 【修正重點】：Vite 編譯器要求環境變數必須「靜態且完整」地宣告 (import.meta.env.VITE_XXX)。
+// 不能使用函式或動態字串，否則在 Vercel 正式機打包時會全部變成 undefined 導致畫面崩潰！
 const firebaseConfig = {
-  apiKey: getEnv('VITE_FIREBASE_API_KEY') || "MOCK_API_KEY",
-  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN') || "mock-app.firebaseapp.com",
-  projectId: getEnv('VITE_FIREBASE_PROJECT_ID') || "mock-project",
-  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET') || "mock-project.appspot.com",
-  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID') || "123456789",
-  appId: getEnv('VITE_FIREBASE_APP_ID') || "1:123456789:web:mockid"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
