@@ -7,11 +7,11 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 
 // 預留後續模組的引入位置 (目前先註解，等我們建立好檔案後再打開)
-import Dashboard from './components/Dashboard';
-import TaskBoard from './components/TaskBoard';
-import HRModule from './components/HRModule';
-import ArchiveModule from './components/ArchiveModule';
-import ReportsModule from './components/ReportsModule';
+//import Dashboard from './components/Dashboard';
+//import TaskBoard from './components/TaskBoard';
+//import HRModule from './components/HRModule';
+//import ArchiveModule from './components/ArchiveModule';
+//import ReportsModule from './components/ReportsModule';
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(false);
