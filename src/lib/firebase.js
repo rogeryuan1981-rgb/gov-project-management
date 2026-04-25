@@ -13,7 +13,15 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-// 避免在 React 嚴格模式或熱更新 (HMR) 過程中重複初始化 Firebase App 而導致報錯
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// 使用 try-catch 進行最安全的初始化，確保無論如何都不會因為重複初始化而引發白畫面
+let app;
+try {
+  // 嘗試獲取已存在的 App (解決 HMR 或元件重複 import 的問題)
+  app = getApp();
+} catch (e) {
+  // 如果還沒初始化過，則進行初始化
+  app = initializeApp(firebaseConfig);
+}
+
 export const auth = getAuth(app);
 export const db = getFirestore(app);
