@@ -21,7 +21,7 @@ export default function App() {
   // 系統載入時監聽 Firebase 登入狀態
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
+    return () => unsubscribe(); 
   }, []);
 
   return (
