@@ -2,12 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
-// ⚠️ 預覽環境專用設定：為避免此畫面顯示編譯錯誤，暫時於檔內提供 db 實體。
-// 在您的 GitHub 專案中，請務必將下方 4 行程式碼替換回： import { db } from '../lib/firebase.js';
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
-const tempConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "MOCK" };
-const db = getFirestore(initializeApp(tempConfig));
+// 嚴格遵守跨檔案模組化架構，統一由 firebase 引入資料庫實體
+import { db } from '../lib/firebase';
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -156,12 +152,20 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
     
+    // 改用陣列儲存每一行，避免字串中的 \n 被 Vercel (esbuild) 解析錯誤
     const csvRows = [
       "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)"
     ];
     
-    // 如果有資料，依據 UID 排序並輸出
-    if (tasks.length > 0) {
+    if (tasks.length === 0) {
+      // 專案為空時，給予預設範例結構
+      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否");
+      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是");
+      csvRows.push("3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否");
+      csvRows.push("4,2,簽訂租賃合約與設備採購,陳專員,2026-05-01,overdue,延遲中,否");
+      csvRows.push("5,0,模組二：費用核撥與追扣,管理員,-,-,-,否");
+      csvRows.push("6,5,任務 2.1：例行檢核與撥付,林組長,2026-05-15,pending,尚未開始,是");
+    } else {
       const sortedTasks = [...tasks].sort((a, b) => a.uid - b.uid);
       sortedTasks.forEach(t => {
         const req = t.reqDoc ? "是" : "否";
