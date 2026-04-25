@@ -1,21 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, ArrowRightLeft } from 'lucide-react';
+import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+// 嚴格遵守跨檔案模組化架構，引入獨立的 firebase.js
+import { db } from '../lib/firebase';
 
-// 為了讓預覽環境能夠順利編譯，將 Firebase 初始化直接包含於此模組中
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
 export default function TaskBoard({ user, selectedProject, selectedTask, setSelectedTask }) {
@@ -162,25 +150,30 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
-    let csvContent = "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)\n";
+    
+    // 【修復 Vercel 編譯錯誤】：改用陣列儲存每一行，避免字串中的 \n 被 Vercel (esbuild) 解析錯誤
+    const csvRows = [
+      "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)"
+    ];
     
     if (tasks.length === 0) {
-      csvContent += "1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否\n";
-      csvContent += "2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是\n";
-      csvContent += "3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否\n";
-      csvContent += "4,2,簽訂租賃合約與設備採購,陳專員,2026-05-01,overdue,延遲中,否\n";
-      csvContent += "5,0,模組二：費用核撥與追扣,管理員,-,-,-,否\n";
-      csvContent += "6,5,任務 2.1：例行檢核與撥付,林組長,2026-05-15,pending,尚未開始,是\n";
+      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否");
+      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是");
+      csvRows.push("3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否");
+      csvRows.push("4,2,簽訂租賃合約與設備採購,陳專員,2026-05-01,overdue,延遲中,否");
+      csvRows.push("5,0,模組二：費用核撥與追扣,管理員,-,-,-,否");
+      csvRows.push("6,5,任務 2.1：例行檢核與撥付,林組長,2026-05-15,pending,尚未開始,是");
     } else {
       const sortedTasks = [...tasks].sort((a, b) => a.uid - b.uid);
       sortedTasks.forEach(t => {
         const req = t.reqDoc ? "是" : "否";
         const safeTitle = `"${t.title || ''}"`;
         const safeProgress = `"${t.currentProgress || ''}"`;
-        csvContent += `${t.uid},${t.parentUid},${safeTitle},${t.assignee || ''},${t.due || ''},${t.status || ''},${safeProgress},${req}\n`;
+        csvRows.push(`${t.uid},${t.parentUid},${safeTitle},${t.assignee || ''},${t.due || ''},${t.status || ''},${safeProgress},${req}`);
       });
     }
     
+    const csvContent = csvRows.join("\n") + "\n";
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: "text/csv;charset=utf-8;" }); 
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -275,6 +268,17 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm p-6">
+        <h3 className="font-semibold text-slate-800 dark:text-white mb-4 flex items-center">
+          <FolderArchive size={18} className="mr-2 text-slate-400" /> 此工項之相關歸檔文件
+        </h3>
+        <div className="border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl p-8 flex flex-col items-center justify-center text-center">
+          <FileText size={32} className="text-slate-300 dark:text-slate-600 mb-2" />
+          <p className="text-sm text-slate-500">目前尚無關聯文件。在此拖曳上傳，系統將自動同步至 Google Drive。</p>
+          <button className="mt-4 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-sm font-medium rounded-lg hover:shadow-sm transition-all">選擇檔案上傳</button>
+        </div>
       </div>
     </div>
   );
