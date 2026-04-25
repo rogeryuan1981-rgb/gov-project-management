@@ -66,7 +66,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     
     if (epics.length === 0) {
       await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_1`), {
-        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '管理員', due: '', status: 'pending', currentProgress: '', reqDoc: false
+        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '未指派', due: '', status: 'pending', currentProgress: '', reqDoc: false
       });
       targetEpicUid = 1;
     } else {
@@ -151,19 +151,12 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
     
-    // 【修復 Vercel 編譯錯誤】：改用陣列儲存每一行，避免字串中的 \n 被 Vercel (esbuild) 解析錯誤
     const csvRows = [
       "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)"
     ];
     
-    if (tasks.length === 0) {
-      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否");
-      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是");
-      csvRows.push("3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否");
-      csvRows.push("4,2,簽訂租賃合約與設備採購,陳專員,2026-05-01,overdue,延遲中,否");
-      csvRows.push("5,0,模組二：費用核撥與追扣,管理員,-,-,-,否");
-      csvRows.push("6,5,任務 2.1：例行檢核與撥付,林組長,2026-05-15,pending,尚未開始,是");
-    } else {
+    // 如果有資料，依據 UID 排序並輸出
+    if (tasks.length > 0) {
       const sortedTasks = [...tasks].sort((a, b) => a.uid - b.uid);
       sortedTasks.forEach(t => {
         const req = t.reqDoc ? "是" : "否";
@@ -329,11 +322,11 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                 <td colSpan="6" className="py-16 text-center">
                   <div className="flex flex-col items-center justify-center">
                     <FolderArchive size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
-                    <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無從 Firebase 讀取到的工項資料</p>
-                    <p className="text-slate-500 text-sm mb-6 max-w-md">您可以手動點擊右上方「新增任務」，或先匯出空白的 CSV 範例檔填寫後進行批次匯入。</p>
+                    <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無資料</p>
+                    <p className="text-slate-500 text-sm mb-6 max-w-md">您可以點擊「新增任務」，或先匯出空白的 CSV 表頭填寫後匯入。</p>
                     <div className="flex space-x-4">
                       <button onClick={exportTasksToCSV} className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium text-sm rounded-lg hover:shadow-sm flex items-center">
-                        <Download size={16} className="mr-2" />匯出空白 CSV 範例
+                        <Download size={16} className="mr-2" />匯出空白 CSV 表頭
                       </button>
                       <button onClick={triggerFileInput} disabled={isImporting} className="px-4 py-2 bg-indigo-50 text-indigo-600 font-medium text-sm rounded-lg hover:bg-indigo-100 flex items-center">
                         {isImporting ? <Loader2 size={16} className="animate-spin mr-2" /> : <FileSpreadsheet size={16} className="mr-2" />}
