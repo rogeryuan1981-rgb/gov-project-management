@@ -9,8 +9,9 @@ const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-// 專屬 Google Drive API 金鑰 (已移除 import.meta 避免編譯器報錯)
-const DRIVE_CLIENT_ID = '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
+// 優先從環境變數讀取 Client ID
+const DRIVE_CLIENT_ID = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID) 
+  || '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
 
 // ================= 真實 Google Drive API 引擎 =================
 const getOrCreateFolder = async (folderName, parentId, accessToken) => {
@@ -445,8 +446,6 @@ export default function HRModule({ user, selectedProject }) {
       if (error.message === 'UNAUTHORIZED') {
         localStorage.removeItem('google_drive_access_token');
         alert("授權已過期，請重新上傳以觸發授權！");
-      } else {
-        alert("上傳失敗，請確認網路連線。");
       }
     } finally {
       setUploadingPersonnelId(null);
@@ -652,7 +651,9 @@ export default function HRModule({ user, selectedProject }) {
       const status = getPersonStatus(p); let statusStr = '';
       if (status === 'active') statusStr = '在職'; else if (status === 'inactive') statusStr = '已離職'; else if (status === 'pending') statusStr = '尚未到職';
       const residentStr = p.isResident ? '是' : '否';
-      csvRows.push([ `"${p.name || ''}"`, `"${p.email || ''}"`, `"${p.unit || ''}"`, `"${p.role || ''}"`, residentStr, statusStr, p.hireDate || '', p.roleStartDate || '', p.contractStart || '', p.contractEnd || '至今' ].join(','));
+      // 修正結束日期的顯示邏輯
+      const endStr = p.contractEnd ? p.contractEnd : (status === 'pending' ? '未定' : '至今');
+      csvRows.push([ `"${p.name || ''}"`, `"${p.email || ''}"`, `"${p.unit || ''}"`, `"${p.role || ''}"`, residentStr, statusStr, p.hireDate || '', p.roleStartDate || '', p.contractStart || '', endStr ].join(','));
     });
     const blob = new Blob(["\uFEFF" + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -794,7 +795,7 @@ export default function HRModule({ user, selectedProject }) {
                           </td>
                           <td className="py-4 px-6"><span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span></td>
                           <td className="py-4 px-6"><span className="text-sm font-medium text-slate-600 dark:text-slate-300">{u.roleStartDate || u.hireDate}</span></td>
-                          <td className="py-4 px-6"><div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">{u.contractStart || '-'} ~ {u.contractEnd || '至今'}</div><div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div></td>
+                          <td className="py-4 px-6"><div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">{u.contractStart || '-'} ~ {u.contractEnd || (status === 'pending' ? '未定' : '至今')}</div><div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div></td>
                           <td className="py-4 px-6">
                             <div className="flex items-center space-x-2">
                               <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{u.files?.length || 0} 個檔案</span>
