@@ -126,7 +126,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
     if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
 
-    // 1. 撈取區間內的異動紀錄
+    // 1. 撈取區間內的人事異動軌跡 (Change Records)
     const changeRecords = [];
     personnel.forEach(p => {
       const pStart = p.contractStart || p.hireDate;
@@ -150,7 +150,48 @@ export default function ReportsModule({ user, selectedProject }) {
     });
     changeRecords.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // 2. 計算區間內的空缺天數
+    // 2. 撈取每個職位的人員狀況 (Personnel Status per Position)
+    const roleOccupantsMap = {};
+    
+    // 先把人力需求清單放入 Map 確保就算沒人也顯示該職位
+    requirements.forEach(req => {
+      const key = `${req.unit}::${req.position}`;
+      if (!roleOccupantsMap[key]) {
+        roleOccupantsMap[key] = { unit: req.unit, role: req.position, occupants: [] };
+      }
+    });
+
+    // 填入區間內有在職紀錄的人員
+    personnel.forEach(p => {
+      const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+      (p.history || []).forEach(h => {
+        if (!h.unit || !h.role) return;
+        const hStartMs = new Date(h.startDate).getTime();
+        const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
+        
+        // 檢查該歷程是否與選擇區間有交集
+        if (hStartMs <= endMs && hEndMs >= startMs) {
+          const key = `${h.unit}::${h.role}`;
+          if (!roleOccupantsMap[key]) {
+            roleOccupantsMap[key] = { unit: h.unit, role: h.role, occupants: [] };
+          }
+          // 放入人員與其實際在該職位的區間 (不受查詢區間裁切，保留詳細完整區間)
+          roleOccupantsMap[key].occupants.push({
+            name: p.name,
+            start: h.startDate,
+            end: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
+          });
+        }
+      });
+    });
+
+    const roleOccupantsList = Object.values(roleOccupantsMap).sort((a, b) => {
+      if (a.unit !== b.unit) return a.unit.localeCompare(b.unit);
+      return a.role.localeCompare(b.role);
+    });
+
+
+    // 3. 計算區間內的空缺天數 (Vacancy Calculation)
     const reqGroups = {};
     requirements.forEach(req => {
       const key = `${req.unit}::${req.position}`;
@@ -222,7 +263,7 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     });
 
-    // 3. 產出列印用 HTML
+    // 4. 產出列印用 HTML
     const printContent = `
       <!DOCTYPE html>
       <html lang="zh-TW">
@@ -234,7 +275,7 @@ export default function ReportsModule({ user, selectedProject }) {
           h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
           h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
           .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
-          table { w-full; border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; }
+          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; }
           th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }
           th { background-color: #f8fafc; color: #475569; font-weight: bold; white-space: nowrap; }
           .text-center { text-align: center; }
@@ -253,16 +294,41 @@ export default function ReportsModule({ user, selectedProject }) {
         <h1>【${projectName}】人事異動與空缺紀錄表</h1>
         <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
-        <h2>一、 期間內人員異動明細</h2>
+        <h2>一、 期間內人事異動軌跡</h2>
         <table>
-          <tr><th style="width:120px;">異動日期</th><th style="width:100px;">人員姓名</th><th style="width:100px;">異動類型</th><th>異動說明</th></tr>
+          <tr><th style="width:120px;">異動日期</th><th style="width:100px;">異動人員</th><th style="width:100px;">異動類型</th><th>異動說明</th></tr>
           ${changeRecords.length === 0 ? '<tr><td colspan="4" class="text-center" style="color:#94a3b8;">此區間內無任何人員異動紀錄</td></tr>' : 
             changeRecords.map(r => `<tr><td>${r.date}</td><td><strong>${r.name}</strong></td><td>${r.type}</td><td>${r.desc}</td></tr>`).join('')
           }
         </table>
 
-        <h2>二、 職位空缺天數精算 (扣款依據參考)</h2>
-        <p style="font-size: 12px; color: #64748b;">說明：依據專案「人力需求設定」與實際「人員履歷」逐日比對。若當日該職位在職人數少於需求人數，則計入空缺。總計單位為「人天」。</p>
+        <h2>二、 期間內各職位人員狀況</h2>
+        <p style="font-size: 12px; color: #64748b;">說明：詳列本區間內所有單位與職位之人員在職狀態，並標示其擔任此職位之詳細日期區間。</p>
+        <table>
+          <tr>
+            <th style="width:150px;">單位</th>
+            <th style="width:150px;">職位</th>
+            <th style="width:120px;">人員姓名</th>
+            <th>擔任此職位期間</th>
+          </tr>
+          ${roleOccupantsList.length === 0 ? '<tr><td colspan="4" class="text-center" style="color:#94a3b8;">此區間內無人員與編制紀錄</td></tr>' : 
+            roleOccupantsList.map(ro => {
+              if (ro.occupants.length === 0) {
+                return `<tr><td>${ro.unit}</td><td>${ro.role}</td><td colspan="2" class="text-center" style="color:#94a3b8;">期間內無人擔任此職位</td></tr>`;
+              }
+              // 第一筆需要帶入 rowspan
+              let rows = `<tr><td rowspan="${ro.occupants.length}">${ro.unit}</td><td rowspan="${ro.occupants.length}">${ro.role}</td><td><strong>${ro.occupants[0].name}</strong></td><td>${ro.occupants[0].start} ~ ${ro.occupants[0].end}</td></tr>`;
+              // 其餘筆數不含單位與職位
+              for(let i = 1; i < ro.occupants.length; i++) {
+                rows += `<tr><td><strong>${ro.occupants[i].name}</strong></td><td>${ro.occupants[i].start} ~ ${ro.occupants[i].end}</td></tr>`;
+              }
+              return rows;
+            }).join('')
+          }
+        </table>
+
+        <h2>三、 職位空缺天數精算 (扣款依據參考)</h2>
+        <p style="font-size: 12px; color: #64748b;">說明：依據專案「人力需求設定」與上方「人員職位狀況」逐日比對。若當日該職位在職人數少於編制需求人數，則計入空缺。總計單位為「人天」。</p>
         <table>
           <tr>
             <th>需求單位</th>
