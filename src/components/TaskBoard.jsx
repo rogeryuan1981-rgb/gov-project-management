@@ -67,6 +67,9 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  
+  // 新增：控制指派人員下拉選單的開關
+  const [isAssigneeDropdownOpen, setIsAssigneeDropdownOpen] = useState(false);
 
   // 甘特圖勾選狀態與模式
   const [isGanttMode, setIsGanttMode] = useState(false);
@@ -142,13 +145,14 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     return () => { unsubTasks(); unsubFiles(); unsubPersonnel(); };
   }, [user, selectedProject, selectedTask, setSelectedTask, isEditing]);
 
-  // ================= 核心邏輯：自動同步母子模組狀態與結案日 =================
+  // ================= 核心邏輯：自動同步母子模組狀態與結案日、工作期間 =================
   useEffect(() => {
     if (tasks.length === 0) return;
     
     tasks.filter(t => t.parentUid === 0).forEach(epic => {
       const subTasks = tasks.filter(t => t.parentUid === epic.uid);
       if (subTasks.length > 0) {
+        // 1. 推算狀態與結案日
         const allCompleted = subTasks.every(t => t.status === 'completed');
         const anyActive = subTasks.some(t => t.status === 'in-progress' || t.status === 'completed');
         
@@ -172,11 +176,25 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           expectedCompletedDate = '';
         }
 
-        if (epic.status !== expectedStatus || epic.completedDate !== expectedCompletedDate) {
+        // 2. 推算工作期間 (子項目最早起日 ~ 子項目最晚迄日)
+        const validStarts = subTasks.map(s => s.startDate).filter(Boolean).sort();
+        const validEnds = subTasks.map(s => s.due).filter(Boolean).sort((a,b) => new Date(b) - new Date(a));
+        
+        const expectedStartDate = validStarts.length > 0 ? validStarts[0] : epic.startDate;
+        const expectedEndDate = validEnds.length > 0 ? validEnds[0] : epic.due;
+
+        if (
+          epic.status !== expectedStatus || 
+          epic.completedDate !== expectedCompletedDate ||
+          epic.startDate !== expectedStartDate ||
+          epic.due !== expectedEndDate
+        ) {
           const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${epic.uid}`);
           updateDoc(taskRef, { 
             status: expectedStatus,
-            completedDate: expectedCompletedDate 
+            completedDate: expectedCompletedDate,
+            startDate: expectedStartDate,
+            due: expectedEndDate
           }).catch(e => console.error(e));
         }
       }
@@ -360,7 +378,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     document.body.removeChild(link);
   };
 
-  // ================= 產出甘特圖邏輯 (優化排版與自動全選) =================
+  // ================= 產出甘特圖邏輯 (精準防破格處理) =================
   const handleSelectAllForGantt = (e) => {
     if (e.target.checked) {
       setSelectedForGantt(tasks.map(t => t.uid));
@@ -374,18 +392,14 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     const isEpic = task.parentUid === 0;
     
     if (selectedForGantt.includes(task.uid)) {
-      // 取消勾選
       if (isEpic) {
-         // 一併取消子任務
          const subIds = tasks.filter(t => t.parentUid === task.uid).map(t => t.uid);
          setSelectedForGantt(prev => prev.filter(id => id !== task.uid && !subIds.includes(id)));
       } else {
          setSelectedForGantt(prev => prev.filter(id => id !== task.uid));
       }
     } else {
-      // 勾選
       if (isEpic) {
-         // 一併勾選子任務
          const subIds = tasks.filter(t => t.parentUid === task.uid).map(t => t.uid);
          setSelectedForGantt(prev => [...new Set([...prev, task.uid, ...subIds])]);
       } else {
@@ -396,10 +410,10 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
   const getGanttColor = (t) => {
     const status = getTaskStatus(t);
-    if (status === 'completed') return '#10b981'; // Emerald
-    if (status === 'overdue') return '#ef4444'; // Red
-    if (status === 'in-progress') return '#3b82f6'; // Blue
-    return '#cbd5e1'; // Slate (Pending)
+    if (status === 'completed') return '#10b981'; 
+    if (status === 'overdue') return '#ef4444'; 
+    if (status === 'in-progress') return '#3b82f6'; 
+    return '#cbd5e1'; 
   };
 
   const exportGanttPDF = () => {
@@ -408,7 +422,6 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
       return;
     }
     
-    // 扁平化並過濾選取的任務
     const orderedTasks = [];
     groupedTasks.forEach(epic => {
        if (selectedForGantt.includes(epic.uid)) orderedTasks.push(epic);
@@ -419,47 +432,20 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
     if (orderedTasks.length === 0) return;
 
-    // 計算每個工項的實際期程 (推算母項目起迄)
-    orderedTasks.forEach(t => {
-       if (t.parentUid === 0) {
-          const subs = tasks.filter(sub => sub.parentUid === t.uid);
-          if (subs.length > 0) {
-             const minS = Math.min(...subs.map(s => new Date(s.startDate||'9999-12-31').getTime()));
-             const maxE = Math.max(...subs.map(s => {
-                let e = s.status === 'completed' && s.completedDate ? s.completedDate : s.due;
-                return new Date(e||'1970-01-01').getTime();
-             }));
-             t.derivedStart = minS !== new Date('9999-12-31').getTime() ? new Date(minS).toISOString().split('T')[0] : t.startDate;
-             t.derivedEnd = maxE !== new Date('1970-01-01').getTime() ? new Date(maxE).toISOString().split('T')[0] : t.due;
-          } else {
-             t.derivedStart = t.startDate;
-             t.derivedEnd = t.status === 'completed' && t.completedDate ? t.completedDate : t.due;
-          }
-       } else {
-          t.derivedStart = t.startDate;
-          t.derivedEnd = t.status === 'completed' && t.completedDate ? t.completedDate : t.due;
-       }
-    });
-
-    const validStarts = orderedTasks.map(t => new Date(t.derivedStart).getTime()).filter(x => !isNaN(x));
-    const validEnds = orderedTasks.map(t => new Date(t.derivedEnd).getTime()).filter(x => !isNaN(x));
+    // 取出所有合法的起迄日進行比較
+    const validStarts = orderedTasks.map(t => new Date(t.startDate).getTime()).filter(x => !isNaN(x));
+    const validEnds = orderedTasks.map(t => new Date(t.status === 'completed' && t.completedDate ? t.completedDate : t.due).getTime()).filter(x => !isNaN(x));
 
     let minMs = validStarts.length > 0 ? Math.min(...validStarts) : Date.now();
     let maxMs = validEnds.length > 0 ? Math.max(...validEnds) : Date.now();
 
-    // 依據專案計畫起訖日進行極限範圍防呆 (Clamp)
+    // 專案起迄日防呆 (極限裁切範圍)
     const pStartMs = projectStartDate ? new Date(projectStartDate).getTime() : -Infinity;
     const pEndMs = projectEndDate ? new Date(projectEndDate).getTime() : Infinity;
 
     minMs = Math.max(minMs, pStartMs);
     maxMs = Math.min(maxMs, pEndMs);
-
-    // 防呆：若極限壓縮導致錯亂，給予單日區間
     if (minMs > maxMs) maxMs = minMs + 86400000;
-    
-    // 為求美觀，前後各加 5 天 padding (但依舊不超過專案起訖)
-    minMs = Math.max(minMs - (5 * 86400000), pStartMs);
-    maxMs = Math.min(maxMs + (5 * 86400000), pEndMs);
 
     let totalMs = maxMs - minMs;
     if (totalMs <= 0) totalMs = 86400000;
@@ -468,10 +454,10 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     let ticksHtml = '';
     let gridHtml = '';
     let currDate = new Date(minMs);
-    currDate.setDate(1); // 歸零到該月1號
+    currDate.setDate(1); 
     if (currDate.getTime() < minMs) currDate.setMonth(currDate.getMonth() + 1);
 
-    while (currDate.getTime() <= maxMs) {
+    while (currDate.getTime() <= maxMs + 86400000) {
       const leftPct = ((currDate.getTime() - minMs) / totalMs) * 100;
       if (leftPct >= 0 && leftPct <= 100) {
         const monthStr = `${currDate.getFullYear()}/${String(currDate.getMonth()+1).padStart(2, '0')}`;
@@ -483,16 +469,21 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
     let rowsHtml = '';
     orderedTasks.forEach(t => {
-       const tStart = new Date(t.derivedStart).getTime();
-       const tEnd = new Date(t.derivedEnd).getTime();
+       const tStart = new Date(t.startDate).getTime();
+       const tEnd = new Date(t.status === 'completed' && t.completedDate ? t.completedDate : t.due).getTime();
        
+       if (isNaN(tStart) || isNaN(tEnd)) return; // 避免爛資料壞版
+
        let left = ((tStart - minMs) / totalMs) * 100;
-       let width = ((tEnd - tStart) / totalMs) * 100;
+       let right = ((tEnd - minMs) / totalMs) * 100;
        
-       // 防呆，若工項完全超出範圍，或極度短暫
-       if (left < 0) { width += left; left = 0; }
-       if (left + width > 100) { width = 100 - left; }
-       width = Math.max(width, 0.5); // 至少呈現一條線
+       // 嚴格裁切，保證 bar 絕對不會突出格線區塊
+       if (left < 0) left = 0;
+       if (right > 100) right = 100;
+       
+       let width = right - left;
+       if (width < 0) width = 0;
+       if (width < 0.5 && left <= 99.5) width = 0.5; // 最少給一個點
 
        const isEpic = t.parentUid === 0;
        const barColor = getGanttColor(t);
@@ -503,7 +494,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
          <div class="gantt-row">
            <div class="gantt-label" style="padding-left: ${titleIndent}">
              <div class="gantt-title">${icon} ${t.title}</div>
-             <div class="gantt-subtitle">${t.assignee || '未指派'} | ${t.derivedStart} ~ ${t.derivedEnd}</div>
+             <div class="gantt-subtitle">${t.assignee || '未指派'} | ${t.startDate || '-'} ~ ${t.due || '-'}</div>
            </div>
            <div class="gantt-timeline">
              <div class="gantt-bar" style="left: ${left}%; width: ${width}%; background-color: ${barColor}; border-radius: ${isEpic ? '2px' : '6px'}; height: ${isEpic ? '8px' : '16px'};"></div>
@@ -528,7 +519,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           .gantt-container { border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #fff; }
           .gantt-header { display: flex; background-color: #f8fafc; border-bottom: 1px solid #cbd5e1; }
           .gantt-header-label { width: 320px; padding: 12px; font-weight: bold; color: #475569; font-size: 14px; border-right: 1px solid #cbd5e1; box-sizing: border-box; }
-          .gantt-header-timeline { flex: 1; position: relative; height: 45px; background: #f1f5f9; }
+          .gantt-header-timeline { flex: 1; position: relative; height: 45px; background: #f1f5f9; overflow: hidden; }
           .gantt-tick { position: absolute; bottom: 5px; font-size: 11px; font-weight: bold; color: #475569; transform: translateX(-50%); }
           .gantt-row { display: flex; border-bottom: 1px solid #f1f5f9; position: relative; page-break-inside: avoid; }
           .gantt-row:last-child { border-bottom: none; }
@@ -537,7 +528,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           .gantt-subtitle { font-size: 11px; color: #64748b; margin-top: 4px; }
           .gantt-timeline { flex: 1; position: relative; background: #fff; padding: 8px 0; overflow: hidden; }
           .gantt-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background-color: #e2e8f0; z-index: 0; }
-          .gantt-bar { position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+          .gantt-bar { position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
           .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
           @media print { .no-print { display: none !important; } body { padding: 0; } }
         </style>
@@ -565,7 +556,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             </div>
           </div>
           <div style="position: relative;">
-            <div style="position: absolute; top:0; left:320px; right:0; bottom:0; z-index:0; pointer-events:none;">
+            <div style="position: absolute; top:0; left:320px; right:0; bottom:0; z-index:0; pointer-events:none; overflow: hidden;">
               ${gridHtml}
             </div>
             ${rowsHtml}
@@ -598,7 +589,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
     // 防呆：已結案時結案日期必填
     if (editForm.status === 'completed' && (!editForm.completedDate || editForm.completedDate.trim() === '')) {
-      alert("狀態為已結案時，結案日期為必填！");
+      alert("狀態為「已結案」時，結案日期為必填欄位！");
       return;
     }
 
@@ -741,7 +732,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             <div className="flex items-center space-x-3 mt-4 md:mt-0 flex-shrink-0">
               {isEditing ? (
                 <>
-                  <button onClick={() => { setIsEditing(false); setEditForm(null); }} className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors flex items-center"><X size={16} className="mr-1.5" /> 取消</button>
+                  <button onClick={() => { setIsEditing(false); setEditForm(null); setIsAssigneeDropdownOpen(false); }} className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors flex items-center"><X size={16} className="mr-1.5" /> 取消</button>
                   <button onClick={handleSaveTask} disabled={isSaving} className="px-4 py-2 bg-indigo-600 text-white font-bold text-sm rounded-lg hover:bg-indigo-700 shadow-sm transition-colors flex items-center">{isSaving ? <Loader2 size={16} className="animate-spin mr-1.5" /> : <Save size={16} className="mr-1.5" />} 儲存變更</button>
                 </>
               ) : (
@@ -751,37 +742,55 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
-            {/* 負責人區塊 (美化後的 Chip 點選介面) */}
-            <div className="lg:col-span-1">
+            {/* 負責人區塊 (自訂的 Dropdown 與 Chips) */}
+            <div className="lg:col-span-1 relative">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
               {isEditing ? (
-                <div className="flex flex-col space-y-1">
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {personnel.length === 0 ? (
-                      <span className="text-xs text-slate-500 px-1">專案無建檔人員</span>
-                    ) : (
-                      personnel.map(p => {
-                        const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
-                        return (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => handleAssigneeChange(p.name)}
-                            className={`flex items-center px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
-                              isChecked 
-                                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-500/20 dark:border-indigo-500/30 dark:text-indigo-300 shadow-sm scale-105' 
-                                : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                            }`}
-                          >
-                            <div className={`w-2 h-2 rounded-full mr-2 transition-colors ${isChecked ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}></div>
-                            {p.name}
-                            <span className="ml-1 opacity-60 font-normal">({p.role})</span>
-                          </button>
-                        );
-                      })
-                    )}
+                <div className="relative">
+                  <div 
+                    className="w-full min-h-[38px] bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 flex flex-wrap gap-1.5 cursor-pointer focus-within:ring-2 focus-within:ring-indigo-500 transition-all items-center"
+                    onClick={() => setIsAssigneeDropdownOpen(!isAssigneeDropdownOpen)}
+                  >
+                    {editForm.assignee ? editForm.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
+                      <span key={i} className="bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300 px-2 py-0.5 rounded text-xs font-bold flex items-center shadow-sm">
+                        {a}
+                        <button 
+                          type="button" 
+                          onClick={(e) => { e.stopPropagation(); handleAssigneeChange(a); }} 
+                          className="ml-1.5 text-indigo-500 hover:text-indigo-900 dark:hover:text-indigo-100 transition-colors"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    )) : <span className="text-xs font-bold text-slate-400 pl-1.5 py-0.5">請點選以指派人員...</span>}
                   </div>
-                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-2 leading-tight block">💡 儲存後將同步覆蓋底下所有子任務之負責人</span>}
+                  
+                  {isAssigneeDropdownOpen && (
+                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-48 overflow-y-auto p-2">
+                      {personnel.length === 0 ? (
+                        <p className="text-xs text-center text-slate-500 py-4">系統無建檔人員</p>
+                      ) : (
+                        personnel.map(p => {
+                          const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
+                          return (
+                            <label key={p.id} className="flex items-center space-x-3 py-2 px-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors">
+                              <input 
+                                type="checkbox" 
+                                checked={isChecked}
+                                onChange={() => handleAssigneeChange(p.name)}
+                                className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                              />
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{p.name}</span>
+                                <span className="text-[10px] text-slate-500 font-medium">{p.role}</span>
+                              </div>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-2 block">💡 儲存後將同步覆蓋子任務負責人</span>}
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700 min-h-[42px] items-center">
@@ -1006,7 +1015,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                     type="checkbox" 
                     onChange={handleSelectAllForGantt}
                     checked={tasks.length > 0 && selectedForGantt.length === tasks.length}
-                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
                     title="全選產出甘特圖"
                   />
                 </th>
