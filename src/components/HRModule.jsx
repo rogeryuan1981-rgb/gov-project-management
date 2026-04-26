@@ -113,6 +113,25 @@ export default function HRModule({ user, selectedProject }) {
   const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
   const allExistingUnits = [...new Set([...availableUnits, ...personnel.map(p => p.unit)])].filter(Boolean);
   
+  // 建立動態且高對比的單位色彩標籤
+  const UNIT_COLORS = [
+    'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-500/30',
+    'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-500/30',
+    'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-500/30',
+    'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-500/30',
+    'bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-900/30 dark:text-pink-400 dark:border-pink-500/30',
+    'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400 dark:border-cyan-500/30',
+    'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/30 dark:text-rose-400 dark:border-rose-500/30',
+    'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-900/30 dark:text-teal-400 dark:border-teal-500/30'
+  ];
+
+  const getUnitColorClass = (unitName) => {
+    if (!unitName) return 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
+    const index = allExistingUnits.indexOf(unitName);
+    if (index === -1) return 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
+    return UNIT_COLORS[index % UNIT_COLORS.length];
+  };
+
   const getPositionsForUnit = (unit) => [...new Set(requirements.filter(r => r.unit === unit).map(r => r.position))].filter(Boolean);
   const addAvailablePositions = getPositionsForUnit(newPerson.unit);
   const transferAvailablePositions = getPositionsForUnit(transferData.unit);
@@ -767,7 +786,7 @@ export default function HRModule({ user, selectedProject }) {
                   <CalendarDays size={24} />
                 </div>
                 <div>
-                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">今日異常空缺</p>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">異常空缺現況</p>
                   <p className={`text-2xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
                     {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
                   </p>
@@ -931,8 +950,10 @@ export default function HRModule({ user, selectedProject }) {
                           <td className="py-4 px-6">
                             <div className="flex flex-col">
                               <span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span>
-                              <span className="text-[10px] text-slate-400">{u.email || '未建立 Email'}</span>
-                              <span className="text-xs font-medium text-slate-500 mt-1">{u.unit || '未指定單位'}</span>
+                              <span className="text-[10px] text-slate-400 mb-1">{u.email || '未建立 Email'}</span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(u.unit)}`}>
+                                {u.unit || '未指定單位'}
+                              </span>
                             </div>
                           </td>
                           <td className="py-4 px-6">
@@ -1517,7 +1538,7 @@ export default function HRModule({ user, selectedProject }) {
                           <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
                             <td className="py-3 px-4">
                               <div className="font-bold text-sm text-slate-800 dark:text-slate-200">{req.position}</div>
-                              <div className="text-[10px] text-slate-500">{req.unit}</div>
+                              <div className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(req.unit)}`}>{req.unit}</div>
                             </td>
                             <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
                             <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">
