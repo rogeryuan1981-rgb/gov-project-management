@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Image as ImageIcon, Star, Save, CheckCircle2, Loader2, Settings, Shield, Trash2, AlertTriangle, X, FolderTree, Plus, Edit2, Check } from 'lucide-react';
+import { User, Image as ImageIcon, Star, Save, CheckCircle2, Loader2, Settings, Shield, Trash2, AlertTriangle, X, FolderTree, Plus, Edit2, Check, Calendar } from 'lucide-react';
 import { updateProfile } from 'firebase/auth';
 import { collection, onSnapshot, doc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -26,10 +26,12 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
   const [projectFolders, setProjectFolders] = useState([]);
   const [isSavingFolders, setIsSavingFolders] = useState(false);
 
-  // 修改專案名稱狀態
+  // 修改專案詳細資訊狀態 (包含名稱與日期)
   const [editingProjectId, setEditingProjectId] = useState(null);
   const [editingProjectName, setEditingProjectName] = useState('');
-  const [isUpdatingName, setIsUpdatingName] = useState(false);
+  const [editingProjectStartDate, setEditingProjectStartDate] = useState('');
+  const [editingProjectEndDate, setEditingProjectEndDate] = useState('');
+  const [isUpdatingProject, setIsUpdatingProject] = useState(false);
 
   const ALL_MODULES = [
     { id: 'tasks', label: '工項與進度追蹤' },
@@ -94,31 +96,25 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
       setEditingFolderProjectId(null);
     } else {
       setEditingFolderProjectId(project.id);
-      // 若該專案已設定過目錄，則載入；否則預設給一組空白的
       setProjectFolders(project.folders || [{ id: Date.now(), level1: '', level2: '' }]);
     }
   };
 
-  // 目錄欄位變更
   const handleFolderChange = (id, field, value) => {
     setProjectFolders(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
   };
 
-  // 新增一行目錄設定
   const handleAddFolderRow = () => {
     setProjectFolders(prev => [...prev, { id: Date.now(), level1: '', level2: '' }]);
   };
 
-  // 移除一行目錄設定
   const handleRemoveFolderRow = (id) => {
     setProjectFolders(prev => prev.filter(f => f.id !== id));
   };
 
-  // 儲存該專案的目錄設定至 Firebase
   const handleSaveFolders = async (projectId) => {
     setIsSavingFolders(true);
     try {
-      // 過濾掉第一層為空白的無效資料
       const validFolders = projectFolders.filter(f => f.level1.trim() !== '');
       const projectRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', projectId);
       await updateDoc(projectRef, { folders: validFolders });
@@ -130,24 +126,30 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
     }
   };
 
-  // 準備編輯專案名稱
-  const handleEditProjectName = (project) => {
+  // 準備編輯專案詳細資訊 (名稱與日期)
+  const handleEditProjectDetails = (project) => {
     setEditingProjectId(project.id);
     setEditingProjectName(project.name);
+    setEditingProjectStartDate(project.startDate || '');
+    setEditingProjectEndDate(project.endDate || '');
   };
 
-  // 儲存修改後的專案名稱
-  const handleSaveProjectName = async (projectId) => {
+  // 儲存修改後的專案詳細資訊
+  const handleSaveProjectDetails = async (projectId) => {
     if (!editingProjectName.trim()) return;
-    setIsUpdatingName(true);
+    setIsUpdatingProject(true);
     try {
       const projectRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', projectId);
-      await updateDoc(projectRef, { name: editingProjectName.trim() });
+      await updateDoc(projectRef, { 
+        name: editingProjectName.trim(),
+        startDate: editingProjectStartDate,
+        endDate: editingProjectEndDate
+      });
       setEditingProjectId(null);
     } catch (error) {
-      console.error("更新專案名稱失敗:", error);
+      console.error("更新專案資訊失敗:", error);
     } finally {
-      setIsUpdatingName(false);
+      setIsUpdatingProject(false);
     }
   };
 
@@ -244,7 +246,7 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
             系統管理與專案設定
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 pl-9">
-            此區塊為系統管理專區。您可以在此控管各專案的存取權限、雲端歸檔目錄結構，或進行專案名稱的修改與空間刪除。
+            此區塊為系統管理專區。您可以在此控管各專案的存取權限、雲端歸檔目錄結構，或進行專案名稱與日期的修改、空間刪除。
           </p>
         </div>
 
@@ -257,57 +259,90 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
             projects.map(project => (
               <div key={project.id} className="flex flex-col p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm transition-all">
                 
-                <div className="flex flex-col md:flex-row md:items-start justify-between mb-2">
-                  <div className="mb-4 md:mb-0 flex-1 pr-4">
-                    {/* 專案名稱與編輯功能 */}
+                <div className="flex flex-col xl:flex-row xl:items-start justify-between mb-2 gap-4">
+                  <div className="flex-1 pr-4">
+                    {/* 專案詳細資訊編輯功能 (名稱與日期) */}
                     {editingProjectId === project.id ? (
-                      <div className="flex items-center space-x-2 mb-1">
-                        <input
-                          type="text"
-                          value={editingProjectName}
-                          onChange={(e) => setEditingProjectName(e.target.value)}
-                          className="px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-xs"
-                          autoFocus
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveProjectName(project.id)}
-                        />
-                        <button
-                          onClick={() => handleSaveProjectName(project.id)}
-                          disabled={isUpdatingName}
-                          className="p-1.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-400 rounded-lg transition-colors flex-shrink-0"
-                        >
-                          {isUpdatingName ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                        </button>
-                        <button
-                          onClick={() => setEditingProjectId(null)}
-                          className="p-1.5 bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-400 rounded-lg transition-colors flex-shrink-0"
-                        >
-                          <X size={16} />
-                        </button>
+                      <div className="flex flex-col space-y-3 bg-slate-50 dark:bg-slate-800/80 p-4 rounded-xl border border-indigo-100 dark:border-indigo-500/20">
+                        <div>
+                          <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">專案名稱</label>
+                          <input
+                            type="text"
+                            value={editingProjectName}
+                            onChange={(e) => setEditingProjectName(e.target.value)}
+                            className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                            autoFocus
+                          />
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <div className="flex-1">
+                            <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">計畫開始日期</label>
+                            <input
+                              type="date"
+                              value={editingProjectStartDate}
+                              onChange={(e) => setEditingProjectStartDate(e.target.value)}
+                              className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">計畫結束日期</label>
+                            <input
+                              type="date"
+                              value={editingProjectEndDate}
+                              onChange={(e) => setEditingProjectEndDate(e.target.value)}
+                              className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end space-x-2 pt-2">
+                          <button
+                            onClick={() => setEditingProjectId(null)}
+                            className="px-3 py-1.5 bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600 rounded-lg transition-colors text-xs font-bold flex items-center"
+                          >
+                            <X size={14} className="mr-1" /> 取消
+                          </button>
+                          <button
+                            onClick={() => handleSaveProjectDetails(project.id)}
+                            disabled={isUpdatingProject}
+                            className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-colors text-xs font-bold flex items-center"
+                          >
+                            {isUpdatingProject ? <Loader2 size={14} className="animate-spin mr-1" /> : <Check size={14} className="mr-1" />} 儲存變更
+                          </button>
+                        </div>
                       </div>
                     ) : (
-                      <h3 className="font-bold text-slate-800 dark:text-white text-lg flex items-center group">
-                        {project.name}
-                        <button
-                          onClick={() => handleEditProjectName(project)}
-                          className="ml-3 text-slate-400 opacity-0 group-hover:opacity-100 hover:text-indigo-500 dark:hover:text-indigo-400 transition-all"
-                          title="修改專案名稱"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                      </h3>
+                      <div className="group">
+                        <h3 className="font-bold text-slate-800 dark:text-white text-lg flex items-center">
+                          {project.name}
+                          <button
+                            onClick={() => handleEditProjectDetails(project)}
+                            className="ml-3 p-1.5 text-slate-400 opacity-0 group-hover:opacity-100 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:text-indigo-400 dark:hover:bg-indigo-500/20 rounded-md transition-all"
+                            title="修改專案設定"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                        </h3>
+                        <div className="flex flex-col sm:flex-row sm:items-center text-xs text-slate-500 dark:text-slate-400 mt-2 gap-2 sm:gap-4">
+                          <span className="flex items-center">
+                            <Calendar size={14} className="mr-1 text-slate-400" />
+                            計畫區間：{project.startDate || '未設定'} ~ {project.endDate || '未設定'}
+                          </span>
+                          <span className="hidden sm:inline text-slate-300 dark:text-slate-600">|</span>
+                          <span>建立時間：{new Date(project.createdAt).toLocaleDateString()}</span>
+                          <span className="hidden sm:inline text-slate-300 dark:text-slate-600">|</span>
+                          <span>專案 UID: {project.id.slice(0, 8)}...</span>
+                        </div>
+                      </div>
                     )}
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      建立時間：{new Date(project.createdAt).toLocaleDateString()} &nbsp; | &nbsp; 專案 ID: {project.id.slice(0, 8)}...
-                    </p>
                   </div>
                   
                   {/* 操作按鈕區 */}
-                  <div className="flex items-center space-x-2 mt-2 md:mt-0 flex-shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 flex-shrink-0 mt-2 xl:mt-0">
                     <button 
                       onClick={() => handleOpenFolderSettings(project)}
                       className={`flex items-center px-3 py-2 text-sm font-bold rounded-xl transition-colors ${editingFolderProjectId === project.id ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400' : 'bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'}`}
                     >
-                      <FolderTree size={16} className="mr-1.5" /> 目錄設定
+                      <FolderTree size={16} className="mr-1.5" /> 目錄歸檔
                     </button>
                     
                     <button className="flex items-center px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-bold rounded-xl hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors">
