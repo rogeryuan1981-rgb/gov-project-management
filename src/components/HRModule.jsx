@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -406,9 +406,9 @@ export default function HRModule({ user, selectedProject }) {
           alert(`歷程日期錯誤：因後續有轉任【${next.role}】，先前的職務【${current.role}】必須填寫結束日！`);
           return;
         }
-        // 修正防呆邏輯：結束日必須早於下一個開始日
-        if (new Date(current.endDate) >= new Date(next.startDate)) {
-          alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 必須早於【${next.role}】的開始日 (${next.startDate})！不能為同一天或晚於新職務開始日。`);
+        // 嚴格阻擋重疊：結束日必須確實早於下一個開始日 (轉為 timestamp 比較)
+        if (new Date(current.endDate).getTime() >= new Date(next.startDate).getTime()) {
+          alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 必須早於【${next.role}】的開始日 (${next.startDate})！\n\n同一個人不可在同一天身兼兩筆歷程。`);
           return;
         }
       }
@@ -1086,8 +1086,31 @@ export default function HRModule({ user, selectedProject }) {
                     <button 
                       type="button" 
                       onClick={() => {
-                        const newHistory = [...(editingPerson.history || []), { unit: '', role: '', startDate: today, endDate: '' }];
-                        setEditingPerson({...editingPerson, history: newHistory});
+                        const currentHistory = editingPerson.history || [];
+                        const updatedHistory = [...currentHistory];
+                        let nextStartDate = today;
+
+                        // 【智慧轉任自動填充】：確保新職務開始日不與舊職務衝突
+                        if (updatedHistory.length > 0) {
+                          updatedHistory.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+                          const lastRecord = updatedHistory[updatedHistory.length - 1];
+                          
+                          if (!lastRecord.endDate) {
+                            // 自動把上一筆的結束日押在「昨天」
+                            const prevEnd = new Date();
+                            prevEnd.setDate(prevEnd.getDate() - 1);
+                            lastRecord.endDate = prevEnd.toISOString().split('T')[0];
+                            nextStartDate = today;
+                          } else {
+                            // 自動把新職務押在「結束日隔天」
+                            const nextStart = new Date(lastRecord.endDate);
+                            nextStart.setDate(nextStart.getDate() + 1);
+                            nextStartDate = nextStart.toISOString().split('T')[0];
+                          }
+                        }
+
+                        updatedHistory.push({ unit: '', role: '', startDate: nextStartDate, endDate: '' });
+                        setEditingPerson({...editingPerson, history: updatedHistory});
                       }} 
                       className="text-xs text-indigo-600 dark:text-indigo-400 font-bold flex items-center bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-colors"
                     >
