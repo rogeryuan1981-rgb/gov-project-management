@@ -109,7 +109,6 @@ export default function HRModule({ user, selectedProject }) {
 
   // 動態推導可用的單位與職位清單
   const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
-  // 保留目前已經有建檔的單位 (可能有些單位沒有在需求清單裡，但在 personnel 裡面)
   const allExistingUnits = [...new Set([...availableUnits, ...personnel.map(p => p.unit)])].filter(Boolean);
   
   const getPositionsForUnit = (unit) => [...new Set(requirements.filter(r => r.unit === unit).map(r => r.position))].filter(Boolean);
@@ -185,8 +184,18 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const handleOpenEditPerson = (person) => {
-    // 深拷貝，以免直接污染原始狀態
     setEditingPerson(JSON.parse(JSON.stringify(person)));
+  };
+
+  // 輔助函式：僅處理 Excel 匯入的日期格式自動補零與符號轉換 (YYYY/M/D -> YYYY-MM-DD)
+  const formatImportDate = (dateStr) => {
+    if (!dateStr || dateStr.trim() === '') return '';
+    let s = dateStr.trim().replace(/\//g, '-');
+    const parts = s.split('-');
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+    }
+    return s;
   };
 
   // 2. 處理單筆新增人員
@@ -251,10 +260,12 @@ export default function HRModule({ user, selectedProject }) {
           const email = cols[1];
           const unit = cols[2];
           const role = cols[3];
-          const hireDate = cols[4] || defaultStartDate;
-          const roleStartDate = cols[5] || hireDate;
-          const contractStart = cols[6] || defaultStartDate;
-          const contractEnd = cols[7] || '';
+          
+          // 使用 formatImportDate 處理日期格式與自動補零
+          const hireDate = formatImportDate(cols[4]) || defaultStartDate;
+          const roleStartDate = formatImportDate(cols[5]) || hireDate;
+          const contractStart = formatImportDate(cols[6]) || defaultStartDate;
+          const contractEnd = formatImportDate(cols[7]);
 
           if (!name || !role || !unit) continue;
 
@@ -343,7 +354,9 @@ export default function HRModule({ user, selectedProject }) {
         if (cols.length >= 2) {
           await addDoc(reqRef, {
             unit: cols[0], position: cols[1], count: parseInt(cols[2], 10) || 1,
-            startDate: cols[3] || defaultStartDate, endDate: cols[4] || defaultEndDate,
+            // 使用 formatImportDate 處理日期格式與自動補零
+            startDate: formatImportDate(cols[3]) || defaultStartDate, 
+            endDate: formatImportDate(cols[4]) || defaultEndDate,
             isResident: cols[5] === '是' || cols[5] === 'true', note: cols[6] || '',
             projectId: selectedProject, createdAt: new Date().getTime()
           });
