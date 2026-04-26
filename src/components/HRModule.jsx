@@ -1,13 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Clock, ArrowRight } from 'lucide-react';
-import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase.js';
+import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+
+// 使用行內初始化避免編譯器路徑錯誤
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
 export default function HRModule({ user, selectedProject }) {
   const [personnel, setPersonnel] = useState([]);
   const [requirements, setRequirements] = useState([]);
+  const [dbError, setDbError] = useState(null); 
+  const [projectName, setProjectName] = useState(''); // 用於畫面上顯示專案名稱
   
   // Modals 控制狀態
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
@@ -37,24 +44,46 @@ export default function HRModule({ user, selectedProject }) {
     unit: '', role: '', startDate: today
   });
 
-  // 1. 讀取人事資料與人力需求設定
+  // 0. 動態取得專案名稱
+  useEffect(() => {
+    if (!selectedProject) return;
+    const projectRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', selectedProject);
+    const unsubscribe = onSnapshot(projectRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setProjectName(docSnap.data().name);
+      }
+    });
+    return () => unsubscribe();
+  }, [selectedProject]);
+
+  // 1. 讀取人事資料與人力需求設定 (改以 projectId 過濾)
   useEffect(() => {
     if (!user || !selectedProject) return;
+
+    setDbError(null); 
 
     const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
     const reqRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs');
     
     const unsubHR = onSnapshot(hrRef, (snapshot) => {
       const loadedData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const projectPersonnel = loadedData.filter(p => p.projectName === selectedProject);
+      // 【核心修正】：改用 projectId 過濾
+      const projectPersonnel = loadedData.filter(p => p.projectId === selectedProject);
       projectPersonnel.sort((a, b) => new Date(b.hireDate) - new Date(a.hireDate));
       setPersonnel(projectPersonnel);
+    }, (error) => {
+      console.error("Firestore人事資料讀取失敗:", error);
+      if (error.code === 'permission-denied') setDbError('【權限不足】無法讀取人事資料，請確認 Firebase Rules 已正確發布！');
     });
 
     const unsubReq = onSnapshot(reqRef, (snapshot) => {
       const loadedReqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const projectReqs = loadedReqs.filter(r => r.projectName === selectedProject);
+      // 【核心修正】：改用 projectId 過濾
+      const projectReqs = loadedReqs.filter(r => r.projectId === selectedProject);
       setRequirements(projectReqs);
+    }, (error) => {
+      console.error("Firestore需求資料讀取失敗:", error);
+      if (error.code === 'permission-denied') setDbError('【權限不足】無法讀取人力需求，請確認 Firebase Rules 已正確發布！');
     });
 
     return () => { unsubHR(); unsubReq(); };
@@ -76,7 +105,6 @@ export default function HRModule({ user, selectedProject }) {
     try {
       const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
       
-      // 初始化建立時，將當前職位置入 history 陣列中
       const initialHistory = [{
         unit: newPerson.unit,
         role: newPerson.role,
@@ -88,7 +116,7 @@ export default function HRModule({ user, selectedProject }) {
         ...newPerson,
         roleStartDate: newPerson.roleStartDate || newPerson.hireDate,
         history: initialHistory,
-        projectName: selectedProject,
+        projectId: selectedProject, // 【核心修正】：寫入專案 UID
         createdAt: new Date().getTime()
       });
       setIsAddPersonModalOpen(false);
@@ -98,6 +126,7 @@ export default function HRModule({ user, selectedProject }) {
       });
     } catch (error) {
       console.error("新增人員失敗:", error);
+      if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
     }
   };
 
@@ -114,12 +143,13 @@ export default function HRModule({ user, selectedProject }) {
       await addDoc(reqRef, {
         ...newReq,
         count: parseInt(newReq.count, 10) || 1,
-        projectName: selectedProject,
+        projectId: selectedProject, // 【核心修正】：寫入專案 UID
         createdAt: new Date().getTime()
       });
       setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1 });
     } catch (error) {
       console.error("新增人力需求失敗:", error);
+      if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
     }
   };
 
@@ -128,10 +158,11 @@ export default function HRModule({ user, selectedProject }) {
       await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs', reqId));
     } catch (error) {
       console.error("刪除需求失敗:", error);
+      if (error.code === 'permission-denied') alert('【權限不足】刪除被拒絕，請確認權限設定！');
     }
   };
 
-  // 4. 處理人員轉任 (更新職位與寫入歷史)
+  // 4. 處理人員轉任
   const handleTransferSubmit = async (e) => {
     e.preventDefault();
     if (!transferData.unit || !transferData.role || !transferData.startDate) {
@@ -139,7 +170,6 @@ export default function HRModule({ user, selectedProject }) {
       return;
     }
 
-    // 若該人員尚未有 history 陣列，先以現況建構第一筆
     const currentHistory = historyPerson.history || [{
       unit: historyPerson.unit,
       role: historyPerson.role,
@@ -149,12 +179,10 @@ export default function HRModule({ user, selectedProject }) {
 
     const updatedHistory = [...currentHistory];
     
-    // 將最後一筆(現任)職務的結束日期，設定為新職務的生效日期
     if (updatedHistory.length > 0) {
       updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
     }
 
-    // 加入新的轉任紀錄
     updatedHistory.push({
       unit: transferData.unit,
       role: transferData.role,
@@ -171,7 +199,6 @@ export default function HRModule({ user, selectedProject }) {
         history: updatedHistory
       });
 
-      // 更新本地 Modal 的檢視狀態
       setHistoryPerson({
         ...historyPerson,
         unit: transferData.unit,
@@ -184,6 +211,7 @@ export default function HRModule({ user, selectedProject }) {
       setTransferData({ unit: '', role: '', startDate: today });
     } catch (error) {
       console.error("轉任失敗:", error);
+      if (error.code === 'permission-denied') alert('【權限不足】操作被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
     }
   };
 
@@ -210,10 +238,22 @@ export default function HRModule({ user, selectedProject }) {
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-6xl mx-auto">
       
+      {/* 權限阻擋提示 */}
+      {dbError && (
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4 rounded-2xl flex items-start animate-in slide-in-from-top-2">
+          <AlertCircle className="text-red-500 mr-3 flex-shrink-0 mt-0.5" size={20} />
+          <div>
+            <h4 className="text-sm font-bold text-red-700 dark:text-red-400">Firebase 權限異常，您的變更已被還原</h4>
+            <p className="text-xs text-red-600 dark:text-red-300 mt-1">{dbError}</p>
+            <p className="text-xs text-red-600 dark:text-red-300 mt-1">請依照之前的步驟進入 Firebase Console &gt; Firestore Database &gt; Rules 發布規則。</p>
+          </div>
+        </div>
+      )}
+
       {/* 標題與全域操作列 */}
       <div className="flex justify-between items-end mb-2">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white">人事合規紀錄 ({selectedProject})</h2>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">人事合規紀錄 ({projectName || '載入中...'})</h2>
           <p className="text-sm text-slate-500 mt-1">管理本計畫之人員名冊、轉任歷史與人力需求合規狀態。</p>
         </div>
         <button 
@@ -577,7 +617,7 @@ export default function HRModule({ user, selectedProject }) {
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
               <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center">
                 <Settings size={20} className="mr-2 text-indigo-500" />
-                設定計畫人力需求 ({selectedProject})
+                設定計畫人力需求 ({projectName || '載入中...'})
               </h3>
               <button onClick={() => setIsReqModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
                 <X size={20} />
