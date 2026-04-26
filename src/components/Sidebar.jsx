@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, CheckSquare, Users, FolderArchive, Settings, ChevronDown, Plus, Check, X, Calculator } from 'lucide-react';
-import { collection, onSnapshot, addDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase.js';
+import { collection, onSnapshot, addDoc, getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+
+// 避免編譯器路徑錯誤，使用行內安全初始化 Firebase
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -9,7 +14,14 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [projects, setProjects] = useState([]);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  
+  // 新建專案的表單狀態
   const [newProjectName, setNewProjectName] = useState('');
+  
+  // 取得當年度作為預設值
+  const currentYear = new Date().getFullYear();
+  const [newProjectStartDate, setNewProjectStartDate] = useState(`${currentYear}-01-01`);
+  const [newProjectEndDate, setNewProjectEndDate] = useState(`${currentYear}-12-31`);
 
   // 監聽專案清單
   useEffect(() => {
@@ -20,7 +32,7 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
       loadedProjects.sort((a, b) => a.createdAt - b.createdAt);
       setProjects(loadedProjects);
 
-      // 【核心修正】：改以專案的唯一 ID (UID) 作為 selectedProject，而非專案名稱
+      // 改以專案的唯一 ID (UID) 作為 selectedProject
       if (loadedProjects.length > 0 && !selectedProject) {
         setSelectedProject(loadedProjects[0].id);
       }
@@ -28,18 +40,31 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
     return () => unsubscribe();
   }, [user, selectedProject, setSelectedProject]);
 
-  // 新增專案
+  // 新增專案與其執行區間
   const handleCreateProject = async () => {
-    if (!newProjectName.trim() || !user) return;
+    if (!newProjectName.trim() || !user) {
+      alert("請輸入專案名稱");
+      return;
+    }
+    if (!newProjectStartDate || !newProjectEndDate) {
+      alert("請設定專案的開始與結束日期");
+      return;
+    }
+
     try {
       const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
       const docRef = await addDoc(projectsRef, {
         name: newProjectName.trim(),
+        startDate: newProjectStartDate, // 一併寫入開始日期
+        endDate: newProjectEndDate,     // 一併寫入結束日期
         createdAt: new Date().getTime()
       });
-      // 【核心修正】：建立後將選取的專案設為該專案的唯一 ID
+      
+      // 建立後將選取的專案設為該專案的唯一 ID
       setSelectedProject(docRef.id);
       setNewProjectName('');
+      setNewProjectStartDate(`${currentYear}-01-01`); // 重置回預設
+      setNewProjectEndDate(`${currentYear}-12-31`);   // 重置回預設
       setIsCreatingProject(false);
       setIsProjectDropdownOpen(false);
     } catch (error) {
@@ -84,7 +109,6 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
               {projects.map((proj) => (
                 <button
                   key={proj.id}
-                  // 【核心修正】：點選時傳遞 UID
                   onClick={() => { setSelectedProject(proj.id); setIsProjectDropdownOpen(false); }}
                   className={`w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors ${selectedProject === proj.id ? 'text-indigo-600 dark:text-indigo-400 font-medium bg-indigo-50/50 dark:bg-indigo-500/10' : 'text-slate-700 dark:text-slate-300'}`}
                 >
@@ -92,16 +116,43 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
                 </button>
               ))}
             </div>
+            
+            {/* 新建專案表單區塊 */}
             <div className="border-t border-slate-100 dark:border-slate-700 p-2 bg-slate-50 dark:bg-slate-800/80">
               {isCreatingProject ? (
-                <div className="flex items-center space-x-2 px-2 py-1">
-                  <input 
-                    type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
-                    placeholder="輸入專案名稱..." autoFocus onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
-                    className="flex-1 text-sm px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <button onClick={handleCreateProject} className="p-1 text-indigo-600 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-md"><Check size={18} /></button>
-                  <button onClick={() => { setIsCreatingProject(false); setNewProjectName(''); }} className="p-1 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md"><X size={18} /></button>
+                <div className="flex flex-col space-y-3 px-2 py-2">
+                  <div>
+                    <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">專案名稱</label>
+                    <input 
+                      type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="輸入專案名稱..." autoFocus
+                      className="w-full text-sm px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="flex-1">
+                      <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">計畫開始日期</label>
+                      <input 
+                        type="date" value={newProjectStartDate} onChange={e=>setNewProjectStartDate(e.target.value)} 
+                        className="w-full text-xs px-1.5 py-1.5 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 outline-none"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] text-slate-500 dark:text-slate-400 font-bold mb-1 block">計畫結束日期</label>
+                      <input 
+                        type="date" value={newProjectEndDate} onChange={e=>setNewProjectEndDate(e.target.value)} 
+                        className="w-full text-xs px-1.5 py-1.5 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end space-x-2 pt-1 border-t border-slate-200 dark:border-slate-700">
+                    <button onClick={() => { setIsCreatingProject(false); setNewProjectName(''); }} className="px-2.5 py-1.5 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-md transition-colors text-xs font-bold flex items-center">
+                      <X size={14} className="mr-1" /> 取消
+                    </button>
+                    <button onClick={handleCreateProject} className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors text-xs font-bold flex items-center shadow-sm">
+                      <Check size={14} className="mr-1" /> 建立專案
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button onClick={() => setIsCreatingProject(true)} className="w-full flex items-center justify-center space-x-2 px-2 py-2 text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded-lg font-medium transition-colors">
