@@ -311,18 +311,21 @@ export default function HRModule({ user, selectedProject }) {
       unit: historyPerson.unit, role: historyPerson.role, startDate: historyPerson.roleStartDate || historyPerson.hireDate, endDate: ''
     }];
 
-    // 防呆：轉任生效日不能早於目前職務的開始日
+    // 防呆：轉任生效日不能早於或等於目前職務的開始日
     if (currentHistory.length > 0) {
       const lastRecord = currentHistory[currentHistory.length - 1];
-      if (new Date(transferData.startDate) < new Date(lastRecord.startDate)) {
-        alert(`轉任日期錯誤：新職務生效日 (${transferData.startDate}) 不能早於當前職務【${lastRecord.role}】的開始日 (${lastRecord.startDate})！`);
+      if (new Date(transferData.startDate) <= new Date(lastRecord.startDate)) {
+        alert(`轉任日期錯誤：新職務生效日 (${transferData.startDate}) 必須晚於當前職務【${lastRecord.role}】的開始日 (${lastRecord.startDate})！`);
         return;
       }
     }
 
     const updatedHistory = [...currentHistory];
     if (updatedHistory.length > 0) {
-      updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
+      // 自動將前一個職務的結束日，設為新職務生效日的前一天
+      const prevEndDate = new Date(transferData.startDate);
+      prevEndDate.setDate(prevEndDate.getDate() - 1);
+      updatedHistory[updatedHistory.length - 1].endDate = prevEndDate.toISOString().split('T')[0];
     }
 
     updatedHistory.push({
@@ -381,8 +384,9 @@ export default function HRModule({ user, selectedProject }) {
           alert(`歷程日期錯誤：因後續有轉任【${next.role}】，先前的職務【${current.role}】必須填寫結束日！`);
           return;
         }
-        if (new Date(current.endDate) > new Date(next.startDate)) {
-          alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 不能晚於【${next.role}】的開始日 (${next.startDate})！`);
+        // 修正防呆邏輯：結束日必須早於下一個開始日
+        if (new Date(current.endDate) >= new Date(next.startDate)) {
+          alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 必須早於【${next.role}】的開始日 (${next.startDate})！不能為同一天或晚於新職務開始日。`);
           return;
         }
       }
