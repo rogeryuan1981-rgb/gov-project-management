@@ -165,6 +165,16 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
+  // 匯出人力需求 CSV 範例檔
+  const exportReqCSVTemplate = () => {
+    const csvContent = "\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),額外需求說明\n範例單位,專員,2,2026-01-01,2026-12-31,需具備相關證照";
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "人力需求設定_匯入範例.csv";
+    link.click();
+  };
+
   // 4. 處理人力需求 CSV 匯入
   const handleReqFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -736,14 +746,23 @@ export default function HRModule({ user, selectedProject }) {
                 </h3>
                 {/* 隱藏的檔案匯入 input */}
                 <input type="file" ref={reqFileInputRef} accept=".csv" className="hidden" onChange={handleReqFileUpload} />
-                <button 
-                  onClick={() => reqFileInputRef.current?.click()} 
-                  disabled={isImportingReq}
-                  className="flex items-center px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-700 dark:text-slate-300 rounded-lg hover:shadow-sm transition-all"
-                >
-                  {isImportingReq ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <Upload size={14} className="mr-1.5" />}
-                  批次匯入需求 (CSV)
-                </button>
+                <div className="flex space-x-2">
+                  <button 
+                    onClick={exportReqCSVTemplate} 
+                    className="flex items-center px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-700 dark:text-slate-300 rounded-lg hover:shadow-sm transition-all"
+                  >
+                    <Download size={14} className="mr-1.5 text-indigo-500 dark:text-indigo-400" />
+                    下載 CSV 範例
+                  </button>
+                  <button 
+                    onClick={() => reqFileInputRef.current?.click()} 
+                    disabled={isImportingReq}
+                    className="flex items-center px-3 py-1.5 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/30 text-xs font-bold text-indigo-700 dark:text-indigo-400 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-all"
+                  >
+                    {isImportingReq ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <Upload size={14} className="mr-1.5" />}
+                    批次匯入需求
+                  </button>
+                </div>
               </div>
               <button onClick={() => setIsReqModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
                 <X size={20} />
@@ -755,39 +774,42 @@ export default function HRModule({ user, selectedProject }) {
                 <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-400 mb-3 flex items-center">
                   <Plus size={16} className="mr-1" /> 新增需求區間
                 </h4>
-                <form onSubmit={handleAddReq} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <form onSubmit={handleAddReq}>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-start mb-4">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">計畫單位</label>
-                      <input required type="text" value={newReq.unit} onChange={e=>setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      <input required type="text" value={newReq.unit} onChange={e=>setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">要求職位</label>
-                      <input required type="text" value={newReq.position} onChange={e=>setNewReq({...newReq, position: e.target.value})} placeholder="ex. 專員" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      <input required type="text" value={newReq.position} onChange={e=>setNewReq({...newReq, position: e.target.value})} placeholder="ex. 專員" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">需求人數</label>
-                      <input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      <input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
-                      <input type="text" value={newReq.note} onChange={e=>setNewReq({...newReq, note: e.target.value})} placeholder="特殊條件、備註" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-xs outline-none focus:border-indigo-500" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label>
-                      <input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      <input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label>
-                      <input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      <input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
-                    <div className="md:col-span-2">
-                      <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors">
-                        加入設定
-                      </button>
-                    </div>
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
+                    <textarea 
+                      value={newReq.note} 
+                      onChange={e=>setNewReq({...newReq, note: e.target.value})} 
+                      placeholder="請輸入特殊條件、備註或其他詳細需求說明..." 
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 resize-y min-h-[80px]" 
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
+                      加入設定
+                    </button>
                   </div>
                 </form>
               </div>
@@ -799,7 +821,7 @@ export default function HRModule({ user, selectedProject }) {
                     <tr>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[200px]">額外需求說明</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[250px]">額外需求說明</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">操作</th>
@@ -818,7 +840,7 @@ export default function HRModule({ user, selectedProject }) {
                               <div className="text-[10px] text-slate-500">{req.unit}</div>
                             </td>
                             <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
-                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 truncate max-w-[200px]" title={req.note}>{req.note || '-'}</td>
+                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 truncate max-w-[250px]" title={req.note}>{req.note || '-'}</td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400">{req.startDate} ~ {req.endDate}</td>
                             <td className="py-3 px-4 text-center">
                               {isActiveToday 
