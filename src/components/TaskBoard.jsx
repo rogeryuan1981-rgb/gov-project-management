@@ -9,9 +9,8 @@ const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-// 優先從環境變數讀取 Client ID
-const DRIVE_CLIENT_ID = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID) 
-  || '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
+// 移除會造成編譯警告的 import.meta，直接使用安全的公開 Client ID
+const DRIVE_CLIENT_ID = '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
 
 // ================= 真實 Google Drive API 引擎 =================
 const getOrCreateFolder = async (folderName, parentId, accessToken) => {
@@ -55,6 +54,8 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const [tasks, setTasks] = useState([]);
   const [personnel, setPersonnel] = useState([]);
   const [projectName, setProjectName] = useState('');
+  const [projectStartDate, setProjectStartDate] = useState('');
+  const [projectEndDate, setProjectEndDate] = useState('');
   const [taskFiles, setTaskFiles] = useState([]);
   const fileInputRef = useRef(null);
   
@@ -67,7 +68,8 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const [editForm, setEditForm] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // 甘特圖勾選狀態
+  // 甘特圖勾選狀態與模式
+  const [isGanttMode, setIsGanttMode] = useState(false);
   const [selectedForGantt, setSelectedForGantt] = useState([]);
 
   const tokenClientRef = useRef(null);
@@ -94,14 +96,18 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     } else { initGis(); }
   }, []);
 
-  // 取得專案名稱
+  // 取得專案名稱與專案起迄日 (供甘特圖極限範圍使用)
   useEffect(() => {
     if (!user || !selectedProject) return;
     const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
     const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
       const loadedProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const currentProject = loadedProjects.find(p => p.id === selectedProject);
-      if (currentProject) setProjectName(currentProject.name);
+      if (currentProject) {
+        setProjectName(currentProject.name);
+        setProjectStartDate(currentProject.startDate || '');
+        setProjectEndDate(currentProject.endDate || '');
+      }
     });
     return () => unsubscribe();
   }, [user, selectedProject]);
@@ -143,7 +149,6 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     tasks.filter(t => t.parentUid === 0).forEach(epic => {
       const subTasks = tasks.filter(t => t.parentUid === epic.uid);
       if (subTasks.length > 0) {
-        // 判斷邏輯
         const allCompleted = subTasks.every(t => t.status === 'completed');
         const anyActive = subTasks.some(t => t.status === 'in-progress' || t.status === 'completed');
         
@@ -160,9 +165,9 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     });
   }, [tasks, selectedProject]);
 
-  // 判斷是否為「缺件」工項
+  // 判斷是否為「缺件」工項 (僅在狀態為結案時判斷)
   const isMissingFile = (task) => {
-    if (!task.reqDoc) return false; // 不需要檔案則不算缺件
+    if (!task.reqDoc || task.status !== 'completed') return false; 
     const filesCount = taskFiles.filter(f => f.taskId === task.uid).length;
     return filesCount === 0;
   };
@@ -252,7 +257,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     const newTask = {
       uid: newUid, parentUid: targetParentUid, projectId: selectedProject,
       title: isSubTask ? '新增子任務' : '新增主模組', assignee: '',
-      startDate: new Date().toISOString().split('T')[0], due: new Date().toISOString().split('T')[0],
+      startDate: new Date().toISOString().split('T')[0], due: new Date().toISOString().split('T')[0], completedDate: '',
       status: 'pending', reqDoc: false, currentProgress: '尚未開始'
     };
     try {
@@ -291,7 +296,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           const uid = parseInt(cols[0], 10); const parentUid = parseInt(cols[1], 10);
           if (isNaN(uid) || isNaN(parentUid)) continue;
 
-          let importedStatus = cols[6] || 'pending';
+          let importedStatus = cols[7] || 'pending';
           if (!['pending', 'in-progress', 'completed'].includes(importedStatus)) {
              importedStatus = 'pending';
           }
@@ -299,9 +304,9 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           const taskData = {
             uid, parentUid, projectId: selectedProject,
             title: cols[2] || '未命名', assignee: cols[3] || '',
-            startDate: cols[4] || '', due: cols[5] || '', 
-            status: importedStatus, currentProgress: cols[7] || '', 
-            reqDoc: cols[8] === '是' || cols[8] === 'true'
+            startDate: cols[4] || '', due: cols[5] || '', completedDate: cols[6] || '',
+            status: importedStatus, currentProgress: cols[8] || '', 
+            reqDoc: cols[9] === '是' || cols[9] === 'true'
           };
           const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${uid}`);
           await setDoc(taskRef, taskData);
@@ -313,11 +318,11 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
-    const csvRows = ["UID,Parent_UID,工項名稱,負責人,開始日(YYYY-MM-DD),預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed),當前進度,是否需產出文件(是/否)"];
+    const csvRows = ["UID,Parent_UID,工項名稱,負責人,開始日(YYYY-MM-DD),預計完成日(YYYY-MM-DD),結案日期(YYYY-MM-DD),狀態(pending/in-progress/completed),當前進度,是否需產出文件(是/否)"];
     
     if (tasks.length === 0) {
-      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,2026-04-01,2026-12-31,in-progress,順利進行中,否");
-      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-04-01,2026-05-01,in-progress,尋找場地中,是");
+      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,2026-04-01,2026-12-31,,in-progress,順利進行中,否");
+      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-04-01,2026-05-01,,in-progress,尋找場地中,是");
     } else {
       const sortedTasks = [...tasks].sort((a, b) => a.uid - b.uid);
       sortedTasks.forEach(t => {
@@ -325,7 +330,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         const safeTitle = `"${t.title || ''}"`;
         const safeAssignee = `"${t.assignee || ''}"`; 
         const safeProgress = `"${t.currentProgress || ''}"`;
-        csvRows.push(`${t.uid},${t.parentUid},${safeTitle},${safeAssignee},${t.startDate || ''},${t.due || ''},${t.status || ''},${safeProgress},${req}`);
+        csvRows.push(`${t.uid},${t.parentUid},${safeTitle},${safeAssignee},${t.startDate || ''},${t.due || ''},${t.completedDate || ''},${t.status || ''},${safeProgress},${req}`);
       });
     }
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvRows.join("\n") + "\n"], { type: "text/csv;charset=utf-8;" }); 
@@ -337,7 +342,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     document.body.removeChild(link);
   };
 
-  // ================= 產出甘特圖邏輯 =================
+  // ================= 產出甘特圖邏輯 (優化排版與自動全選) =================
   const handleSelectAllForGantt = (e) => {
     if (e.target.checked) {
       setSelectedForGantt(tasks.map(t => t.uid));
@@ -346,9 +351,37 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     }
   };
 
-  const toggleSelectGantt = (e, uid) => {
+  const toggleSelectGantt = (e, task) => {
     e.stopPropagation();
-    setSelectedForGantt(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
+    const isEpic = task.parentUid === 0;
+    
+    if (selectedForGantt.includes(task.uid)) {
+      // 取消勾選
+      if (isEpic) {
+         // 一併取消子任務
+         const subIds = tasks.filter(t => t.parentUid === task.uid).map(t => t.uid);
+         setSelectedForGantt(prev => prev.filter(id => id !== task.uid && !subIds.includes(id)));
+      } else {
+         setSelectedForGantt(prev => prev.filter(id => id !== task.uid));
+      }
+    } else {
+      // 勾選
+      if (isEpic) {
+         // 一併勾選子任務
+         const subIds = tasks.filter(t => t.parentUid === task.uid).map(t => t.uid);
+         setSelectedForGantt(prev => [...new Set([...prev, task.uid, ...subIds])]);
+      } else {
+         setSelectedForGantt(prev => [...prev, task.uid]);
+      }
+    }
+  };
+
+  const getGanttColor = (t) => {
+    const status = getTaskStatus(t);
+    if (status === 'completed') return '#10b981'; // Emerald
+    if (status === 'overdue') return '#ef4444'; // Red
+    if (status === 'in-progress') return '#3b82f6'; // Blue
+    return '#cbd5e1'; // Slate (Pending)
   };
 
   const exportGanttPDF = () => {
@@ -357,52 +390,105 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
       return;
     }
     
-    // 將選擇的任務按照群組結構扁平化，維持視覺一致性
+    // 扁平化並過濾選取的任務
     const orderedTasks = [];
     groupedTasks.forEach(epic => {
-       if (selectedForGantt.includes(epic.uid)) {
-          orderedTasks.push(epic);
-       }
+       if (selectedForGantt.includes(epic.uid)) orderedTasks.push(epic);
        epic.subTasks.forEach(sub => {
-          if (selectedForGantt.includes(sub.uid)) {
-             orderedTasks.push(sub);
-          }
+          if (selectedForGantt.includes(sub.uid)) orderedTasks.push(sub);
        });
     });
 
     if (orderedTasks.length === 0) return;
 
-    let minDate = new Date(Math.min(...orderedTasks.map(t => new Date(t.startDate || t.due || new Date()).getTime())));
-    let maxDate = new Date(Math.max(...orderedTasks.map(t => new Date(t.due || t.startDate || new Date()).getTime())));
+    // 計算每個工項的實際期程 (推算母項目起迄)
+    orderedTasks.forEach(t => {
+       if (t.parentUid === 0) {
+          const subs = tasks.filter(sub => sub.parentUid === t.uid);
+          if (subs.length > 0) {
+             const minS = Math.min(...subs.map(s => new Date(s.startDate||'9999-12-31').getTime()));
+             const maxE = Math.max(...subs.map(s => {
+                let e = s.status === 'completed' && s.completedDate ? s.completedDate : s.due;
+                return new Date(e||'1970-01-01').getTime();
+             }));
+             t.derivedStart = minS !== new Date('9999-12-31').getTime() ? new Date(minS).toISOString().split('T')[0] : t.startDate;
+             t.derivedEnd = maxE !== new Date('1970-01-01').getTime() ? new Date(maxE).toISOString().split('T')[0] : t.due;
+          } else {
+             t.derivedStart = t.startDate;
+             t.derivedEnd = t.status === 'completed' && t.completedDate ? t.completedDate : t.due;
+          }
+       } else {
+          t.derivedStart = t.startDate;
+          t.derivedEnd = t.status === 'completed' && t.completedDate ? t.completedDate : t.due;
+       }
+    });
+
+    const validStarts = orderedTasks.map(t => new Date(t.derivedStart).getTime()).filter(x => !isNaN(x));
+    const validEnds = orderedTasks.map(t => new Date(t.derivedEnd).getTime()).filter(x => !isNaN(x));
+
+    let minMs = validStarts.length > 0 ? Math.min(...validStarts) : Date.now();
+    let maxMs = validEnds.length > 0 ? Math.max(...validEnds) : Date.now();
+
+    // 依據專案計畫起訖日進行極限範圍防呆 (Clamp)
+    const pStartMs = projectStartDate ? new Date(projectStartDate).getTime() : -Infinity;
+    const pEndMs = projectEndDate ? new Date(projectEndDate).getTime() : Infinity;
+
+    minMs = Math.max(minMs, pStartMs);
+    maxMs = Math.min(maxMs, pEndMs);
+
+    // 防呆：若極限壓縮導致錯亂，給予單日區間
+    if (minMs > maxMs) maxMs = minMs + 86400000;
     
-    // 頭尾加一點 padding
-    minDate.setDate(minDate.getDate() - 5);
-    maxDate.setDate(maxDate.getDate() + 10);
-    
-    const totalDays = (maxDate - minDate) / (1000 * 60 * 60 * 24);
+    // 為求美觀，前後各加 5 天 padding (但依舊不超過專案起訖)
+    minMs = Math.max(minMs - (5 * 86400000), pStartMs);
+    maxMs = Math.min(maxMs + (5 * 86400000), pEndMs);
+
+    let totalMs = maxMs - minMs;
+    if (totalMs <= 0) totalMs = 86400000;
+
+    // 產生時間軸刻度與格線 (每月1號)
+    let ticksHtml = '';
+    let gridHtml = '';
+    let currDate = new Date(minMs);
+    currDate.setDate(1); // 歸零到該月1號
+    if (currDate.getTime() < minMs) currDate.setMonth(currDate.getMonth() + 1);
+
+    while (currDate.getTime() <= maxMs) {
+      const leftPct = ((currDate.getTime() - minMs) / totalMs) * 100;
+      if (leftPct >= 0 && leftPct <= 100) {
+        const monthStr = `${currDate.getFullYear()}/${String(currDate.getMonth()+1).padStart(2, '0')}`;
+        ticksHtml += `<div class="gantt-tick" style="left: ${leftPct}%;">${monthStr}</div>`;
+        gridHtml += `<div class="gantt-grid-line" style="left: ${leftPct}%;"></div>`;
+      }
+      currDate.setMonth(currDate.getMonth() + 1);
+    }
 
     let rowsHtml = '';
     orderedTasks.forEach(t => {
-       const tStart = new Date(t.startDate || t.due || new Date());
-       const tEnd = new Date(t.due || t.startDate || new Date());
-       const left = ((tStart - minDate) / (1000 * 60 * 60 * 24) / totalDays) * 100;
-       const width = Math.max(((tEnd - tStart) / (1000 * 60 * 60 * 24) / totalDays) * 100, 0.5);
+       const tStart = new Date(t.derivedStart).getTime();
+       const tEnd = new Date(t.derivedEnd).getTime();
        
+       let left = ((tStart - minMs) / totalMs) * 100;
+       let width = ((tEnd - tStart) / totalMs) * 100;
+       
+       // 防呆，若工項完全超出範圍，或極度短暫
+       if (left < 0) { width += left; left = 0; }
+       if (left + width > 100) { width = 100 - left; }
+       width = Math.max(width, 0.5); // 至少呈現一條線
+
        const isEpic = t.parentUid === 0;
-       const barColor = isEpic ? '#4f46e5' : '#14b8a6';
+       const barColor = getGanttColor(t);
        const titleIndent = isEpic ? '10px' : '30px';
        const icon = isEpic ? '📁' : '↳';
 
        rowsHtml += `
          <div class="gantt-row">
            <div class="gantt-label" style="padding-left: ${titleIndent}">
-             <div style="font-weight: bold; font-size: 13px; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${icon} ${t.title}</div>
-             <div style="font-size: 11px; color: #64748b; margin-top: 3px;">${t.assignee || '未指派'} | ${t.startDate || '-'} ~ ${t.due || '-'}</div>
+             <div class="gantt-title">${icon} ${t.title}</div>
+             <div class="gantt-subtitle">${t.assignee || '未指派'} | ${t.derivedStart} ~ ${t.derivedEnd}</div>
            </div>
            <div class="gantt-timeline">
-             <div class="gantt-bar" style="left: ${left}%; width: ${width}%; background-color: ${barColor};">
-               ${t.title}
-             </div>
+             <div class="gantt-bar" style="left: ${left}%; width: ${width}%; background-color: ${barColor}; border-radius: ${isEpic ? '2px' : '6px'}; height: ${isEpic ? '8px' : '16px'};"></div>
            </div>
          </div>
        `;
@@ -417,16 +503,23 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         <style>
           body { font-family: 'Helvetica Neue', Helvetica, 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #333; line-height: 1.6; padding: 20px; }
           h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
-          .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
-          .gantt-container { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-top: 20px; }
-          .gantt-header { display: flex; background-color: #f8fafc; border-bottom: 2px solid #e2e8f0; }
-          .gantt-header-label { width: 320px; padding: 12px; font-weight: bold; color: #475569; font-size: 14px; border-right: 1px solid #e2e8f0; }
-          .gantt-header-timeline { flex: 1; padding: 12px; font-weight: bold; color: #475569; font-size: 14px; text-align: center; background: #f1f5f9; }
-          .gantt-row { display: flex; border-bottom: 1px solid #f1f5f9; }
+          .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 20px; }
+          .legend { display: flex; justify-content: center; gap: 20px; margin-bottom: 20px; font-size: 12px; font-weight: bold; }
+          .legend-item { display: flex; align-items: center; }
+          .legend-color { width: 16px; height: 16px; border-radius: 4px; margin-right: 6px; }
+          .gantt-container { border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #fff; }
+          .gantt-header { display: flex; background-color: #f8fafc; border-bottom: 1px solid #cbd5e1; }
+          .gantt-header-label { width: 320px; padding: 12px; font-weight: bold; color: #475569; font-size: 14px; border-right: 1px solid #cbd5e1; box-sizing: border-box; }
+          .gantt-header-timeline { flex: 1; position: relative; height: 45px; background: #f1f5f9; }
+          .gantt-tick { position: absolute; bottom: 5px; font-size: 11px; font-weight: bold; color: #475569; transform: translateX(-50%); }
+          .gantt-row { display: flex; border-bottom: 1px solid #f1f5f9; position: relative; page-break-inside: avoid; }
           .gantt-row:last-child { border-bottom: none; }
-          .gantt-label { width: 320px; padding: 12px; border-right: 1px solid #e2e8f0; background-color: #fff; box-sizing: border-box; }
-          .gantt-timeline { flex: 1; position: relative; background: #f8fafc; padding: 10px 0; background-image: repeating-linear-gradient(to right, transparent, transparent 9.9%, #e2e8f0 10%); }
-          .gantt-bar { position: absolute; height: 26px; top: 50%; transform: translateY(-50%); border-radius: 4px; color: white; font-size: 11px; display: flex; align-items: center; padding: 0 8px; white-space: nowrap; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+          .gantt-label { width: 320px; padding: 10px 12px; border-right: 1px solid #cbd5e1; background-color: #fff; box-sizing: border-box; z-index: 2; }
+          .gantt-title { font-weight: bold; font-size: 13px; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .gantt-subtitle { font-size: 11px; color: #64748b; margin-top: 4px; }
+          .gantt-timeline { flex: 1; position: relative; background: #fff; padding: 8px 0; overflow: hidden; }
+          .gantt-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background-color: #e2e8f0; z-index: 0; }
+          .gantt-bar { position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
           .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
           @media print { .no-print { display: none !important; } body { padding: 0; } }
         </style>
@@ -437,19 +530,34 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           <button class="print-btn" onclick="window.print()">列印 / 儲存為 PDF</button>
         </div>
         <h1>【${projectName}】專案進度甘特圖</h1>
-        <div class="meta">期程範圍：${minDate.toISOString().split('T')[0]} 至 ${maxDate.toISOString().split('T')[0]}</div>
+        <div class="meta">期程範圍：${new Date(minMs).toISOString().split('T')[0]} 至 ${new Date(maxMs).toISOString().split('T')[0]}</div>
+        
+        <div class="legend">
+          <div class="legend-item"><div class="legend-color" style="background:#10b981;"></div>已結案</div>
+          <div class="legend-item"><div class="legend-color" style="background:#3b82f6;"></div>進行中</div>
+          <div class="legend-item"><div class="legend-color" style="background:#cbd5e1;"></div>尚未開始</div>
+          <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div>逾期</div>
+        </div>
+
         <div class="gantt-container">
           <div class="gantt-header">
             <div class="gantt-header-label">工項名稱與負責人</div>
-            <div class="gantt-header-timeline">專案期程展開</div>
+            <div class="gantt-header-timeline">
+              ${ticksHtml}
+            </div>
           </div>
-          ${rowsHtml}
+          <div style="position: relative;">
+            <div style="position: absolute; top:0; left:320px; right:0; bottom:0; z-index:0; pointer-events:none;">
+              ${gridHtml}
+            </div>
+            ${rowsHtml}
+          </div>
         </div>
       </body>
       </html>
     `;
 
-    const printWindow = window.open('', '', 'width=1000,height=800');
+    const printWindow = window.open('', '', 'width=1100,height=800');
     printWindow.document.write(printContent);
     printWindow.document.close();
     setTimeout(() => printWindow.focus(), 500);
@@ -472,9 +580,22 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     setIsSaving(true);
     try {
       const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${editForm.uid}`);
+      
+      // 如果狀態變更為非 completed，則清除結案日期
+      let finalCompletedDate = editForm.completedDate;
+      if (editForm.status !== 'completed') {
+        finalCompletedDate = '';
+      }
+
       await updateDoc(taskRef, {
-        title: editForm.title, assignee: editForm.assignee, startDate: editForm.startDate,
-        due: editForm.due, status: editForm.status, currentProgress: editForm.currentProgress, reqDoc: editForm.reqDoc
+        title: editForm.title, 
+        assignee: editForm.assignee, 
+        startDate: editForm.startDate,
+        due: editForm.due, 
+        completedDate: finalCompletedDate,
+        status: editForm.status, 
+        currentProgress: editForm.currentProgress, 
+        reqDoc: editForm.reqDoc
       });
       
       // 若是修改母項目且人員有變更，自動連動覆蓋子項目的負責人
@@ -484,7 +605,8 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           await updateDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${child.uid}`), { assignee: editForm.assignee });
         }
       }
-      setIsEditing(false); setSelectedTask(editForm);
+      setIsEditing(false); 
+      setSelectedTask({...editForm, completedDate: finalCompletedDate});
     } catch (error) { console.error("更新工項失敗:", error); } 
     finally { setIsSaving(false); }
   };
@@ -544,7 +666,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             <AlertCircle size={24} className="text-red-600 dark:text-red-400 mr-3 flex-shrink-0" />
             <div>
               <h4 className="font-bold text-red-700 dark:text-red-400 text-sm">⚠️ 注意：歸檔文件缺件！</h4>
-              <p className="text-xs text-red-600 dark:text-red-300 mt-1">此工項設定為「需產出並歸檔文件」，但目前尚未上傳任何檔案。請盡速至下方上傳補件。</p>
+              <p className="text-xs text-red-600 dark:text-red-300 mt-1">此工項已設定為「已結案」且「需產出並歸檔文件」，但目前尚未上傳任何檔案。請盡速至下方上傳補件。</p>
             </div>
           </div>
         )}
@@ -603,9 +725,9 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             </div>
           </div>
           
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
             {/* 負責人區塊 (多選/顯示) */}
-            <div>
+            <div className="lg:col-span-1">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
               {isEditing ? (
                 <div className="flex flex-col space-y-1">
@@ -631,7 +753,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                       })
                     )}
                   </div>
-                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-1 leading-tight">💡 儲存後將同步覆蓋底下所有子任務之負責人</span>}
+                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-1 leading-tight">💡 同步覆蓋子任務負責人</span>}
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700 min-h-[42px] items-center">
@@ -647,20 +769,26 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
               )}
             </div>
 
-            <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">工作期間設定</p>
+            <div className="lg:col-span-2">
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">工作期程與結案日</p>
               {isEditing ? (
                 <div className="flex flex-col space-y-2">
-                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-medium w-6">起</span><input type="date" value={editForm.startDate} onChange={(e) => setEditForm({...editForm, startDate: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
-                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-medium w-6">訖</span><input type="date" value={editForm.due} onChange={(e) => setEditForm({...editForm, due: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-bold w-12">開始日</span><input type="date" value={editForm.startDate} onChange={(e) => setEditForm({...editForm, startDate: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-bold w-12">預計完成</span><input type="date" value={editForm.due} onChange={(e) => setEditForm({...editForm, due: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+                  <div className="flex items-center space-x-2"><span className="text-xs text-emerald-600 font-bold w-12">結案日</span><input type="date" value={editForm.completedDate || ''} onChange={(e) => setEditForm({...editForm, completedDate: e.target.value})} className="flex-1 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-500/30 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-emerald-500" /></div>
                 </div>
               ) : (
-                <div className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700"><Calendar size={14} className="mr-2 text-indigo-500" /><span className="font-mono tracking-tight">{task.startDate || '-'} ~ {task.due || '-'}</span></div>
+                <div className="text-sm font-bold text-slate-700 dark:text-slate-300 flex flex-col space-y-1 bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700">
+                  <span className="flex items-center text-slate-600 dark:text-slate-400 font-mono text-xs"><Calendar size={14} className="mr-2 text-indigo-500" />{task.startDate || '-'} ~ {task.due || '-'}</span>
+                  {task.status === 'completed' && (
+                    <span className="flex items-center text-emerald-600 dark:text-emerald-400 font-mono text-xs mt-1"><CheckCircle2 size={14} className="mr-2" />結案於：{task.completedDate || '-'}</span>
+                  )}
+                </div>
               )}
             </div>
             
             {/* 總狀態區塊 */}
-            <div>
+            <div className="lg:col-span-1">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">總狀態</p>
               {isEditing ? (
                 <select value={editForm.status} onChange={(e) => setEditForm({...editForm, status: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-medium">
@@ -673,7 +801,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
               )}
             </div>
 
-            <div>
+            <div className="lg:col-span-1">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">文件產出規定</p>
               {isEditing ? (
                 <label className="flex items-center space-x-2 mt-1 cursor-pointer"><input type="checkbox" checked={editForm.reqDoc} onChange={(e) => setEditForm({...editForm, reqDoc: e.target.checked})} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" /><span className="text-sm font-medium text-slate-700 dark:text-slate-300">✅ 需產出並歸檔</span></label>
@@ -698,7 +826,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                   <tr>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500">子任務名稱</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500">負責人</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500">期限</th>
+                    <th className="py-3 px-6 text-xs font-bold text-slate-500">期限與結案日</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500 text-center">狀態</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500 text-right">操作</th>
                   </tr>
@@ -708,7 +836,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                     <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
                       <td className="py-3 px-6 text-sm font-bold text-slate-800 dark:text-slate-200">
                         <div className="flex items-center">
-                          {getTaskStatus(sub) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500" />}
+                          {getTaskStatus(sub) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500 shrink-0" />}
                           {sub.title}
                           {isMissingFile(sub) && (
                             <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-600 text-[10px] rounded border border-red-200 shrink-0">缺件</span>
@@ -722,7 +850,12 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                            )) : '-'}
                         </div>
                       </td>
-                      <td className="py-3 px-6 text-xs font-mono text-slate-500 dark:text-slate-400 tracking-tight">{sub.startDate || '-'} ~ {sub.due}</td>
+                      <td className="py-3 px-6 text-xs font-mono text-slate-500 dark:text-slate-400 tracking-tight">
+                        <div className="flex flex-col">
+                          <span>{sub.startDate || '-'} ~ {sub.due}</span>
+                          {sub.status === 'completed' && sub.completedDate && <span className="text-emerald-500 font-bold mt-0.5">結案: {sub.completedDate}</span>}
+                        </div>
+                      </td>
                       <td className="py-3 px-6 text-center">{getStatusBadge(sub)}</td>
                       <td className="py-3 px-6 text-right"><button onClick={() => setSelectedTask(sub)} className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-colors">獨立維護</button></td>
                     </tr>
@@ -796,14 +929,31 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         </div>
         <div className="flex flex-wrap items-center gap-2">
           
-          {/* 甘特圖產出按鈕 */}
-          <button 
-            onClick={exportGanttPDF} 
-            disabled={selectedForGantt.length === 0}
-            className="flex items-center space-x-2 px-4 py-2 bg-amber-50 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-500/30 text-sm font-bold transition-colors disabled:opacity-50"
-          >
-            <BarChart2 size={16} /><span>產出甘特圖 (PDF)</span>
-          </button>
+          {/* 甘特圖產出按鈕 (模式切換) */}
+          {isGanttMode ? (
+            <div className="flex items-center space-x-2 bg-amber-50 dark:bg-amber-500/10 p-1.5 rounded-lg border border-amber-200 dark:border-amber-500/30">
+               <button 
+                 onClick={exportGanttPDF} 
+                 disabled={selectedForGantt.length === 0}
+                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-md text-sm font-bold shadow-sm flex items-center transition-colors"
+               >
+                 <BarChart2 size={16} className="mr-1.5" /> 確定匯出 PDF
+               </button>
+               <button 
+                 onClick={() => { setIsGanttMode(false); setSelectedForGantt([]); }} 
+                 className="px-3 py-1.5 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 rounded-md text-sm font-bold transition-colors"
+               >
+                 取消選擇
+               </button>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setIsGanttMode(true)} 
+              className="flex items-center space-x-2 px-4 py-2 bg-amber-50 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-500/30 text-sm font-bold transition-colors"
+            >
+              <BarChart2 size={16} /><span>產出甘特圖 (PDF)</span>
+            </button>
+          )}
           
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
           <button onClick={exportTasksToCSV} className="flex items-center space-x-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-lg hover:shadow-sm text-sm font-bold transition-all">
@@ -822,30 +972,32 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         <table className="w-full text-left border-collapse">
           <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0 z-10 shadow-sm">
             <tr>
-              <th className="py-3 px-4 w-12 text-center border-b border-slate-200 dark:border-slate-700">
-                <input 
-                  type="checkbox" 
-                  onChange={handleSelectAllForGantt}
-                  checked={tasks.length > 0 && selectedForGantt.length === tasks.length}
-                  className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
-                  title="全選產出甘特圖"
-                />
-              </th>
-              <th className="py-3 px-2 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('title')}>任務結構與名稱 <SortIcon columnKey="title" /></th>
-              <th className="py-3 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('assignee')}>負責人 <SortIcon columnKey="assignee" /></th>
-              <th className="py-3 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('period')}>工作期間 <SortIcon columnKey="period" /></th>
-              <th className="py-3 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('currentProgress')}>當前進度 <SortIcon columnKey="currentProgress" /></th>
-              <th className="py-3 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center" onClick={() => handleSort('status')}>狀態 <SortIcon columnKey="status" /></th>
-              <th className="py-3 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 text-right">詳情</th>
+              {isGanttMode && (
+                <th className="py-3 px-4 w-12 text-center border-b border-slate-200 dark:border-slate-700">
+                  <input 
+                    type="checkbox" 
+                    onChange={handleSelectAllForGantt}
+                    checked={tasks.length > 0 && selectedForGantt.length === tasks.length}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    title="全選產出甘特圖"
+                  />
+                </th>
+              )}
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('title')}>任務結構與名稱 <SortIcon columnKey="title" /></th>
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('assignee')}>負責人 <SortIcon columnKey="assignee" /></th>
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('period')}>工作期間 <SortIcon columnKey="period" /></th>
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('currentProgress')}>當前進度 <SortIcon columnKey="currentProgress" /></th>
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center" onClick={() => handleSort('status')}>狀態 <SortIcon columnKey="status" /></th>
+              <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 text-right">詳情</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800">
             {groupedTasks.length === 0 ? (
               <tr>
-                <td colSpan="7" className="py-16 text-center">
+                <td colSpan={isGanttMode ? 7 : 6} className="py-16 text-center">
                   <div className="flex flex-col items-center justify-center">
                     <FolderArchive size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
-                    <p className="text-slate-700 dark:text-slate-300 font-bold mb-1">此專案目前尚無工項資料</p>
+                    <p className="text-slate-700 dark:text-slate-300 font-bold mb-1">此專案目前尚無從 Firebase 讀取到的工項資料</p>
                     <p className="text-slate-500 text-sm mb-6 max-w-md font-medium">請點擊上方「新增任務」，或匯出 CSV 填寫後進行批次匯入。</p>
                   </div>
                 </td>
@@ -858,23 +1010,25 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                 return (
                   <React.Fragment key={`epic-${epic.uid}`}>
                     <tr className="hover:bg-indigo-50/30 dark:hover:bg-indigo-500/5 cursor-pointer group transition-colors" onClick={() => setSelectedTask(epic)}>
-                      <td className="py-4 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                        <input 
-                          type="checkbox" 
-                          checked={selectedForGantt.includes(epic.uid)}
-                          onChange={(e) => toggleSelectGantt(e, epic.uid)}
-                          className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                        />
-                      </td>
-                      <td className="py-4 px-2">
+                      {isGanttMode && (
+                        <td className="py-4 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input 
+                            type="checkbox" 
+                            checked={selectedForGantt.includes(epic.uid)}
+                            onChange={(e) => toggleSelectGantt(e, epic)}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                          />
+                        </td>
+                      )}
+                      <td className="py-4 px-4">
                         <div className="flex items-center">
                           <button onClick={(e) => toggleEpicExpand(e, epic.uid)} className={`mr-2 p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-400 transition-transform ${!hasSubTasks && 'opacity-30 cursor-default'}`} disabled={!hasSubTasks}>
                             {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                           </button>
                           <div className="flex flex-col">
                             <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400 flex items-center">
-                              {getTaskStatus(epic) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500" />}
-                              <FolderArchive size={14} className="mr-1.5 opacity-70" />
+                              {getTaskStatus(epic) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500 shrink-0" />}
+                              <FolderArchive size={14} className="mr-1.5 opacity-70 shrink-0" />
                               {epic.title}
                               {isMissingFile(epic) && (
                                 <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-600 text-[10px] rounded border border-red-200 shrink-0">缺件</span>
@@ -884,17 +1038,22 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                           </div>
                         </div>
                       </td>
-                      <td className="py-4 px-6 text-sm">
+                      <td className="py-4 px-4 text-sm">
                         <div className="flex flex-wrap gap-1">
                            {epic.assignee ? epic.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
                              <span key={i} className="bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold px-2 py-0.5 rounded text-xs">{a}</span>
                            )) : '-'}
                         </div>
                       </td>
-                      <td className="py-4 px-6 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">{epic.startDate || '-'} ~ {epic.due || '-'}</td>
-                      <td className="py-4 px-6 text-sm"><span className="text-slate-600 dark:text-slate-300 font-medium">{epic.currentProgress || '-'}</span></td>
-                      <td className="py-4 px-6 text-center">{getStatusBadge(epic)}</td>
-                      <td className="py-4 px-6 text-right">
+                      <td className="py-4 px-4 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">
+                        <div className="flex flex-col">
+                          <span>{epic.startDate || '-'} ~ {epic.due || '-'}</span>
+                          {epic.status === 'completed' && epic.completedDate && <span className="text-emerald-500 font-bold mt-0.5">結案: {epic.completedDate}</span>}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-sm"><span className="text-slate-600 dark:text-slate-300 font-medium">{epic.currentProgress || '-'}</span></td>
+                      <td className="py-4 px-4 text-center">{getStatusBadge(epic)}</td>
+                      <td className="py-4 px-4 text-right">
                         <button className="text-indigo-600 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity font-bold text-xs flex items-center justify-end w-full px-2 py-1.5 bg-indigo-50 dark:bg-indigo-500/20 rounded-lg">
                           維護母模組 <ChevronRight size={14} className="ml-1" />
                         </button>
@@ -902,15 +1061,17 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                     </tr>
                     {isExpanded && epic.subTasks.map(sub => (
                       <tr key={sub.id} onClick={() => setSelectedTask(sub)} className="bg-slate-50/50 dark:bg-slate-900/30 hover:bg-white dark:hover:bg-slate-800 cursor-pointer group transition-colors border-l-4 border-l-indigo-300 dark:border-l-indigo-600">
-                        <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                          <input 
-                            type="checkbox" 
-                            checked={selectedForGantt.includes(sub.uid)}
-                            onChange={(e) => toggleSelectGantt(e, sub.uid)}
-                            className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                          />
-                        </td>
-                        <td className="py-3 px-2 pl-14">
+                        {isGanttMode && (
+                          <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                            <input 
+                              type="checkbox" 
+                              checked={selectedForGantt.includes(sub.uid)}
+                              onChange={(e) => toggleSelectGantt(e, sub)}
+                              className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                            />
+                          </td>
+                        )}
+                        <td className={`py-3 px-4 ${isGanttMode ? 'pl-8' : 'pl-14'}`}>
                           <div className="flex items-center">
                             <div className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 mr-3 shrink-0"></div>
                             <span className="text-sm font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors flex items-center">
@@ -922,17 +1083,22 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                             </span>
                           </div>
                         </td>
-                        <td className="py-3 px-6 text-sm">
+                        <td className="py-3 px-4 text-sm">
                           <div className="flex flex-wrap gap-1">
                              {sub.assignee ? sub.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
                                <span key={i} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded text-xs">{a}</span>
                              )) : '-'}
                           </div>
                         </td>
-                        <td className="py-3 px-6 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">{sub.startDate || '-'} ~ {sub.due || '-'}</td>
-                        <td className="py-3 px-6 text-sm"><span className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 px-2.5 py-1 rounded-md font-medium shadow-sm">{sub.currentProgress || '-'}</span></td>
-                        <td className="py-3 px-6 text-center">{getStatusBadge(sub)}</td>
-                        <td className="py-3 px-6 text-right">
+                        <td className="py-3 px-4 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">
+                          <div className="flex flex-col">
+                            <span>{sub.startDate || '-'} ~ {sub.due || '-'}</span>
+                            {sub.status === 'completed' && sub.completedDate && <span className="text-emerald-500 font-bold mt-0.5">結案: {sub.completedDate}</span>}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-sm"><span className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 px-2.5 py-1 rounded-md font-medium shadow-sm">{sub.currentProgress || '-'}</span></td>
+                        <td className="py-3 px-4 text-center">{getStatusBadge(sub)}</td>
+                        <td className="py-3 px-4 text-right">
                           <button className="text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all font-bold text-xs flex items-center justify-end w-full">
                             詳細 <ChevronRight size={14} />
                           </button>
