@@ -142,7 +142,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     return () => { unsubTasks(); unsubFiles(); unsubPersonnel(); };
   }, [user, selectedProject, selectedTask, setSelectedTask, isEditing]);
 
-  // ================= 核心邏輯：自動同步母子模組狀態 =================
+  // ================= 核心邏輯：自動同步母子模組狀態與結案日 =================
   useEffect(() => {
     if (tasks.length === 0) return;
     
@@ -153,13 +153,31 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         const anyActive = subTasks.some(t => t.status === 'in-progress' || t.status === 'completed');
         
         let expectedStatus = epic.status;
-        if (allCompleted) expectedStatus = 'completed';
-        else if (anyActive) expectedStatus = 'in-progress';
-        else expectedStatus = 'pending';
+        let expectedCompletedDate = epic.completedDate;
+        
+        if (allCompleted) {
+          expectedStatus = 'completed';
+          // 取所有子工項中最晚的結案日期
+          const latestCompletedDate = subTasks.reduce((latest, sub) => {
+            if (!sub.completedDate) return latest;
+            if (!latest) return sub.completedDate;
+            return new Date(sub.completedDate) > new Date(latest) ? sub.completedDate : latest;
+          }, '');
+          expectedCompletedDate = latestCompletedDate;
+        } else if (anyActive) {
+          expectedStatus = 'in-progress';
+          expectedCompletedDate = ''; // 未全結案時清空母工項結案日
+        } else {
+          expectedStatus = 'pending';
+          expectedCompletedDate = '';
+        }
 
-        if (epic.status !== expectedStatus) {
+        if (epic.status !== expectedStatus || epic.completedDate !== expectedCompletedDate) {
           const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${epic.uid}`);
-          updateDoc(taskRef, { status: expectedStatus }).catch(e => console.error(e));
+          updateDoc(taskRef, { 
+            status: expectedStatus,
+            completedDate: expectedCompletedDate 
+          }).catch(e => console.error(e));
         }
       }
     });
@@ -577,6 +595,13 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
   const handleSaveTask = async () => {
     if (!editForm) return;
+
+    // 防呆：已結案時結案日期必填
+    if (editForm.status === 'completed' && (!editForm.completedDate || editForm.completedDate.trim() === '')) {
+      alert("狀態為已結案時，結案日期為必填！");
+      return;
+    }
+
     setIsSaving(true);
     try {
       const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${editForm.uid}`);
@@ -726,34 +751,37 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
-            {/* 負責人區塊 (多選/顯示) */}
+            {/* 負責人區塊 (美化後的 Chip 點選介面) */}
             <div className="lg:col-span-1">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
               {isEditing ? (
                 <div className="flex flex-col space-y-1">
-                  <div className="bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg p-2 max-h-32 overflow-y-auto">
+                  <div className="flex flex-wrap gap-2 mt-1">
                     {personnel.length === 0 ? (
                       <span className="text-xs text-slate-500 px-1">專案無建檔人員</span>
                     ) : (
                       personnel.map(p => {
                         const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
                         return (
-                          <label key={p.id} className="flex items-center space-x-2 py-1.5 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-2 transition-colors">
-                            <input 
-                              type="checkbox" 
-                              checked={isChecked}
-                              onChange={() => handleAssigneeChange(p.name)}
-                              className="rounded text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                              {p.name} <span className="text-[10px] text-slate-400 font-normal">({p.role})</span>
-                            </span>
-                          </label>
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => handleAssigneeChange(p.name)}
+                            className={`flex items-center px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                              isChecked 
+                                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-500/20 dark:border-indigo-500/30 dark:text-indigo-300 shadow-sm scale-105' 
+                                : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                            }`}
+                          >
+                            <div className={`w-2 h-2 rounded-full mr-2 transition-colors ${isChecked ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}></div>
+                            {p.name}
+                            <span className="ml-1 opacity-60 font-normal">({p.role})</span>
+                          </button>
                         );
                       })
                     )}
                   </div>
-                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-1 leading-tight">💡 同步覆蓋子任務負責人</span>}
+                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-2 leading-tight block">💡 儲存後將同步覆蓋底下所有子任務之負責人</span>}
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700 min-h-[42px] items-center">
@@ -1100,7 +1128,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                         <td className="py-3 px-4 text-center">{getStatusBadge(sub)}</td>
                         <td className="py-3 px-4 text-right">
                           <button className="text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all font-bold text-xs flex items-center justify-end w-full">
-                            詳細 <ChevronRight size={14} />
+                            獨立維護 <ChevronRight size={14} />
                           </button>
                         </td>
                       </tr>
