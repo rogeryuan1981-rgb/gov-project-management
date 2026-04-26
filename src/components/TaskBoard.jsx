@@ -1,750 +1,575 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Plus, ChevronRight, ChevronDown, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, Edit2, Save, X, Trash2, ExternalLink, CheckSquare } from 'lucide-react';
-import { collection, onSnapshot, doc, setDoc, updateDoc, getFirestore, addDoc } from 'firebase/firestore';
+import React, { useState, useEffect } from 'react';
+import { Calculator, FileText, Users, CheckSquare, Download, Calendar, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { collection, onSnapshot, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
-
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-// 專屬 Google Drive API 金鑰 (已徹底解決環境變數編譯報錯問題)
-const DRIVE_CLIENT_ID = '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
-
-// ================= 真實 Google Drive API 引擎 =================
-const getOrCreateFolder = async (folderName, parentId, accessToken) => {
-  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id)`, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  if (searchRes.status === 401) throw new Error('UNAUTHORIZED');
-  const searchData = await searchRes.json();
-
-  if (searchData.files && searchData.files.length > 0) {
-    return searchData.files[0];
-  } else {
-    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
-    });
-    if (createRes.status === 401) throw new Error('UNAUTHORIZED');
-    return await createRes.json();
-  }
-};
-
-const uploadToGoogleDrive = async (file, fileName, pathArray, accessToken) => {
-  let parentId = 'root'; 
-  for (const folderName of pathArray) {
-    const folder = await getOrCreateFolder(folderName, parentId, accessToken);
-    parentId = folder.id;
-  }
-  const metadata = { name: fileName, parents: [parentId] };
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', file);
-  const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
-    method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form
-  });
-  if (uploadRes.status === 401) throw new Error('UNAUTHORIZED');
-  return await uploadRes.json(); 
-};
-
-export default function TaskBoard({ user, selectedProject, selectedTask, setSelectedTask }) {
-  const [tasks, setTasks] = useState([]);
+export default function ReportsModule({ user, selectedProject }) {
   const [personnel, setPersonnel] = useState([]);
+  const [requirements, setRequirements] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [projectName, setProjectName] = useState('');
-  const [taskFiles, setTaskFiles] = useState([]);
-  const fileInputRef = useRef(null);
-  
-  const [isImporting, setIsImporting] = useState(false);
-  const [uploadingTaskFiles, setUploadingTaskFiles] = useState({});
+  const [projectStartDate, setProjectStartDate] = useState(''); // 新增：專案起始日狀態
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
 
-  const [sortConfig, setSortConfig] = useState({ key: 'uid', direction: 'asc' });
-  const [expandedEpics, setExpandedEpics] = useState([]);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
+  // 取得今年初到今天的預設區間
+  const currentYear = new Date().getFullYear();
+  const getLocalTodayStr = () => {
+    const d = new Date();
+    const tzOffset = d.getTimezoneOffset() * 60000;
+    return new Date(d - tzOffset).toISOString().split('T')[0];
+  };
 
-  const tokenClientRef = useRef(null);
+  const [startDate, setStartDate] = useState(`${currentYear}-01-01`);
+  const [endDate, setEndDate] = useState(getLocalTodayStr());
+  const [message, setMessage] = useState(null); 
 
-  // 初始化 Google Identity Services
-  useEffect(() => {
-    const initGis = () => {
-      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
-        client_id: DRIVE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/drive.file',
-        callback: (tokenResponse) => {
-          if (tokenResponse && tokenResponse.access_token) {
-            localStorage.setItem('google_drive_access_token', tokenResponse.access_token);
-            alert("✅ 雲端硬碟授權成功！請再次上傳檔案。");
-          }
-        },
-      });
-    };
-    if (!window.google) {
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true; script.defer = true; script.onload = initGis;
-      document.body.appendChild(script);
-    } else { initGis(); }
-  }, []);
+  const showMessage = (type, text) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 5000);
+  };
 
-  // 取得專案名稱
+  // 監聽所有報表需要的資料
   useEffect(() => {
     if (!user || !selectedProject) return;
-    const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
-    const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
-      const loadedProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const currentProject = loadedProjects.find(p => p.id === selectedProject);
-      if (currentProject) setProjectName(currentProject.name);
+
+    // 取得專案名稱與專案起始日
+    const projectRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
+    const unsubProject = onSnapshot(projectRef, (snapshot) => {
+      const currentProj = snapshot.docs.map(d => ({id: d.id, ...d.data()})).find(p => p.id === selectedProject);
+      if (currentProj) {
+        setProjectName(currentProj.name);
+        if (currentProj.startDate) setProjectStartDate(currentProj.startDate);
+      }
     });
-    return () => unsubscribe();
+
+    const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
+    const reqRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs');
+    const tasksRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'tasks');
+
+    const unsubHR = onSnapshot(hrRef, (snapshot) => {
+      setPersonnel(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(p => p.projectId === selectedProject));
+    });
+
+    const unsubReq = onSnapshot(reqRef, (snapshot) => {
+      setRequirements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(r => r.projectId === selectedProject));
+    });
+
+    const unsubTasks = onSnapshot(tasksRef, (snapshot) => {
+      setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(t => t.projectId === selectedProject));
+      setIsDataLoaded(true);
+    });
+
+    return () => { unsubProject(); unsubHR(); unsubReq(); unsubTasks(); };
   }, [user, selectedProject]);
 
-  // 監聽工項、檔案與【專屬人員】紀錄
-  useEffect(() => {
-    if (!user || !selectedProject) return;
-    const tasksRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'tasks');
-    const filesRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'files');
-    const personnelRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
+  // ================= 匯出 1：考勤匯總表 (CSV) =================
+  const exportAttendanceCSV = () => {
+    if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
+    if (!startDate || !endDate) return showMessage('error', '請先設定報表區間。');
+
+    const csvRows = ['\uFEFF姓名,所屬單位,職位,駐點身分,在職狀態,參與計畫起日,參與計畫迄日,規政代理異常狀態'];
     
-    const unsubTasks = onSnapshot(tasksRef, (snapshot) => {
-      const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const projectTasks = allTasks.filter(t => t.projectId === selectedProject);
-      setTasks(projectTasks);
-      if (selectedTask && !isEditing) {
-        const updatedSelectedTask = projectTasks.find(t => t.uid === selectedTask.uid);
-        if (updatedSelectedTask) setSelectedTask(updatedSelectedTask);
-      }
+    personnel.forEach(p => {
+      const isResidentStr = p.isResident ? '駐點' : '非駐點';
+      const statusStr = p.contractEnd && p.contractEnd < getLocalTodayStr() ? '已離職' : '在職';
+      const proxyStr = p.proxyAlert ? '異常 (缺代理人)' : '合規';
+      csvRows.push(`"${p.name}","${p.unit}","${p.role}",${isResidentStr},${statusStr},${p.contractStart || p.hireDate},${p.contractEnd || '至今'},${proxyStr}`);
     });
 
-    const unsubFiles = onSnapshot(filesRef, (snapshot) => {
-      const allFiles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTaskFiles(allFiles.filter(f => f.projectId === selectedProject && f.taskId));
-    });
-
-    const unsubPersonnel = onSnapshot(personnelRef, (snapshot) => {
-      const allPersonnel = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPersonnel(allPersonnel.filter(p => p.projectId === selectedProject));
-    });
-
-    return () => { unsubTasks(); unsubFiles(); unsubPersonnel(); };
-  }, [user, selectedProject, selectedTask, setSelectedTask, isEditing]);
-
-  // 動態推算任務狀態 (判斷是否逾期)
-  const getTaskStatus = (task) => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    if (task.status !== 'completed' && task.due && task.due < todayStr) {
-      return 'overdue';
-    }
-    return task.status;
-  };
-
-  const getStatusBadge = (task) => {
-    const derivedStatus = getTaskStatus(task);
-    
-    if (derivedStatus === 'overdue') {
-      return (
-        <span className="px-2.5 py-1 rounded-full text-xs font-bold border whitespace-nowrap bg-red-100 text-red-700 border-red-200 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30 animate-pulse shadow-sm">
-          逾期
-        </span>
-      );
-    }
-
-    const styles = {
-      'in-progress': 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400 border-blue-200 dark:border-blue-500/30',
-      'pending': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600',
-      'completed': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/30'
-    };
-    const labels = { 'in-progress': '進行中', 'pending': '尚未開始', 'completed': '已結案' };
-    return <span className={`px-2.5 py-1 rounded-full text-xs font-medium border whitespace-nowrap ${styles[task.status] || styles['pending']}`}>{labels[task.status] || '尚未開始'}</span>;
-  };
-
-  const handleSort = (key) => {
-    let direction = 'asc';
-    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-    setSortConfig({ key, direction });
-  };
-
-  const SortIcon = ({ columnKey }) => {
-    if (sortConfig.key !== columnKey) return <span className="ml-1 text-slate-300 dark:text-slate-600 inline-block w-3 h-3">↕</span>;
-    return sortConfig.direction === 'asc' ? <span className="ml-1 text-indigo-500 inline-block">↑</span> : <span className="ml-1 text-indigo-500 inline-block">↓</span>;
-  };
-
-  const groupedTasks = React.useMemo(() => {
-    let epics = tasks.filter(t => t.parentUid === 0);
-    const orphanTasks = tasks.filter(t => t.parentUid !== 0 && !epics.some(e => e.uid === t.parentUid));
-    if (orphanTasks.length > 0) epics.push({ uid: -1, title: '未分類獨立工項', assignee: '-', status: 'pending', parentUid: 0, isVirtual: true });
-
-    epics.sort((a, b) => {
-      let aVal = a[sortConfig.key] || '';
-      let bVal = b[sortConfig.key] || '';
-      if (sortConfig.key === 'period') { aVal = a.startDate || a.due || ''; bVal = b.startDate || b.due || ''; }
-      if (sortConfig.key === 'status') { aVal = getTaskStatus(a); bVal = getTaskStatus(b); }
-      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    return epics.map(epic => {
-      let subTasks = epic.isVirtual ? orphanTasks : tasks.filter(t => t.parentUid === epic.uid);
-      subTasks.sort((a, b) => {
-        let aVal = a[sortConfig.key] || '';
-        let bVal = b[sortConfig.key] || '';
-        if (sortConfig.key === 'period') { aVal = a.startDate || a.due || ''; bVal = b.startDate || b.due || ''; }
-        if (sortConfig.key === 'status') { aVal = getTaskStatus(a); bVal = getTaskStatus(b); }
-        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-      });
-      return { ...epic, subTasks };
-    });
-  }, [tasks, sortConfig]);
-
-  const toggleEpicExpand = (e, uid) => {
-    e.stopPropagation(); 
-    setExpandedEpics(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
-  };
-
-  const handleAddTask = async (isSubTask = false, parentUid = 0) => {
-    if (!user || !selectedProject) return;
-    const maxUid = tasks.reduce((max, t) => Math.max(max, t.uid), 0);
-    const newUid = maxUid + 1;
-    let targetParentUid = parentUid;
-    if (!isSubTask && parentUid === 0) targetParentUid = 0;
-
-    const newTask = {
-      uid: newUid, parentUid: targetParentUid, projectId: selectedProject,
-      title: isSubTask ? '新增子任務' : '新增主模組', assignee: '',
-      startDate: new Date().toISOString().split('T')[0], due: new Date().toISOString().split('T')[0],
-      status: 'pending', reqDoc: false, currentProgress: '尚未開始'
-    };
-    try {
-      await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${newUid}`), newTask);
-      if (isSubTask && !expandedEpics.includes(targetParentUid)) setExpandedEpics(prev => [...prev, targetParentUid]);
-    } catch (e) { console.error("Error adding task:", e); }
-  };
-
-  const triggerFileInput = () => fileInputRef.current?.click();
-
-  const parseCSVRow = (row) => {
-    const result = []; let insideQuotes = false; let currentValue = "";
-    for (let i = 0; i < row.length; i++) {
-        const char = row[i];
-        if (char === '"') insideQuotes = !insideQuotes;
-        else if (char === ',' && !insideQuotes) { result.push(currentValue.trim()); currentValue = ""; }
-        else currentValue += char;
-    }
-    result.push(currentValue.trim());
-    return result;
-  };
-
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !user || !selectedProject) return;
-    setIsImporting(true);
-    try {
-      const text = await file.text();
-      const rows = text.split('\n').filter(row => row.trim().length > 0);
-      const isHeader = rows[0].includes('UID') || rows[0].includes('Parent');
-      const startIndex = isHeader ? 1 : 0;
-
-      for (let i = startIndex; i < rows.length; i++) {
-        const cols = parseCSVRow(rows[i]);
-        if (cols.length >= 4) {
-          const uid = parseInt(cols[0], 10); const parentUid = parseInt(cols[1], 10);
-          if (isNaN(uid) || isNaN(parentUid)) continue;
-
-          // 若匯入含有 overdue 字眼，強制轉為 in-progress 或 pending 讓系統自行推算
-          let importedStatus = cols[6] || 'pending';
-          if (!['pending', 'in-progress', 'completed'].includes(importedStatus)) {
-             importedStatus = 'pending';
-          }
-
-          const taskData = {
-            uid, parentUid, projectId: selectedProject,
-            title: cols[2] || '未命名', assignee: cols[3] || '',
-            startDate: cols[4] || '', due: cols[5] || '', 
-            status: importedStatus, currentProgress: cols[7] || '', 
-            reqDoc: cols[8] === '是' || cols[8] === 'true'
-          };
-          const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${uid}`);
-          await setDoc(taskRef, taskData);
-        }
-      }
-    } catch (error) { console.error("CSV 匯入失敗:", error); } 
-    finally { setIsImporting(false); e.target.value = ''; }
-  };
-
-  const exportTasksToCSV = () => {
-    if (!selectedProject) return;
-    const csvRows = ["UID,Parent_UID,工項名稱,負責人,開始日(YYYY-MM-DD),預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed),當前進度,是否需產出文件(是/否)"];
-    
-    if (tasks.length === 0) {
-      csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,2026-04-01,2026-12-31,in-progress,順利進行中,否");
-      csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-04-01,2026-05-01,in-progress,尋找場地中,是");
-    } else {
-      const sortedTasks = [...tasks].sort((a, b) => a.uid - b.uid);
-      sortedTasks.forEach(t => {
-        const req = t.reqDoc ? "是" : "否";
-        const safeTitle = `"${t.title || ''}"`;
-        const safeAssignee = `"${t.assignee || ''}"`; // 避免多人指派的逗號破壞 CSV 格式
-        const safeProgress = `"${t.currentProgress || ''}"`;
-        csvRows.push(`${t.uid},${t.parentUid},${safeTitle},${safeAssignee},${t.startDate || ''},${t.due || ''},${t.status || ''},${safeProgress},${req}`);
-      });
-    }
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvRows.join("\n") + "\n"], { type: "text/csv;charset=utf-8;" }); 
+    const blob = new Blob([csvRows.join('\n')], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `工項清單_${selectedProject}.csv`;
-    document.body.appendChild(link);
+    link.download = `人員考勤與代理匯總表_${projectName}_${startDate}至${endDate}.csv`;
     link.click();
-    document.body.removeChild(link);
+    showMessage('success', '✅ 考勤匯總表 (CSV) 已成功下載！');
   };
 
-  // 處理負責人勾選與取消勾選
-  const handleAssigneeChange = (personName) => {
-    if (!editForm) return;
-    const currentAssignees = editForm.assignee ? editForm.assignee.split(',').map(s => s.trim()).filter(Boolean) : [];
-    let newAssignees = [...currentAssignees];
-    if (newAssignees.includes(personName)) {
-      newAssignees = newAssignees.filter(n => n !== personName);
-    } else {
-      newAssignees.push(personName);
-    }
-    setEditForm({...editForm, assignee: newAssignees.join(', ')});
+  // ================= 匯出 2：期中期末初稿 (HTML 轉 Word) =================
+  const exportProgressWord = () => {
+    if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
+    
+    const completedTasks = tasks.filter(t => t.status === 'completed' && t.due >= startDate && t.due <= endDate);
+    
+    const htmlContent = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head><meta charset="utf-8"><title>成果報告初稿</title></head>
+      <body style="font-family: '微軟正黑體', sans-serif;">
+        <h1 style="text-align: center;">【${projectName}】專案進度與成果報告初稿</h1>
+        <p style="text-align: center;">彙整期間：${startDate} 至 ${endDate}</p>
+        <hr />
+        <h2>一、 期間內已結案工項清單</h2>
+        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+          <tr style="background-color: #f2f2f2;"><th>工項名稱</th><th>負責人</th><th>完成日期</th><th>最終進度說明</th></tr>
+          ${completedTasks.map(t => `<tr><td>${t.title}</td><td>${t.assignee}</td><td>${t.due}</td><td>${t.currentProgress || '-'}</td></tr>`).join('')}
+          ${completedTasks.length === 0 ? '<tr><td colSpan="4" style="text-align:center;">此期間無結案工項</td></tr>' : ''}
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `成果初稿_${projectName}_${startDate}至${endDate}.doc`;
+    link.click();
+    showMessage('success', '✅ 成果報告初稿 (Word) 已成功下載！');
   };
 
-  const handleSaveTask = async () => {
-    if (!editForm) return;
-    setIsSaving(true);
-    try {
-      const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${editForm.uid}`);
-      await updateDoc(taskRef, {
-        title: editForm.title, assignee: editForm.assignee, startDate: editForm.startDate,
-        due: editForm.due, status: editForm.status, currentProgress: editForm.currentProgress, reqDoc: editForm.reqDoc
-      });
+  // ================= 匯出 3：異動與空缺紀錄表 (Print PDF) =================
+  const exportVacancyReportPDF = () => {
+    if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
+    if (!startDate || !endDate) return showMessage('error', '請先設定報表區間。');
+
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    const projStartMs = projectStartDate ? new Date(projectStartDate).getTime() : 0;
+
+    if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
+
+    // 定義排序權重邏輯
+    const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
+    const getUnitWeight = (unit) => unitWeights[unit] || 99;
+
+    const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
+    const getRoleWeight = (role) => roleWeights[role] || 99;
+
+    // 1. 撈取區間內的人事異動軌跡
+    const activePersonnelChanges = [];
+    
+    personnel.forEach(p => {
+      const pStart = p.contractStart || p.hireDate;
+      const pStartMs = new Date(pStart).getTime();
       
-      // 若是修改母項目且人員有變更，自動連動覆蓋子項目的負責人
-      if (editForm.parentUid === 0 && editForm.assignee !== selectedTask.assignee) {
-        const childTasks = tasks.filter(t => t.parentUid === editForm.uid);
-        for (const child of childTasks) {
-          await updateDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${child.uid}`), { assignee: editForm.assignee });
+      let pEndMs = Infinity;
+      let exitDateStr = '';
+      
+      // 計算實際離職日：政府機關規定為最後工作日(contractEnd)的隔日
+      if (p.contractEnd) {
+         const d = new Date(p.contractEnd);
+         d.setDate(d.getDate() + 1); // 隔日
+         pEndMs = d.getTime();
+         exitDateStr = d.toISOString().split('T')[0];
+      }
+
+      // 若該人員在此區間內曾有在職紀錄
+      if (pStartMs <= endMs && pEndMs >= startMs) {
+         const events = [];
+         
+         // 【修正邏輯】：取「計畫參與開始日」與「計畫起始日」較晚者
+         const effectiveStartMs = Math.max(pStartMs, projStartMs);
+         const effectiveStartDateStr = new Date(effectiveStartMs).toISOString().split('T')[0];
+         
+         // 尋找在該「生效日」時擔任的單位與職位
+         let initialUnit = p.unit;
+         let initialRole = p.role;
+         
+         if (p.history && p.history.length > 0) {
+             for (let i = p.history.length - 1; i >= 0; i--) {
+                 const h = p.history[i];
+                 const hStartMs = new Date(h.startDate).getTime();
+                 if (hStartMs <= effectiveStartMs) {
+                     initialUnit = h.unit;
+                     initialRole = h.role;
+                     break;
+                 }
+             }
+         }
+         
+         events.push(`${effectiveStartDateStr} 擔任 (${initialUnit}) (${initialRole})`);
+
+         // 後續職務轉任事件 (必須發生在生效日之後、且在報表結束日之前)
+         (p.history || []).forEach(h => {
+             if (h.startDate) {
+                 const hStartMs = new Date(h.startDate).getTime();
+                 if (hStartMs > effectiveStartMs && hStartMs <= endMs) {
+                     events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
+                 }
+             }
+         });
+
+         // 離職事件
+         if (p.contractEnd && pEndMs >= startMs && pEndMs <= endMs) {
+             events.push(`${exitDateStr} 離職`);
+         }
+
+         activePersonnelChanges.push({
+             name: p.name,
+             unit: initialUnit, 
+             role: initialRole, 
+             events: events
+         });
+      }
+    });
+
+    // 依據單位與職位排序人員 (軌跡表)
+    activePersonnelChanges.sort((a, b) => {
+        const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+        if (uDiff !== 0) return uDiff;
+        return getRoleWeight(a.role) - getRoleWeight(b.role);
+    });
+
+    // 產生異動軌跡的 HTML Rows
+    let changeRecordsHtml = '';
+    if (activePersonnelChanges.length === 0) {
+      changeRecordsHtml = '<tr><td colspan="2" class="text-center" style="color:#94a3b8;">此區間內無任何人員在職紀錄</td></tr>';
+    } else {
+      activePersonnelChanges.forEach(ap => {
+        const eventsHtml = ap.events.map(e => `<div style="margin-bottom: 4px;">${e}</div>`).join('');
+        changeRecordsHtml += `
+          <tr>
+            <td style="vertical-align: top; width: 150px; font-weight: bold;">${ap.name}</td>
+            <td style="vertical-align: top; font-family: monospace; font-size: 13px;">${eventsHtml}</td>
+          </tr>
+        `;
+      });
+    }
+
+    // 2. 撈取每個職位的人員狀況
+    const roleOccupantsMap = {};
+    
+    requirements.forEach(req => {
+      const key = `${req.unit}::${req.position}`;
+      if (!roleOccupantsMap[key]) {
+        roleOccupantsMap[key] = { unit: req.unit, role: req.position, occupants: [] };
+      }
+    });
+
+    personnel.forEach(p => {
+      const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+      (p.history || []).forEach(h => {
+        if (!h.unit || !h.role) return;
+        const hStartMs = new Date(h.startDate).getTime();
+        const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
+        
+        if (hStartMs <= endMs && hEndMs >= startMs) {
+          const key = `${h.unit}::${h.role}`;
+          if (!roleOccupantsMap[key]) {
+            roleOccupantsMap[key] = { unit: h.unit, role: h.role, occupants: [] };
+          }
+          // 【修正邏輯】：擔任職位期間，起日也取「該歷程起日」與「計畫起始日」較晚者
+          const displayStartMs = Math.max(hStartMs, projStartMs);
+          const displayStartDateStr = new Date(displayStartMs).toISOString().split('T')[0];
+
+          roleOccupantsMap[key].occupants.push({
+            name: p.name,
+            start: displayStartDateStr,
+            end: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
+          });
+        }
+      });
+    });
+
+    const roleOccupantsList = Object.values(roleOccupantsMap).sort((a, b) => {
+      const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+      if (uDiff !== 0) return uDiff;
+      return getRoleWeight(a.role) - getRoleWeight(b.role);
+    });
+
+    // 3. 計算區間內的空缺天數
+    const reqGroups = {};
+    requirements.forEach(req => {
+      const key = `${req.unit}::${req.position}`;
+      if (!reqGroups[key]) reqGroups[key] = { unit: req.unit, role: req.position, reqs: [] };
+      const rCount = parseInt(req.count, 10) || 1;
+      const sMs = req.startDate ? new Date(req.startDate).getTime() : 0;
+      const eMs = req.endDate ? new Date(req.endDate).getTime() : Infinity;
+      reqGroups[key].reqs.push({ count: rCount, sMs, eMs, isResident: req.isResident });
+    });
+
+    const vacancyReports = [];
+
+    Object.values(reqGroups).forEach(group => {
+      const { unit, role, reqs } = group;
+      const segments = [];
+      
+      personnel.forEach(p => {
+        const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+        (p.history || []).forEach(h => {
+          if (h.unit === unit && h.role === role) {
+            const hStartMs = new Date(h.startDate).getTime();
+            const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
+            if (hStartMs <= endMs && hEndMs >= startMs) {
+              segments.push({ sMs: hStartMs, eMs: hEndMs });
+            }
+          }
+        });
+      });
+
+      let totalMissingDays = 0;
+      const missingPeriods = [];
+      let currentPeriod = null;
+      let reqCountDisplay = 0;
+
+      for (let time = startMs; time <= endMs; time += 86400000) {
+        let reqCountToday = 0;
+        reqs.forEach(r => { if (time >= r.sMs && time <= r.eMs) reqCountToday += r.count; });
+        reqCountDisplay = Math.max(reqCountDisplay, reqCountToday);
+        
+        if (reqCountToday === 0) {
+          if (currentPeriod) { missingPeriods.push(currentPeriod); currentPeriod = null; }
+          continue;
+        }
+
+        let activeCount = 0;
+        segments.forEach(seg => { if (time >= seg.sMs && time <= seg.eMs) activeCount++; });
+        
+        const missingCount = reqCountToday - activeCount;
+        if (missingCount > 0) {
+          totalMissingDays += missingCount;
+          const dateStr = new Date(time).toISOString().split('T')[0];
+          
+          if (!currentPeriod) {
+            currentPeriod = { start: dateStr, end: dateStr, count: missingCount, days: 1 };
+          } else if (currentPeriod.count === missingCount) {
+            currentPeriod.end = dateStr; currentPeriod.days += 1;
+          } else {
+            missingPeriods.push(currentPeriod);
+            currentPeriod = { start: dateStr, end: dateStr, count: missingCount, days: 1 };
+          }
+        } else {
+          if (currentPeriod) { missingPeriods.push(currentPeriod); currentPeriod = null; }
         }
       }
-      setIsEditing(false); setSelectedTask(editForm);
-    } catch (error) { console.error("更新工項失敗:", error); } 
-    finally { setIsSaving(false); }
-  };
+      if (currentPeriod) missingPeriods.push(currentPeriod);
 
-  const handleTaskFileUpload = async (e, taskUid) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const currentToken = localStorage.getItem('google_drive_access_token');
-    if (!currentToken) {
-      alert("尚未取得 Google Drive 授權，將為您開啟驗證視窗！");
-      tokenClientRef.current?.requestAccessToken();
-      return;
-    }
-
-    setUploadingTaskFiles(prev => ({...prev, [taskUid]: true}));
-    try {
-      const pathArray = ['專案管理系統', projectName || '未命名專案', '工項與進度追蹤'];
-      const todayStr = new Date().toISOString().split('T')[0];
-      const autoNamedFile = `[工項文件]_${todayStr.replace(/-/g, '')}_${file.name}`;
-      
-      const driveRes = await uploadToGoogleDrive(file, autoNamedFile, pathArray, currentToken);
-      
-      const filesRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'files');
-      await addDoc(filesRef, {
-        projectId: selectedProject,
-        taskId: taskUid,
-        name: autoNamedFile,
-        date: todayStr,
-        createdAt: new Date().getTime(),
-        url: driveRes.webViewLink || '#'
-      });
-    } catch (error) {
-      console.error("檔案上傳失敗:", error);
-      if (error.message === 'UNAUTHORIZED') {
-        localStorage.removeItem('google_drive_access_token');
-        alert("授權已過期，請重新上傳以觸發授權！");
+      if (totalMissingDays > 0 || missingPeriods.length > 0) {
+        vacancyReports.push({ unit, role, required: reqCountDisplay, totalDays: totalMissingDays, periods: missingPeriods });
       }
-    } finally {
-      setUploadingTaskFiles(prev => ({...prev, [taskUid]: false}));
-      e.target.value = '';
-    }
-  };
+    });
 
-  const renderTaskDetail = (task) => {
-    const subTasks = tasks.filter(t => t.parentUid === task.uid);
-    const parentEpic = task.parentUid !== 0 ? tasks.find(t => t.uid === task.parentUid) : null;
-    const currentTaskFiles = taskFiles.filter(f => f.taskId === task.uid);
-    const isUploading = uploadingTaskFiles[task.uid];
+    vacancyReports.sort((a, b) => {
+      const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+      if (uDiff !== 0) return uDiff;
+      return getRoleWeight(a.role) - getRoleWeight(b.role);
+    });
 
-    return (
-      <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
-        <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm relative overflow-hidden transition-all">
-          <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
-          
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-            <div className="flex-1 w-full">
-              {parentEpic ? (
-                <p className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mb-1 flex items-center">
-                  <FolderArchive size={14} className="mr-1.5" /> 母項目：{parentEpic.title}
-                </p>
-              ) : (
-                <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mb-1 flex items-center">
-                  <FolderArchive size={14} className="mr-1.5" /> 此為最高層級母項目
-                </p>
-              )}
-              
-              {isEditing ? (
-                <input 
-                  type="text" value={editForm.title} onChange={(e) => setEditForm({...editForm, title: e.target.value})}
-                  className="text-2xl font-bold text-slate-800 dark:text-white bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 w-full mt-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                />
-              ) : (
-                <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center mt-1">
-                  {task.title}
-                  {getTaskStatus(task) === 'overdue' && <AlertCircle size={20} className="ml-3 text-red-500" title="已逾期" />}
-                </h2>
-              )}
 
-              {isEditing ? (
-                <div className="mt-4 flex items-center space-x-2">
-                  <span className="text-sm font-bold text-slate-500">當前進度：</span>
-                  <input 
-                    type="text" value={editForm.currentProgress} onChange={(e) => setEditForm({...editForm, currentProgress: e.target.value})}
-                    className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              ) : (
-                <p className="text-slate-500 dark:text-slate-400 mt-3 flex items-center">
-                  <span className="bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium mr-3">當前進度：{task.currentProgress || '無進度說明'}</span>
-                </p>
-              )}
-            </div>
-            
-            <div className="flex items-center space-x-3 mt-4 md:mt-0 flex-shrink-0">
-              {isEditing ? (
-                <>
-                  <button onClick={() => { setIsEditing(false); setEditForm(null); }} className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors flex items-center"><X size={16} className="mr-1.5" /> 取消</button>
-                  <button onClick={handleSaveTask} disabled={isSaving} className="px-4 py-2 bg-indigo-600 text-white font-bold text-sm rounded-lg hover:bg-indigo-700 shadow-sm transition-colors flex items-center">{isSaving ? <Loader2 size={16} className="animate-spin mr-1.5" /> : <Save size={16} className="mr-1.5" />} 儲存變更</button>
-                </>
-              ) : (
-                <button onClick={() => { setEditForm({...task}); setIsEditing(true); }} className="px-4 py-2 bg-indigo-50 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-400 font-bold text-sm rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors flex items-center border border-indigo-200 dark:border-indigo-500/30"><Edit2 size={16} className="mr-1.5" /> 編輯與指派</button>
-              )}
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
-            {/* 負責人區塊 (多選/顯示) */}
-            <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
-              {isEditing ? (
-                <div className="flex flex-col space-y-1">
-                  <div className="bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg p-2 max-h-32 overflow-y-auto">
-                    {personnel.length === 0 ? (
-                      <span className="text-xs text-slate-500 px-1">專案無建檔人員</span>
-                    ) : (
-                      personnel.map(p => {
-                        const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
-                        return (
-                          <label key={p.id} className="flex items-center space-x-2 py-1.5 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-2 transition-colors">
-                            <input 
-                              type="checkbox" 
-                              checked={isChecked}
-                              onChange={() => handleAssigneeChange(p.name)}
-                              className="rounded text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                              {p.name} <span className="text-[10px] text-slate-400 font-normal">({p.role})</span>
-                            </span>
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                  {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-1 leading-tight">💡 儲存後將同步覆蓋底下所有子任務之負責人</span>}
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700 min-h-[42px] items-center">
-                  {task.assignee ? task.assignee.split(',').map(a => a.trim()).filter(Boolean).map((assignee, i) => (
-                    <div key={i} className="flex items-center space-x-1.5 bg-white dark:bg-slate-800 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600 shadow-sm">
-                      <div className="w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
-                        {assignee[0]}
-                      </div>
-                      <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{assignee}</span>
-                    </div>
-                  )) : <span className="text-sm font-bold text-slate-400 pl-1">未指派</span>}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">工作期間設定</p>
-              {isEditing ? (
-                <div className="flex flex-col space-y-2">
-                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-medium w-6">起</span><input type="date" value={editForm.startDate} onChange={(e) => setEditForm({...editForm, startDate: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
-                  <div className="flex items-center space-x-2"><span className="text-xs text-slate-500 font-medium w-6">訖</span><input type="date" value={editForm.due} onChange={(e) => setEditForm({...editForm, due: e.target.value})} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-500" /></div>
-                </div>
-              ) : (
-                <div className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-lg border border-slate-100 dark:border-slate-700"><Calendar size={14} className="mr-2 text-indigo-500" /><span className="font-mono tracking-tight">{task.startDate || '-'} ~ {task.due || '-'}</span></div>
-              )}
-            </div>
-            
-            {/* 總狀態區塊 */}
-            <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">總狀態</p>
-              {isEditing ? (
-                <select value={editForm.status} onChange={(e) => setEditForm({...editForm, status: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-medium">
-                  <option value="pending">尚未開始</option>
-                  <option value="in-progress">進行中</option>
-                  <option value="completed">已結案</option>
-                </select>
-              ) : (
-                <div className="pt-1">{getStatusBadge(task)}</div>
-              )}
-            </div>
-
-            <div>
-              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">文件產出規定</p>
-              {isEditing ? (
-                <label className="flex items-center space-x-2 mt-1 cursor-pointer"><input type="checkbox" checked={editForm.reqDoc} onChange={(e) => setEditForm({...editForm, reqDoc: e.target.checked})} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" /><span className="text-sm font-medium text-slate-700 dark:text-slate-300">✅ 需產出並歸檔</span></label>
-              ) : (
-                <p className="text-sm font-bold text-slate-700 dark:text-slate-300 pt-1.5">{task.reqDoc ? '✅ 需歸檔文件' : '無特別規定'}</p>
-              )}
-            </div>
-          </div>
+    // 4. 產出列印用 HTML
+    const printContent = `
+      <!DOCTYPE html>
+      <html lang="zh-TW">
+      <head>
+        <meta charset="UTF-8">
+        <title>人事異動與空缺紀錄表</title>
+        <style>
+          body { font-family: 'Helvetica Neue', Helvetica, 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #333; line-height: 1.6; padding: 20px; }
+          h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
+          h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
+          .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
+          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 14px; }
+          th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }
+          th { background-color: #f8fafc; color: #475569; font-weight: bold; white-space: nowrap; }
+          .text-center { text-align: center; }
+          .text-right { text-align: right; }
+          .highlight { color: #ea580c; font-weight: bold; }
+          .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold; cursor: pointer; }
+          @media print { .no-print { display: none !important; } body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="no-print text-center" style="margin-bottom:20px; background:#f0fdf4; padding:15px; border:1px solid #bbf7d0; border-radius:8px;">
+          <p style="color:#15803d; font-weight:bold; margin:0 0 10px 0;">報表已產生！請點擊下方按鈕，選擇「儲存為 PDF」即可完成匯出。</p>
+          <button class="print-btn" onclick="window.print()">列印 / 儲存為 PDF</button>
         </div>
 
-        {task.parentUid === 0 && (
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200 dark:border-slate-700/50 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/80">
-              <h3 className="font-bold text-slate-800 dark:text-white flex items-center"><CheckSquare size={18} className="mr-2 text-indigo-500" /> 所屬子任務拆解清單 ({subTasks.length})</h3>
-              <button onClick={() => handleAddTask(true, task.uid)} className="text-sm px-3 py-1.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 font-bold hover:bg-indigo-100 dark:hover:bg-indigo-500/20 rounded-lg flex items-center transition-colors border border-indigo-200 dark:border-indigo-500/30"><Plus size={16} className="mr-1"/> 新增子任務</button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
-                  <tr>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500">子任務名稱</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500">負責人</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500">期限</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500 text-center">狀態</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                  {subTasks.length > 0 ? subTasks.map(sub => (
-                    <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                      <td className="py-3 px-6 text-sm font-bold text-slate-800 dark:text-slate-200">
-                        <div className="flex items-center">
-                          {getTaskStatus(sub) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500" />}
-                          {sub.title}
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-sm font-medium text-slate-600 dark:text-slate-400">
-                        <div className="flex flex-wrap gap-1">
-                           {sub.assignee ? sub.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
-                             <span key={i} className="bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded text-xs">{a}</span>
-                           )) : '-'}
-                        </div>
-                      </td>
-                      <td className="py-3 px-6 text-xs font-mono text-slate-500 dark:text-slate-400 tracking-tight">{sub.startDate || '-'} ~ {sub.due}</td>
-                      <td className="py-3 px-6 text-center">{getStatusBadge(sub)}</td>
-                      <td className="py-3 px-6 text-right"><button onClick={() => setSelectedTask(sub)} className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-colors">獨立維護</button></td>
-                    </tr>
-                  )) : (<tr><td colSpan="5" className="py-8 text-sm font-medium text-slate-500 text-center">目前尚無子任務，請點擊右上方新增。</td></tr>)}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <h1>【${projectName}】人事異動與空缺紀錄表</h1>
+        <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
-        {/* 檔案真實上傳區塊 */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm p-6 md:p-8">
-          <h3 className="font-bold text-slate-800 dark:text-white mb-4 flex items-center border-b border-slate-100 dark:border-slate-700/50 pb-3">
-            <FolderArchive size={18} className="mr-2 text-indigo-500" /> 此工項之相關歸檔文件
-          </h3>
-          
-          {currentTaskFiles.length > 0 && (
-            <div className="mb-6 space-y-2">
-              {currentTaskFiles.map(f => (
-                <div key={f.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl hover:border-indigo-300 transition-colors">
-                  <div className="flex items-center">
-                    <FileText size={16} className="text-indigo-500 mr-3" />
-                    <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{f.name}</span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs text-slate-400 font-mono">{f.date}</span>
-                    <button onClick={() => window.open(f.url, '_blank')} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" title="前往 Drive 查看"><ExternalLink size={16}/></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        <h2>一、 期間內人事異動軌跡</h2>
+        <p style="font-size: 12px; color: #64748b;">說明：列出本區間曾在職之人員及其職務異動。首筆紀錄為參與計畫期間內的最初職位（起始日依據實際加入日與計畫起始日較晚者認定），離職日認定為最後工作日之隔日。人員排序依據其最初職務之單位與職位順序排序。</p>
+        <table>
+          <tr>
+            <th style="width:150px;">姓名</th>
+            <th>計劃期間異動軌跡</th>
+          </tr>
+          ${changeRecordsHtml}
+        </table>
 
-          <div 
-            onClick={() => document.getElementById(`task-upload-${task.uid}`).click()}
-            className="border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 rounded-xl p-10 flex flex-col items-center justify-center text-center hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer group"
-          >
-            <input type="file" id={`task-upload-${task.uid}`} className="hidden" onChange={(e) => handleTaskFileUpload(e, task.uid)} />
-            
-            {isUploading ? (
-              <div className="flex flex-col items-center justify-center text-indigo-500">
-                <Loader2 size={32} className="animate-spin mb-3" />
-                <p className="text-sm font-bold animate-pulse">檔案實體上傳與歸檔中...</p>
-              </div>
-            ) : (
-              <>
-                <div className="p-4 bg-white dark:bg-slate-800 rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform">
-                  <FileText size={28} className="text-indigo-500 dark:text-indigo-400" />
-                </div>
-                <p className="text-sm font-bold text-slate-700 dark:text-slate-200">在此拖曳或點擊上傳工項關聯文件</p>
-                <p className="text-xs text-slate-500 mt-2 max-w-sm">檔案上傳後將自動綁定此任務，並真實同步至 Google Drive 空間。</p>
-              </>
-            )}
-          </div>
+        <h2>二、 期間內各職位人員狀況</h2>
+        <p style="font-size: 12px; color: #64748b;">說明：詳列本區間內所有單位與職位之人員在職狀態，並標示其擔任此職位之詳細日期區間。</p>
+        <table>
+          <tr>
+            <th style="width:150px;">單位</th>
+            <th style="width:150px;">職位</th>
+            <th style="width:120px;">人員姓名</th>
+            <th>擔任此職位期間</th>
+          </tr>
+          ${roleOccupantsList.length === 0 ? '<tr><td colspan="4" class="text-center" style="color:#94a3b8;">此區間內無人員與編制紀錄</td></tr>' : 
+            roleOccupantsList.map(ro => {
+              if (ro.occupants.length === 0) {
+                return `<tr><td>${ro.unit}</td><td>${ro.role}</td><td colspan="2" class="text-center" style="color:#94a3b8;">期間內無人擔任此職位</td></tr>`;
+              }
+              // 第一筆需要帶入 rowspan
+              let rows = `<tr><td rowspan="${ro.occupants.length}">${ro.unit}</td><td rowspan="${ro.occupants.length}">${ro.role}</td><td><strong>${ro.occupants[0].name}</strong></td><td>${ro.occupants[0].start} ~ ${ro.occupants[0].end}</td></tr>`;
+              // 其餘筆數不含單位與職位
+              for(let i = 1; i < ro.occupants.length; i++) {
+                rows += `<tr><td><strong>${ro.occupants[i].name}</strong></td><td>${ro.occupants[i].start} ~ ${ro.occupants[i].end}</td></tr>`;
+              }
+              return rows;
+            }).join('')
+          }
+        </table>
+
+        <h2>三、 職位空缺天數精算 (扣款依據參考)</h2>
+        <p style="font-size: 12px; color: #64748b;">說明：依據專案「人力需求設定」與上方「人員職位狀況」逐日比對。若當日該職位在職人數少於編制需求人數，則計入空缺。總計單位為「人天」。</p>
+        <table>
+          <tr>
+            <th>需求單位</th>
+            <th>要求職位</th>
+            <th class="text-center">編制要求</th>
+            <th>確切空缺區間</th>
+            <th class="text-center">缺少人數</th>
+            <th class="text-right">累計空缺人天</th>
+          </tr>
+          ${vacancyReports.length === 0 ? '<tr><td colspan="6" class="text-center" style="color:#94a3b8;">此區間內人力編制皆合乎規定，無空缺異常。</td></tr>' : 
+            vacancyReports.map(vr => `
+              <tr>
+                <td rowspan="${vr.periods.length}">${vr.unit}</td>
+                <td rowspan="${vr.periods.length}">${vr.role}</td>
+                <td rowspan="${vr.periods.length}" class="text-center">${vr.required} 人</td>
+                <td>${vr.periods[0].start} ~ ${vr.periods[0].end}</td>
+                <td class="text-center text-red-600">${vr.periods[0].count} 人</td>
+                <td rowspan="${vr.periods.length}" class="text-right highlight" style="font-size:16px;">${vr.totalDays} 人天</td>
+              </tr>
+              ${vr.periods.slice(1).map(p => `<tr><td>${p.start} ~ ${p.end}</td><td class="text-center text-red-600">${p.count} 人</td></tr>`).join('')}
+            `).join('')
+          }
+        </table>
+        
+        <div style="margin-top: 50px; display: flex; justify-content: space-between; padding: 0 50px;">
+          <div><p>承辦人簽章：</p><br/><br/><br/><p>_____________________</p></div>
+          <div><p>專案主管簽章：</p><br/><br/><br/><p>_____________________</p></div>
         </div>
-      </div>
-    );
-  };
+      </body>
+      </html>
+    `;
 
-  if (selectedTask) return renderTaskDetail(selectedTask);
+    const printWindow = window.open('', '', 'width=900,height=800');
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    
+    // 自動聚焦並準備列印
+    setTimeout(() => {
+      printWindow.focus();
+    }, 500);
+
+    showMessage('success', '✅ 異動與空缺紀錄表已在新視窗產生，請檢視並列印。');
+  };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden flex flex-col h-full min-h-[600px] animate-in fade-in duration-300">
-      <div className="p-4 border-b border-slate-200 dark:border-slate-700/50 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/80">
-        <div className="flex space-x-2">
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-            <input type="text" placeholder="搜尋工項..." className="pl-9 pr-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          </div>
-          <button className="p-2 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"><Filter size={18} /></button>
+    <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300">
+      
+      {/* 提示訊息區塊 */}
+      {message && (
+        <div className={`p-4 rounded-xl border flex items-start shadow-sm animate-in slide-in-from-top-2 ${
+          message.type === 'error' 
+            ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-400'
+            : 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+        }`}>
+          {message.type === 'error' ? <AlertCircle size={20} className="mr-3 flex-shrink-0 mt-0.5" /> : <CheckCircle2 size={20} className="mr-3 flex-shrink-0 mt-0.5" />}
+          <span className="text-sm font-bold leading-relaxed">{message.text}</span>
         </div>
-        <div className="flex space-x-3">
-          <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
-          <button onClick={exportTasksToCSV} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 text-sm font-medium">
-            <Download size={16} /><span>匯出 CSV (含現有工項)</span>
-          </button>
-          <button onClick={triggerFileInput} disabled={isImporting} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 text-sm font-medium">
-            {isImporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
-            <span>匯入 CSV 更新</span>
-          </button>
-          <button onClick={handleAddTask} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm text-sm font-medium">
-            <Plus size={16} /><span>新增任務</span>
-          </button>
+      )}
+
+      {/* 頂部設定區塊 */}
+      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
+            <Calculator className="mr-3 text-indigo-500" size={24} />
+            核銷作業報表中心
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">請先設定欲產出報表的日期區間，再點擊下方對應的報表匯出按鈕。</p>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-3 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 w-full md:w-auto transition-colors">
+          <div className="flex items-center w-full sm:w-auto">
+            <Calendar className="text-slate-400 dark:text-slate-500 mr-2" size={18} />
+            <input 
+              type="date" 
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="bg-transparent text-sm font-bold text-slate-700 dark:text-slate-200 outline-none w-full cursor-pointer" 
+            />
+          </div>
+          <span className="text-slate-400 font-bold hidden sm:inline">至</span>
+          <div className="flex items-center w-full sm:w-auto">
+            <span className="text-slate-400 font-bold sm:hidden mr-2">至</span>
+            <input 
+              type="date" 
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-transparent text-sm font-bold text-slate-700 dark:text-slate-200 outline-none w-full cursor-pointer" 
+            />
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-left border-collapse">
-          <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0 z-10 shadow-sm">
-            <tr>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('title')}>任務結構與名稱 <SortIcon columnKey="title" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('assignee')}>負責人 <SortIcon columnKey="assignee" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('period')}>工作期間 <SortIcon columnKey="period" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('currentProgress')}>當前進度 <SortIcon columnKey="currentProgress" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center" onClick={() => handleSort('status')}>狀態 <SortIcon columnKey="status" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 text-right">詳情</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800">
-            {groupedTasks.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="py-16 text-center">
-                  <div className="flex flex-col items-center justify-center">
-                    <FolderArchive size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
-                    <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無從 Firebase 讀取到的工項資料</p>
-                    <p className="text-slate-500 text-sm mb-6 max-w-md">您可以手動點擊右上方「新增任務」，或先匯出空白的 CSV 範例檔填寫後進行批次匯入。</p>
-                    <div className="flex space-x-4">
-                      <button onClick={exportTasksToCSV} className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium text-sm rounded-lg hover:shadow-sm flex items-center">
-                        <Download size={16} className="mr-2" />匯出空白 CSV 範例
-                      </button>
-                      <button onClick={triggerFileInput} disabled={isImporting} className="px-4 py-2 bg-indigo-50 text-indigo-600 font-medium text-sm rounded-lg hover:bg-indigo-100 flex items-center">
-                        {isImporting ? <Loader2 size={16} className="animate-spin mr-2" /> : <FileSpreadsheet size={16} className="mr-2" />}
-                        匯入 CSV 工項清單
-                      </button>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            ) : (
-              groupedTasks.map(epic => {
-                const isExpanded = expandedEpics.includes(epic.uid);
-                const hasSubTasks = epic.subTasks && epic.subTasks.length > 0;
+      {/* 報表下載選項 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        {/* 報表 1 */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col h-full group hover:border-indigo-300 dark:hover:border-indigo-500/50 transition-colors">
+          <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-5 group-hover:scale-110 transition-transform">
+            <FileText className="text-blue-600 dark:text-blue-400" size={28} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-2">1. 人員考勤匯總表</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 flex-1 mb-8 leading-relaxed">
+            包含所選區間內的出勤總天數、各類假別明細、規政代理人簽核紀錄與異常標記。
+          </p>
+          <button 
+            onClick={exportAttendanceCSV} 
+            disabled={!isDataLoaded}
+            className="w-full flex justify-center items-center space-x-2 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-sm"
+          >
+            {isDataLoaded ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}
+            <span>匯出 Excel (CSV)</span>
+          </button>
+        </div>
 
-                return (
-                  <React.Fragment key={`epic-${epic.uid}`}>
-                    <tr className="hover:bg-indigo-50/50 dark:hover:bg-indigo-500/10 cursor-pointer group" onClick={() => setSelectedTask(epic)}>
-                      <td className="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">
-                        <div className="flex items-center">
-                          <button onClick={(e) => toggleEpicExpand(e, epic.uid)} className={`mr-2 p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-400 transition-transform ${!hasSubTasks && 'opacity-30 cursor-default'}`} disabled={!hasSubTasks}>
-                            {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                          </button>
-                          <div className="flex flex-col">
-                            <span className="font-bold text-indigo-700 dark:text-indigo-400 flex items-center">
-                              {getTaskStatus(epic) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500" />}
-                              <FolderArchive size={14} className="mr-1.5 opacity-70" />{epic.title}
-                            </span>
-                            {hasSubTasks && <span className="text-[10px] text-slate-400 font-medium ml-6 mt-0.5">包含 {epic.subTasks.length} 個子任務</span>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-4 px-6 text-sm">
-                        <div className="flex flex-wrap gap-1">
-                           {epic.assignee ? epic.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
-                             <span key={i} className="bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold px-2 py-0.5 rounded text-xs">{a}</span>
-                           )) : '-'}
-                        </div>
-                      </td>
-                      <td className="py-4 px-6 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">{epic.startDate || '-'} ~ {epic.due || '-'}</td>
-                      <td className="py-4 px-6 text-sm">
-                        <span className="bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-md">{epic.currentProgress}</span>
-                      </td>
-                      <td className="py-4 px-6 text-center">{getStatusBadge(epic)}</td>
-                      <td className="py-4 px-6 text-right">
-                        <button className="text-indigo-600 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity font-medium text-sm flex items-center justify-end w-full px-2 py-1.5 bg-indigo-50 dark:bg-indigo-500/20 rounded-lg">
-                          維護母模組 <ChevronRight size={16} className="ml-1" />
-                        </button>
-                      </td>
-                    </tr>
-                    {isExpanded && epic.subTasks.map(sub => (
-                      <tr key={sub.id} onClick={() => setSelectedTask(sub)} className="bg-slate-50/50 dark:bg-slate-900/30 hover:bg-white dark:hover:bg-slate-800 cursor-pointer group transition-colors border-l-4 border-l-indigo-300 dark:border-l-indigo-600">
-                        <td className="py-3 px-6 pl-14 text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                          <div className="flex items-center">
-                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 mr-3"></div>
-                            {getTaskStatus(sub) === 'overdue' && <AlertCircle size={14} className="mr-1.5 text-red-500 inline" />}
-                            {sub.title}
-                          </div>
-                        </td>
-                        <td className="py-3 px-6 text-sm">
-                          <div className="flex flex-wrap gap-1">
-                             {sub.assignee ? sub.assignee.split(',').map(a => a.trim()).filter(Boolean).map((a, i) => (
-                               <span key={i} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold px-1.5 py-0.5 rounded text-xs">{a}</span>
-                             )) : '-'}
-                          </div>
-                        </td>
-                        <td className="py-3 px-6 text-xs font-mono tracking-tight text-slate-500 dark:text-slate-400">{sub.startDate || '-'} ~ {sub.due || '-'}</td>
-                        <td className="py-3 px-6 text-sm"><span className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 px-2.5 py-1 rounded-md font-medium shadow-sm">{sub.currentProgress || '-'}</span></td>
-                        <td className="py-3 px-6 text-center">{getStatusBadge(sub)}</td>
-                        <td className="py-3 px-6 text-right">
-                          <button className="text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all font-bold text-xs flex items-center justify-end w-full">
-                            獨立維護 <ChevronRight size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </React.Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+        {/* 報表 2 */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col h-full group hover:border-orange-300 dark:hover:border-orange-500/50 transition-colors relative overflow-hidden">
+          <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核功能</div>
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-5 group-hover:scale-110 transition-transform">
+            <Users className="text-emerald-600 dark:text-emerald-400" size={28} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-2">2. 異動與空缺紀錄表</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 flex-1 mb-8 leading-relaxed">
+            詳列期間內的人員到離職與調職軌跡，並自動精算計畫駐點人力之「空缺天數」。
+          </p>
+          <button 
+            onClick={exportVacancyReportPDF} 
+            disabled={!isDataLoaded}
+            className="w-full flex justify-center items-center space-x-2 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-sm"
+          >
+            {isDataLoaded ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}
+            <span>匯出 PDF (列印排版)</span>
+          </button>
+        </div>
+
+        {/* 報表 3 */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col h-full group hover:border-amber-300 dark:hover:border-amber-500/50 transition-colors">
+          <div className="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-2xl w-fit mb-5 group-hover:scale-110 transition-transform">
+            <CheckSquare className="text-amber-600 dark:text-amber-400" size={28} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-2">3. 期中/期末成果初稿</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 flex-1 mb-8 leading-relaxed">
+            擷取區間內已結案之工項列表與會議清單，作為撰寫正式報告之基底。
+          </p>
+          <button 
+            onClick={exportProgressWord} 
+            disabled={!isDataLoaded}
+            className="w-full flex justify-center items-center space-x-2 py-3 border-2 border-indigo-100 dark:border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 disabled:opacity-50 text-sm font-bold rounded-xl transition-all active:scale-95"
+          >
+            {isDataLoaded ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}
+            <span>產出 Word 初稿</span>
+          </button>
+        </div>
+
       </div>
     </div>
   );
