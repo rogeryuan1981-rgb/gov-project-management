@@ -10,6 +10,54 @@ const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
+// ================= 真實 Google Drive API 上傳引擎 =================
+// 未來只要傳入有效的 OAuth Access Token，此函式就會真實建立層級資料夾並上傳檔案
+const uploadToGoogleDrive = async (file, fileName, pathArray, accessToken) => {
+  let parentId = 'root'; // 從使用者的雲端硬碟根目錄開始找
+
+  for (const folderName of pathArray) {
+    // 1. 搜尋是否已有該名稱的資料夾
+    const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id, name)`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const searchData = await searchRes.json();
+
+    if (searchData.files && searchData.files.length > 0) {
+      parentId = searchData.files[0].id;
+    } else {
+      // 2. 找不到就建立資料夾
+      const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [parentId]
+        })
+      });
+      const createData = await createRes.json();
+      parentId = createData.id;
+    }
+  }
+
+  // 3. 在最終的目標資料夾下上傳實體檔案
+  const metadata = { name: fileName, parents: [parentId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+
+  const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form
+  });
+
+  return await uploadRes.json(); // 回傳檔案的真實 URL
+};
+
 export default function ArchiveModule({ user, selectedProject }) {
   const [projectFolders, setProjectFolders] = useState([]);
   const [projectName, setProjectName] = useState('');
@@ -112,6 +160,12 @@ export default function ArchiveModule({ user, selectedProject }) {
     e.target.value = '';
   };
 
+  // 顯示操作提示 (取代原生的 alert)
+  const showInfo = (message) => {
+    setInfoMessage(message);
+    setTimeout(() => setInfoMessage(''), 6000);
+  };
+
   // 處理檔案上傳並寫入真實 Firebase 資料庫
   const processUpload = async (folder, file) => {
     setUploadingTo(folder.id);
@@ -119,12 +173,31 @@ export default function ArchiveModule({ user, selectedProject }) {
     // 模擬 API 串接 Google Drive 實體檔案上傳的時間延遲
     setTimeout(async () => {
       try {
-        const targetPath = `${projectName} / ${folder.level1} ${folder.level2 ? `/ ${folder.level2}` : ''}`;
+        // 【路徑修正】：一律先包在「專案管理系統」與「計畫名稱」之下
+        const targetPath = `專案管理系統 / ${projectName} / ${folder.level1} ${folder.level2 ? `/ ${folder.level2}` : ''}`;
         
         // 產生標準化自動命名 (例如：[自動命名]_20260426_原檔名.pdf)
         const todayStr = new Date().toISOString().split('T')[0];
         const autoNamedFile = `[自動命名]_${todayStr.replace(/-/g, '')}_${file.name}`;
         
+        let realFileUrl = '#';
+
+        // =========================================================
+        // 【真實 API 啟動區】
+        // 未來獲取授權後，只要將 accessToken 帶入，並解除下方註解，
+        // 系統就會真實把檔案丟進您的 Google Drive 中！
+        // =========================================================
+        // const accessToken = user?.accessToken; // 這邊未來會接上真實的登入 Token
+        // if (accessToken) {
+        //   // 組合資料夾陣列
+        //   const pathArray = ['專案管理系統', projectName, folder.level1];
+        //   if (folder.level2) pathArray.push(folder.level2);
+        //   
+        //   // 執行真實上傳
+        //   const driveRes = await uploadToGoogleDrive(file, autoNamedFile, pathArray, accessToken);
+        //   realFileUrl = driveRes.webViewLink; // 取得真實的 Drive 預覽連結
+        // }
+
         // 將歸檔紀錄寫入 Firestore
         const filesRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'files');
         await addDoc(filesRef, {
@@ -133,10 +206,15 @@ export default function ArchiveModule({ user, selectedProject }) {
           name: autoNamedFile,
           date: todayStr,
           createdAt: new Date().getTime(),
-          url: '#' // 未來實作 Google Drive API 後可存入實體檔案連結
+          url: realFileUrl 
         });
 
         setSuccessMessage(`✅ 檔案已成功自動更名並歸檔至：\n${targetPath}`);
+        
+        // 提示目前為雛形狀態
+        setTimeout(() => {
+          showInfo("💡 提示：實體檔案傳輸引擎已實裝。需待後續申請 Google Drive API 授權後，檔案即會真實飛進雲端硬碟。");
+        }, 5500);
         
         // 如果列表沒展開，自動幫使用者展開看結果
         if (expandedFolderId !== folder.id) {
@@ -145,7 +223,7 @@ export default function ArchiveModule({ user, selectedProject }) {
         
       } catch (error) {
         console.error("歸檔紀錄寫入失敗:", error);
-        alert("歸檔失敗，請確認您的權限或網路連線。");
+        showInfo("❌ 歸檔失敗，請確認您的權限或網路連線。");
       } finally {
         setUploadingTo(null);
         setTimeout(() => setSuccessMessage(''), 5000);
