@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet } from 'lucide-react';
-import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 嚴格遵守跨檔案模組化架構，引入獨立的 firebase.js
-import { db } from '../lib/firebase.js';
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -12,7 +14,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const fileInputRef = useRef(null);
   const [isImporting, setIsImporting] = useState(false);
 
-  // 監聽 Firebase 資料庫中的工項 (依照選取的專案過濾)
+  // 監聽 Firebase 資料庫中的工項 (依照選取的專案 UID 過濾)
   useEffect(() => {
     if (!user || !selectedProject) return;
 
@@ -20,7 +22,8 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     
     const unsubscribe = onSnapshot(tasksRef, (snapshot) => {
       const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const projectTasks = allTasks.filter(t => t.projectName === selectedProject);
+      // 【核心修正】：改用 projectId 進行關聯過濾
+      const projectTasks = allTasks.filter(t => t.projectId === selectedProject);
       
       projectTasks.sort((a, b) => new Date(a.due) - new Date(b.due));
       setTasks(projectTasks);
@@ -67,7 +70,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     
     if (epics.length === 0) {
       await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_1`), {
-        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '管理員', due: '', status: 'pending', currentProgress: '', reqDoc: false
+        uid: 1, parentUid: 0, projectId: selectedProject, title: '新增主模組', assignee: '管理員', due: '', status: 'pending', currentProgress: '', reqDoc: false
       });
       targetEpicUid = 1;
     } else {
@@ -78,7 +81,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     const newTask = {
       uid: newUid,
       parentUid: targetEpicUid,
-      projectName: selectedProject,
+      projectId: selectedProject, // 【核心修正】：存入專案 UID
       title: '未命名工項',
       assignee: '未指派',
       due: new Date().toISOString().split('T')[0],
@@ -129,7 +132,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           if (isNaN(uid) || isNaN(parentUid)) continue;
 
           const taskData = {
-            uid, parentUid, projectName: selectedProject,
+            uid, parentUid, projectId: selectedProject, // 【核心修正】：存入專案 UID
             title: cols[2] || '未命名', assignee: cols[3] || '未指派',
             due: cols[4] || '', status: cols[5] || 'pending',
             currentProgress: cols[6] || '', reqDoc: cols[7] === '是' || cols[7] === 'true'
@@ -152,6 +155,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
     
+    // 改用陣列儲存每一行，避免字串中的 \n 被 Vercel (esbuild) 解析錯誤
     const csvRows = [
       "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)"
     ];
