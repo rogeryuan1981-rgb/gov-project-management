@@ -7,6 +7,7 @@ const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-sa
 
 export default function ArchiveModule({ user, selectedProject }) {
   const [projectFolders, setProjectFolders] = useState([]);
+  const [projectName, setProjectName] = useState(''); // 記錄顯示用的專案名稱
   const [dragActiveId, setDragActiveId] = useState(null);
   const [uploadingTo, setUploadingTo] = useState(null); // 記錄當前正在上傳的目錄 ID
   const [successMessage, setSuccessMessage] = useState('');
@@ -18,13 +19,17 @@ export default function ArchiveModule({ user, selectedProject }) {
     const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
     const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
       const loadedProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const currentProject = loadedProjects.find(p => p.name === selectedProject);
+      // 【修復】：改用專案專屬 UID (id) 進行精準比對
+      const currentProject = loadedProjects.find(p => p.id === selectedProject);
       
-      // 若該專案有設定 folders 則寫入狀態，否則設為空陣列
-      if (currentProject && currentProject.folders) {
-        setProjectFolders(currentProject.folders);
-      } else {
-        setProjectFolders([]);
+      if (currentProject) {
+        setProjectName(currentProject.name);
+        // 若該專案有設定 folders 則寫入狀態，否則設為空陣列
+        if (currentProject.folders) {
+          setProjectFolders(currentProject.folders);
+        } else {
+          setProjectFolders([]);
+        }
       }
     }, (error) => {
       console.error("讀取目錄設定失敗:", error);
@@ -75,7 +80,7 @@ export default function ArchiveModule({ user, selectedProject }) {
     // 模擬 API 串接 Google Drive 的時間延遲
     setTimeout(() => {
       setUploadingTo(null);
-      const targetPath = `${selectedProject} / ${folder.level1} ${folder.level2 ? `/ ${folder.level2}` : ''}`;
+      const targetPath = `${projectName} / ${folder.level1} ${folder.level2 ? `/ ${folder.level2}` : ''}`;
       setSuccessMessage(`✅ 檔案「${file.name}」已成功自動更名並歸檔至：\n${targetPath}`);
       
       // 5秒後清除成功訊息
@@ -112,7 +117,7 @@ export default function ArchiveModule({ user, selectedProject }) {
             <AlertTriangle size={48} className="text-amber-500 mb-4" />
             <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">此專案尚未設定任何歸檔目錄</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md">
-              請先前往左側選單的「系統設定與日誌」&gt;「系統管理與專案設定」中，為【{selectedProject}】建立目錄結構。
+              請先前往左側選單的「系統設定與日誌」&gt;「系統管理與專案設定」中，為【{projectName || '未命名專案'}】建立目錄結構。
             </p>
           </div>
         ) : (
@@ -153,11 +158,11 @@ export default function ArchiveModule({ user, selectedProject }) {
                     <div className="text-center space-y-1 w-full">
                       <p className="text-xs text-slate-400 dark:text-slate-500 font-medium">拖曳至此以歸檔</p>
                       <div className="flex items-center justify-center text-sm font-bold text-slate-800 dark:text-slate-200">
-                        <span className="truncate max-w-[120px]">{folder.level1}</span>
+                        <span className="truncate max-w-[120px]" title={folder.level1}>{folder.level1}</span>
                         {folder.level2 && (
                           <>
                             <ChevronRight size={14} className="mx-1 text-slate-400 flex-shrink-0" />
-                            <span className="truncate max-w-[120px]">{folder.level2}</span>
+                            <span className="truncate max-w-[120px]" title={folder.level2}>{folder.level2}</span>
                           </>
                         )}
                       </div>
