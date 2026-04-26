@@ -3,6 +3,7 @@ import { onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from 'firebas
 import { auth } from './lib/firebase.js';
 import { LogIn, ShieldCheck, Loader2 } from 'lucide-react';
 
+// 引入拆分後的各個功能模組
 import Sidebar from './components/Sidebar.jsx';
 import Header from './components/Header.jsx';
 import Dashboard from './components/Dashboard.jsx';
@@ -10,6 +11,7 @@ import TaskBoard from './components/TaskBoard.jsx';
 import HRModule from './components/HRModule.jsx';
 import ArchiveModule from './components/ArchiveModule.jsx';
 import ReportsModule from './components/ReportsModule.jsx';
+import SettingsModule from './components/SettingsModule.jsx';
 
 // 錯誤邊界元件 - 捕捉並顯示 UI 崩潰資訊
 class ErrorBoundary extends Component {
@@ -56,6 +58,9 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  
+  // 記錄使用者勾選的「我的最愛」模組 ID (預設先放三個)
+  const [favoriteIds, setFavoriteIds] = useState(['tasks', 'archive', 'reimbursement']);
 
   // 監聽 Firebase 登入狀態
   useEffect(() => {
@@ -75,7 +80,7 @@ export default function App() {
     }
   };
 
-  // 1. 驗證中畫面
+  // 1. 狀態：驗證中畫面
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -87,7 +92,7 @@ export default function App() {
     );
   }
 
-  // 2. 未登入：顯示登入牆 (Login Wall)
+  // 2. 狀態：未登入 (顯示登入牆)
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
@@ -120,7 +125,7 @@ export default function App() {
     );
   }
 
-  // 3. 已登入：進入主系統
+  // 3. 狀態：已登入 (進入主系統配置)
   return (
     <ErrorBoundary>
       <div className={darkMode ? 'dark' : ''}>
@@ -147,11 +152,11 @@ export default function App() {
               activeTab={activeTab} 
             />
             
-            {/* 內容區塊 */}
+            {/* 動態內容切換區塊 */}
             <div className="flex-1 overflow-auto p-6 md:p-10">
               <div className="max-w-6xl mx-auto pb-20">
                 {activeTab === 'dashboard' && (
-                  <Dashboard user={user} selectedProject={selectedProject} setActiveTab={setActiveTab} setSelectedTask={setSelectedTask} />
+                  <Dashboard user={user} selectedProject={selectedProject} setActiveTab={setActiveTab} setSelectedTask={setSelectedTask} favoriteIds={favoriteIds} />
                 )}
                 
                 {activeTab === 'tasks' && (
@@ -168,6 +173,10 @@ export default function App() {
                 
                 {activeTab === 'reimbursement' && (
                   <ReportsModule user={user} selectedProject={selectedProject} />
+                )}
+
+                {activeTab === 'settings' && (
+                  <SettingsModule user={user} favoriteIds={favoriteIds} setFavoriteIds={setFavoriteIds} />
                 )}
               </div>
             </div>
