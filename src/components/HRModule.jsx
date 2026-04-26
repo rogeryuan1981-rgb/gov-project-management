@@ -23,6 +23,7 @@ export default function HRModule({ user, selectedProject }) {
   // Modals 控制狀態
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
+  const [isVacancyModalOpen, setIsVacancyModalOpen] = useState(false); // 職位空缺明細 Modal
   
   // 維護與編輯人員 Modal 狀態
   const [editingPerson, setEditingPerson] = useState(null);
@@ -373,59 +374,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 5. 處理人員快速轉任
-  const handleTransferSubmit = async (e) => {
-    e.preventDefault();
-    if (!transferData.unit || !transferData.role || !transferData.startDate) {
-      alert('請完整選擇轉任單位、職務與生效日期');
-      return;
-    }
-
-    const currentHistory = historyPerson.history || [{
-      unit: historyPerson.unit, role: historyPerson.role, startDate: historyPerson.roleStartDate || historyPerson.hireDate, endDate: ''
-    }];
-
-    // 防呆：轉任生效日不能早於或等於目前職務的開始日
-    if (currentHistory.length > 0) {
-      const lastRecord = currentHistory[currentHistory.length - 1];
-      if (new Date(transferData.startDate) <= new Date(lastRecord.startDate)) {
-        alert(`轉任日期錯誤：新職務生效日 (${transferData.startDate}) 必須晚於當前職務【${lastRecord.role}】的開始日 (${lastRecord.startDate})！`);
-        return;
-      }
-    }
-
-    const updatedHistory = [...currentHistory];
-    if (updatedHistory.length > 0) {
-      // 自動將前一個職務的結束日，設為新職務生效日的前一天
-      const prevEndDate = new Date(transferData.startDate);
-      prevEndDate.setDate(prevEndDate.getDate() - 1);
-      updatedHistory[updatedHistory.length - 1].endDate = prevEndDate.toISOString().split('T')[0];
-    }
-
-    updatedHistory.push({
-      unit: transferData.unit, role: transferData.role, startDate: transferData.startDate, endDate: ''
-    });
-
-    const matchedReq = requirements.find(r => r.unit === transferData.unit && r.position === transferData.role);
-    const newIsResident = matchedReq ? matchedReq.isResident : false;
-
-    try {
-      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', historyPerson.id);
-      await updateDoc(personRef, {
-        unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
-      });
-
-      setHistoryPerson({
-        ...historyPerson, unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
-      });
-      setIsTransferring(false);
-      setTransferData({ unit: '', role: '', startDate: today });
-    } catch (error) {
-      console.error("轉任失敗:", error);
-      if (error.code === 'permission-denied') alert('【權限不足】操作被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
-    }
-  };
-
   // 4. 儲存編輯的人員資料與歷程
   const handleSaveEditPerson = async (e) => {
     e.preventDefault();
@@ -518,7 +466,7 @@ export default function HRModule({ user, selectedProject }) {
     }, 1200);
   };
 
-  // 數據統計計算
+  // 數據統計計算與明細
   const activeReqsToday = requirements.filter(r => r.startDate <= today && r.endDate >= today);
   const totalResidentRequiredToday = activeReqsToday.filter(r => r.isResident).reduce((sum, req) => sum + req.count, 0);
   const totalNonResidentRequiredToday = activeReqsToday.filter(r => !r.isResident).reduce((sum, req) => sum + req.count, 0);
@@ -532,6 +480,7 @@ export default function HRModule({ user, selectedProject }) {
   const proxyAlertCount = personnel.filter(p => p.proxyAlert && checkIsActive(p.contractEnd)).length;
 
   let totalVacancyDays = 0;
+  const vacancyBreakdown = []; // 儲存職缺空缺明細
   const todayMs = new Date(today).getTime();
 
   requirements.forEach(req => {
@@ -554,10 +503,24 @@ export default function HRModule({ user, selectedProject }) {
       });
     });
 
+    let reqVacancyDays = 0;
     for (let time = reqStartMs; time <= reqEndMs; time += 86400000) {
       let activeCount = 0;
       segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
-      if (activeCount < req.count) totalVacancyDays += (req.count - activeCount);
+      if (activeCount < req.count) reqVacancyDays += (req.count - activeCount);
+    }
+    
+    totalVacancyDays += reqVacancyDays;
+
+    if (reqVacancyDays > 0) {
+      vacancyBreakdown.push({
+        unit: req.unit,
+        position: req.position,
+        requiredCount: req.count,
+        vacancyDays: reqVacancyDays,
+        startDate: req.startDate,
+        endDate: req.endDate
+      });
     }
   });
 
@@ -658,16 +621,27 @@ export default function HRModule({ user, selectedProject }) {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
-              <div className={`p-3.5 rounded-xl ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
-                <CalendarDays size={28} />
+            <div 
+              onClick={() => totalVacancyDays > 0 && setIsVacancyModalOpen(true)}
+              className={`p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors ${totalVacancyDays > 0 ? 'bg-white dark:bg-slate-800 border-orange-200 dark:border-orange-500/30 cursor-pointer hover:border-orange-400 dark:hover:border-orange-500/50 group' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700/50'}`}
+            >
+              <div className="flex items-center space-x-5">
+                <div className={`p-3.5 rounded-xl transition-transform ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
+                  <CalendarDays size={28} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">職位異常空缺天數</p>
+                  <p className={`text-3xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
+                    {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">職位異常空缺天數</p>
-                <p className={`text-3xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
-                  {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
-                </p>
-              </div>
+              {totalVacancyDays > 0 && (
+                <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
+                  <span className="text-[10px] font-bold mb-1">點擊看明細</span>
+                  <ChevronRight size={16} />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1388,6 +1362,57 @@ export default function HRModule({ user, selectedProject }) {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: 職位空缺明細 */}
+      {isVacancyModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-800 w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center">
+                <CalendarDays size={20} className="mr-2 text-orange-500" />
+                職位異常空缺明細
+              </h3>
+              <button onClick={() => setIsVacancyModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
+                    <tr>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位 / 職位</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">需求人數</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">需求區間</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">累計空缺天數</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {vacancyBreakdown.length === 0 ? (
+                      <tr><td colSpan="4" className="py-8 text-center text-xs text-slate-500">目前無職位空缺異常</td></tr>
+                    ) : (
+                      vacancyBreakdown.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-sm text-slate-800 dark:text-slate-200">{item.position}</div>
+                            <div className="text-[10px] text-slate-500">{item.unit}</div>
+                          </td>
+                          <td className="py-3 px-4 text-center font-bold text-slate-700 dark:text-slate-300">{item.requiredCount}</td>
+                          <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 font-mono tracking-tight">{item.startDate} ~ {item.endDate}</td>
+                          <td className="py-3 px-4 text-right font-black text-orange-600 dark:text-orange-400">{item.vacancyDays} <span className="text-xs font-medium">天</span></td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
+              <button onClick={() => setIsVacancyModalOpen(false)} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">關閉</button>
             </div>
           </div>
         </div>
