@@ -1,30 +1,49 @@
 import React, { useState } from 'react';
-import { Calculator, FileText, Users, CheckSquare, Download, Calendar } from 'lucide-react';
+import { Calculator, FileText, Users, CheckSquare, Download, Calendar, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 export default function ReportsModule({ user, selectedProject }) {
   // 狀態：儲存使用者選擇的報表區間
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [message, setMessage] = useState(null); // 用於自訂提示訊息 { type: 'error' | 'success', text: '' }
+
+  // 顯示自訂訊息的輔助函式
+  const showMessage = (type, text) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 4000);
+  };
 
   // 處理匯出按鈕點擊 (此處為前端操作介面，實際匯出邏輯需搭配對應套件)
   const handleExport = (reportName) => {
     if (!selectedProject) {
-      alert("請先選擇一個專案！");
+      showMessage('error', '請先選擇一個專案，才能進行報表匯出！');
       return;
     }
     if (!startDate || !endDate) {
-      alert("請先設定欲產出報表的「開始日期」與「結束日期」！");
+      showMessage('error', '請先設定欲產出報表的「開始日期」與「結束日期」！');
       return;
     }
     
     // 實際環境中，這裡會呼叫 API 或執行資料整理匯出
     console.log(`準備匯出 ${reportName}，專案：${selectedProject}，區間：${startDate} 至 ${endDate}`);
-    alert(`系統已接收指令，準備匯出：${reportName}\n區間：${startDate} ~ ${endDate}`);
+    showMessage('success', `系統已接收指令，準備匯出：${reportName} (${startDate} ~ ${endDate})`);
   };
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300">
       
+      {/* 提示訊息區塊 */}
+      {message && (
+        <div className={`p-4 rounded-xl border flex items-center shadow-sm animate-in slide-in-from-top-2 ${
+          message.type === 'error' 
+            ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-400'
+            : 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+        }`}>
+          {message.type === 'error' ? <AlertCircle size={20} className="mr-3 flex-shrink-0" /> : <CheckCircle2 size={20} className="mr-3 flex-shrink-0" />}
+          <span className="text-sm font-bold">{message.text}</span>
+        </div>
+      )}
+
       {/* 頂部設定區塊 */}
       <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
