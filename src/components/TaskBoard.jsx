@@ -266,15 +266,16 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
     return epics.map(epic => {
       let subTasks = epic.isVirtual ? orphanTasks : tasks.filter(t => t.parentUid === epic.uid);
+      
+      // 子項目固定依照工作起始日排序 (確保時間順序)
       subTasks.sort((a, b) => {
-        let aVal = a[sortConfig.key] || '';
-        let bVal = b[sortConfig.key] || '';
-        if (sortConfig.key === 'period') { aVal = a.startDate || a.due || ''; bVal = b.startDate || b.due || ''; }
-        if (sortConfig.key === 'status') { aVal = getTaskStatus(a); bVal = getTaskStatus(b); }
-        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        const aStart = a.startDate || '9999-12-31';
+        const bStart = b.startDate || '9999-12-31';
+        if (aStart < bStart) return -1;
+        if (aStart > bStart) return 1;
         return 0;
       });
+      
       return { ...epic, subTasks };
     });
   }, [tasks, sortConfig]);
@@ -695,11 +696,12 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
         )}
 
-        <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm relative overflow-hidden transition-all">
-          <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
+        {/* 【修正】移除了 parent 的 overflow-hidden，確保下拉選單能順利蓋出版面外 */}
+        <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm relative transition-all">
+          <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500 rounded-l-2xl"></div>
           
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-            <div className="flex-1 w-full">
+            <div className="flex-1 w-full pl-2">
               {parentEpic ? (
                 <p className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mb-1 flex items-center">
                   <FolderArchive size={14} className="mr-1.5" /> 母項目：{parentEpic.title}
@@ -749,7 +751,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             </div>
           </div>
           
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50 pl-2">
             {/* 負責人區塊 (自訂的 Dropdown 與 Chips，並加入格狀排列與搜尋) */}
             <div className="lg:col-span-1 relative">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
@@ -774,7 +776,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                   </div>
                   
                   {isAssigneeDropdownOpen && (
-                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden flex flex-col">
+                    <div className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden flex flex-col">
                       <div className="p-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
                         <div className="relative">
                           <Search size={14} className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-slate-400" />
