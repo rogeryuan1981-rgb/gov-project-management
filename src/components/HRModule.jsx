@@ -50,6 +50,10 @@ export default function HRModule({ user, selectedProject }) {
     unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: ''
   });
 
+  const [transferData, setTransferData] = useState({
+    unit: '', role: '', startDate: today
+  });
+
   // 0. 動態取得專案名稱與區間設定
   useEffect(() => {
     if (!selectedProject) return;
@@ -97,6 +101,7 @@ export default function HRModule({ user, selectedProject }) {
   const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
   const getPositionsForUnit = (unit) => [...new Set(requirements.filter(r => r.unit === unit).map(r => r.position))].filter(Boolean);
   const addAvailablePositions = getPositionsForUnit(newPerson.unit);
+  const transferAvailablePositions = getPositionsForUnit(transferData.unit);
 
   // 動態判定在職狀態邏輯
   const checkIsActive = (contractEnd) => {
@@ -126,7 +131,6 @@ export default function HRModule({ user, selectedProject }) {
   // 2. 處理單筆新增人員
   const handleAddPerson = async (e) => {
     e.preventDefault();
-    // 修正：移除 email 必填驗證
     if (!newPerson.name || !newPerson.role || !newPerson.unit || !newPerson.hireDate) {
       alert('請填寫必填欄位 (姓名、計畫單位、職務、到職日)');
       return;
@@ -295,10 +299,59 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
+  // 5. 處理人員快速轉任
+  const handleTransferSubmit = async (e) => {
+    e.preventDefault();
+    if (!transferData.unit || !transferData.role || !transferData.startDate) {
+      alert('請完整選擇轉任單位、職務與生效日期');
+      return;
+    }
+
+    const currentHistory = historyPerson.history || [{
+      unit: historyPerson.unit, role: historyPerson.role, startDate: historyPerson.roleStartDate || historyPerson.hireDate, endDate: ''
+    }];
+
+    // 防呆：轉任生效日不能早於目前職務的開始日
+    if (currentHistory.length > 0) {
+      const lastRecord = currentHistory[currentHistory.length - 1];
+      if (new Date(transferData.startDate) < new Date(lastRecord.startDate)) {
+        alert(`轉任日期錯誤：新職務生效日 (${transferData.startDate}) 不能早於當前職務【${lastRecord.role}】的開始日 (${lastRecord.startDate})！`);
+        return;
+      }
+    }
+
+    const updatedHistory = [...currentHistory];
+    if (updatedHistory.length > 0) {
+      updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
+    }
+
+    updatedHistory.push({
+      unit: transferData.unit, role: transferData.role, startDate: transferData.startDate, endDate: ''
+    });
+
+    const matchedReq = requirements.find(r => r.unit === transferData.unit && r.position === transferData.role);
+    const newIsResident = matchedReq ? matchedReq.isResident : false;
+
+    try {
+      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', historyPerson.id);
+      await updateDoc(personRef, {
+        unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
+      });
+
+      setHistoryPerson({
+        ...historyPerson, unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
+      });
+      setIsTransferring(false);
+      setTransferData({ unit: '', role: '', startDate: today });
+    } catch (error) {
+      console.error("轉任失敗:", error);
+      if (error.code === 'permission-denied') alert('【權限不足】操作被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
+    }
+  };
+
   // 4. 儲存編輯的人員資料與歷程
   const handleSaveEditPerson = async (e) => {
     e.preventDefault();
-    // 修正：移除 email 必填驗證
     if (!editingPerson.name || !editingPerson.hireDate) {
       alert("請填寫必填欄位：姓名與最初到職日");
       return;
@@ -310,7 +363,31 @@ export default function HRModule({ user, selectedProject }) {
       return;
     }
 
-    const sortedHistory = validHistory.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+    // 按開始日期排序以進行防呆檢查
+    const sortedHistory = [...validHistory].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+
+    // 區間重疊與邏輯防呆檢查
+    for (let i = 0; i < sortedHistory.length; i++) {
+      const current = sortedHistory[i];
+      const next = sortedHistory[i + 1];
+
+      if (current.endDate && new Date(current.startDate) > new Date(current.endDate)) {
+        alert(`歷程日期錯誤：【${current.role}】的開始日不能晚於結束日！`);
+        return;
+      }
+
+      if (next) {
+        if (!current.endDate) {
+          alert(`歷程日期錯誤：因後續有轉任【${next.role}】，先前的職務【${current.role}】必須填寫結束日！`);
+          return;
+        }
+        if (new Date(current.endDate) > new Date(next.startDate)) {
+          alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 不能晚於【${next.role}】的開始日 (${next.startDate})！`);
+          return;
+        }
+      }
+    }
+
     const latestRecord = sortedHistory[sortedHistory.length - 1];
 
     const matchedReq = requirements.find(r => r.unit === latestRecord.unit && r.position === latestRecord.role);
@@ -320,7 +397,7 @@ export default function HRModule({ user, selectedProject }) {
       const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', editingPerson.id);
       await updateDoc(personRef, {
         name: editingPerson.name,
-        email: editingPerson.email || '', // 允許為空
+        email: editingPerson.email || '',
         hireDate: editingPerson.hireDate,
         contractStart: editingPerson.contractStart || '',
         contractEnd: editingPerson.contractEnd || '',
@@ -337,7 +414,7 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 5. 處理個別人員的相關檔案上傳
+  // 6. 處理個別人員的相關檔案上傳
   const handlePersonnelFileUpload = async (e, personId) => {
     const file = e.target.files?.[0];
     if (!file) return;
