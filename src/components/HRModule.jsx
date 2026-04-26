@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Clock, ArrowRight, FileText, Download, Loader2, File as FileIcon } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Clock, ArrowRight, FileText, Download, Loader2, File as FileIcon, CalendarDays } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -14,7 +14,11 @@ export default function HRModule({ user, selectedProject }) {
   const [personnel, setPersonnel] = useState([]);
   const [requirements, setRequirements] = useState([]);
   const [dbError, setDbError] = useState(null); 
-  const [projectName, setProjectName] = useState(''); // 用於畫面上顯示專案名稱
+  
+  // 專案與子頁籤狀態
+  const [projectData, setProjectData] = useState({});
+  const [projectName, setProjectName] = useState(''); 
+  const [activeSubTab, setActiveSubTab] = useState('hr'); // 'hr' | 'attendance'
   
   // Modals 控制狀態
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
@@ -31,10 +35,10 @@ export default function HRModule({ user, selectedProject }) {
   const [isImportingPerson, setIsImportingPerson] = useState(false);
   const [uploadingPersonnelId, setUploadingPersonnelId] = useState(null);
 
-  // 取得當年度的 1/1 與 12/31 作為預設值
+  // 動態取得專案設定日期 (若無則預設當年度)
   const currentYear = new Date().getFullYear();
-  const defaultStartDate = `${currentYear}-01-01`;
-  const defaultEndDate = `${currentYear}-12-31`;
+  const defaultStartDate = projectData.startDate || `${currentYear}-01-01`;
+  const defaultEndDate = projectData.endDate || `${currentYear}-12-31`;
   const today = new Date().toISOString().split('T')[0];
 
   // 表單狀態
@@ -51,12 +55,13 @@ export default function HRModule({ user, selectedProject }) {
     unit: '', role: '', startDate: today
   });
 
-  // 0. 動態取得專案名稱
+  // 0. 動態取得專案名稱與區間設定
   useEffect(() => {
     if (!selectedProject) return;
     const projectRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', selectedProject);
     const unsubscribe = onSnapshot(projectRef, (docSnap) => {
       if (docSnap.exists()) {
+        setProjectData(docSnap.data());
         setProjectName(docSnap.data().name);
       }
     });
@@ -66,7 +71,6 @@ export default function HRModule({ user, selectedProject }) {
   // 1. 讀取人事資料與人力需求設定
   useEffect(() => {
     if (!user || !selectedProject) return;
-
     setDbError(null); 
 
     const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
@@ -99,6 +103,20 @@ export default function HRModule({ user, selectedProject }) {
   const addAvailablePositions = [...new Set(requirements.filter(r => r.unit === newPerson.unit).map(r => r.position))].filter(Boolean);
   const transferAvailablePositions = [...new Set(requirements.filter(r => r.unit === transferData.unit).map(r => r.position))].filter(Boolean);
 
+  // 打開 Modal 時套用最新預設日期
+  const handleOpenAddPersonModal = () => {
+    setNewPerson({ 
+      name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false,
+      contractStart: defaultStartDate, contractEnd: defaultEndDate, files: []
+    });
+    setIsAddPersonModalOpen(true);
+  };
+
+  const handleOpenReqModal = () => {
+    setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: '' });
+    setIsReqModalOpen(true);
+  };
+
   // 2. 處理單筆新增人員
   const handleAddPerson = async (e) => {
     e.preventDefault();
@@ -125,10 +143,6 @@ export default function HRModule({ user, selectedProject }) {
         createdAt: new Date().getTime()
       });
       setIsAddPersonModalOpen(false);
-      setNewPerson({ 
-        name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false,
-        contractStart: defaultStartDate, contractEnd: defaultEndDate, files: []
-      });
     } catch (error) {
       console.error("新增人員失敗:", error);
       if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
@@ -137,7 +151,7 @@ export default function HRModule({ user, selectedProject }) {
 
   // 匯出計畫人員 CSV 範例檔
   const exportPersonCSVTemplate = () => {
-    const csvContent = "\uFEFF姓名,計畫單位,目前職位,最初到職日(YYYY-MM-DD),就任此職位日(YYYY-MM-DD),計畫參與開始日(YYYY-MM-DD),計畫參與結束日(YYYY-MM-DD)\n王大明,專案辦公室,專員,2026-01-01,2026-01-01,2026-01-01,2026-12-31";
+    const csvContent = `\uFEFF姓名,計畫單位,目前職位,最初到職日(YYYY-MM-DD),就任此職位日(YYYY-MM-DD),計畫參與開始日(YYYY-MM-DD),計畫參與結束日(YYYY-MM-DD)\n王大明,專案辦公室,專員,${defaultStartDate},${defaultStartDate},${defaultStartDate},${defaultEndDate}`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -172,32 +186,17 @@ export default function HRModule({ user, selectedProject }) {
 
           if (!name || !role) continue;
 
-          // 自動匹配人力需求以判斷是否為駐點
           const matchedReq = requirements.find(r => r.unit === unit && r.position === role);
           const isResident = matchedReq ? matchedReq.isResident : false;
 
           const initialHistory = [{
-            unit: unit,
-            role: role,
-            startDate: roleStartDate,
-            endDate: null
+            unit: unit, role: role, startDate: roleStartDate, endDate: null
           }];
 
           await addDoc(hrRef, {
-            name,
-            unit,
-            role,
-            isResident,
-            hireDate,
-            roleStartDate,
-            contractStart,
-            contractEnd,
-            status: 'active',
-            proxyAlert: false,
-            files: [],
-            history: initialHistory,
-            projectId: selectedProject,
-            createdAt: new Date().getTime()
+            name, unit, role, isResident, hireDate, roleStartDate, contractStart, contractEnd,
+            status: 'active', proxyAlert: false, files: [], history: initialHistory,
+            projectId: selectedProject, createdAt: new Date().getTime()
           });
           importCount++;
         }
@@ -242,13 +241,12 @@ export default function HRModule({ user, selectedProject }) {
       await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs', reqId));
     } catch (error) {
       console.error("刪除需求失敗:", error);
-      if (error.code === 'permission-denied') alert('【權限不足】刪除被拒絕，請確認權限設定！');
     }
   };
 
   // 匯出人力需求 CSV 範例檔
   const exportReqCSVTemplate = () => {
-    const csvContent = "\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明\n範例單位,專員,2,2026-01-01,2026-12-31,是,需具備相關證照";
+    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明\n範例單位,專員,2,${defaultStartDate},${defaultEndDate},是,需具備相關證照`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -271,7 +269,6 @@ export default function HRModule({ user, selectedProject }) {
 
       let importCount = 0;
       for (let i = startIndex; i < rows.length; i++) {
-        // 簡易 CSV 解析，支援逗號分隔
         const cols = rows[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         if (cols.length >= 2) {
           await addDoc(reqRef, {
@@ -301,90 +298,57 @@ export default function HRModule({ user, selectedProject }) {
   // 5. 處理人員轉任
   const handleTransferSubmit = async (e) => {
     e.preventDefault();
-    if (!transferData.unit || !transferData.role || !transferData.startDate) {
-      alert('請完整選擇轉任單位、職務與生效日期');
-      return;
-    }
+    if (!transferData.unit || !transferData.role || !transferData.startDate) return;
 
     const currentHistory = historyPerson.history || [{
-      unit: historyPerson.unit,
-      role: historyPerson.role,
-      startDate: historyPerson.roleStartDate || historyPerson.hireDate,
-      endDate: null
+      unit: historyPerson.unit, role: historyPerson.role, startDate: historyPerson.roleStartDate || historyPerson.hireDate, endDate: null
     }];
 
     const updatedHistory = [...currentHistory];
-    
-    if (updatedHistory.length > 0) {
-      updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
-    }
+    if (updatedHistory.length > 0) updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
 
     updatedHistory.push({
-      unit: transferData.unit,
-      role: transferData.role,
-      startDate: transferData.startDate,
-      endDate: null
+      unit: transferData.unit, role: transferData.role, startDate: transferData.startDate, endDate: null
     });
 
-    // 取得新職務的駐點設定
     const matchedReq = requirements.find(r => r.unit === transferData.unit && r.position === transferData.role);
     const newIsResident = matchedReq ? matchedReq.isResident : false;
 
     try {
       const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', historyPerson.id);
       await updateDoc(personRef, {
-        unit: transferData.unit,
-        role: transferData.role,
-        roleStartDate: transferData.startDate,
-        isResident: newIsResident,
-        history: updatedHistory
+        unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
       });
 
       setHistoryPerson({
-        ...historyPerson,
-        unit: transferData.unit,
-        role: transferData.role,
-        roleStartDate: transferData.startDate,
-        isResident: newIsResident,
-        history: updatedHistory
+        ...historyPerson, unit: transferData.unit, role: transferData.role, roleStartDate: transferData.startDate, isResident: newIsResident, history: updatedHistory
       });
-      
       setIsTransferring(false);
       setTransferData({ unit: '', role: '', startDate: today });
     } catch (error) {
       console.error("轉任失敗:", error);
-      if (error.code === 'permission-denied') alert('【權限不足】操作被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
     }
   };
 
-  // 6. 處理個別人員的相關檔案上傳 (拖曳/點擊)
+  // 6. 處理個別人員的相關檔案上傳
   const handlePersonnelFileUpload = async (e, personId) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadingPersonnelId(personId);
-    // 模擬上傳延遲
     setTimeout(async () => {
       try {
         const person = personnel.find(p => p.id === personId);
         const currentFiles = person.files || [];
-        const newFile = {
-          id: Date.now(),
-          name: file.name,
-          uploadDate: new Date().toISOString().split('T')[0],
-          url: '#' // 模擬下載連結
-        };
-
+        const newFile = { id: Date.now(), name: file.name, uploadDate: new Date().toISOString().split('T')[0], url: '#' };
         const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', personId);
         await updateDoc(personRef, { files: [...currentFiles, newFile] });
 
-        // 如果當前 Modal 是打開狀態，同步更新畫面
         if (historyPerson && historyPerson.id === personId) {
           setHistoryPerson(prev => ({ ...prev, files: [...currentFiles, newFile] }));
         }
       } catch (error) {
         console.error("檔案上傳失敗:", error);
-        alert("檔案上傳失敗，請稍後再試。");
       } finally {
         setUploadingPersonnelId(null);
         e.target.value = '';
@@ -392,58 +356,43 @@ export default function HRModule({ user, selectedProject }) {
     }, 1200);
   };
 
-  // 動態計算合規數據與單位人數彙整
+  // 數據統計計算
   const activeReqsToday = requirements.filter(r => r.startDate <= today && r.endDate >= today);
-  
-  // 1. 計算駐點與非駐點需求總數
   const totalResidentRequiredToday = activeReqsToday.filter(r => r.isResident).reduce((sum, req) => sum + req.count, 0);
   const totalNonResidentRequiredToday = activeReqsToday.filter(r => !r.isResident).reduce((sum, req) => sum + req.count, 0);
 
-  // 2. 計算實際駐點與非駐點在職人數
   const residentCount = personnel.filter(p => p.isResident && p.status === 'active').length;
   const nonResidentCount = personnel.filter(p => !p.isResident && p.status === 'active').length;
 
-  // 3. 判斷合規狀態
   const isResidentCompliant = totalResidentRequiredToday > 0 ? residentCount >= totalResidentRequiredToday : true;
   const isNonResidentCompliant = totalNonResidentRequiredToday > 0 ? nonResidentCount >= totalNonResidentRequiredToday : true;
 
-  // 4. 計算職位異常天數 (Vacancy Days)
+  const proxyAlertCount = personnel.filter(p => p.proxyAlert && p.status === 'active').length;
+
   let totalVacancyDays = 0;
   const todayMs = new Date(today).getTime();
 
   requirements.forEach(req => {
     const reqStartMs = new Date(req.startDate).getTime();
-    // 只計算到「今天」或「需求結束日」中較早的一天
     const reqEndMs = Math.min(new Date(req.endDate).getTime(), todayMs);
     if (reqStartMs > reqEndMs) return;
 
-    // 找出所有符合此單位與職位的歷史紀錄片段
     const segments = [];
     personnel.forEach(p => {
       (p.history || []).forEach(h => {
         if (h.unit === req.unit && h.role === req.position) {
-          const sMs = new Date(h.startDate).getTime();
-          const eMs = h.endDate ? new Date(h.endDate).getTime() : todayMs;
-          segments.push({ sMs, eMs });
+          segments.push({ sMs: new Date(h.startDate).getTime(), eMs: h.endDate ? new Date(h.endDate).getTime() : todayMs });
         }
       });
     });
 
-    // 逐日比對，若當日在職人數小於需求人數，則累加異常天數
     for (let time = reqStartMs; time <= reqEndMs; time += 86400000) {
       let activeCount = 0;
-      segments.forEach(seg => {
-        if (seg.sMs <= time && time <= seg.eMs) {
-          activeCount++;
-        }
-      });
-      if (activeCount < req.count) {
-        totalVacancyDays += (req.count - activeCount);
-      }
+      segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
+      if (activeCount < req.count) totalVacancyDays += (req.count - activeCount);
     }
   });
 
-  // 彙整：計算各單位在職人數
   const unitSummary = personnel.reduce((acc, curr) => {
     if (curr.status === 'active') {
       const unitName = curr.unit || '未指定單位';
@@ -456,219 +405,298 @@ export default function HRModule({ user, selectedProject }) {
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-6xl mx-auto">
       
-      {/* 權限阻擋提示 */}
       {dbError && (
         <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4 rounded-2xl flex items-start animate-in slide-in-from-top-2">
           <AlertCircle className="text-red-500 mr-3 flex-shrink-0 mt-0.5" size={20} />
           <div>
             <h4 className="text-sm font-bold text-red-700 dark:text-red-400">Firebase 權限異常，您的變更已被還原</h4>
             <p className="text-xs text-red-600 dark:text-red-300 mt-1">{dbError}</p>
-            <p className="text-xs text-red-600 dark:text-red-300 mt-1">請依照之前的步驟進入 Firebase Console &gt; Firestore Database &gt; Rules 發布規則。</p>
           </div>
         </div>
       )}
 
-      {/* 標題與全域操作列 */}
-      <div className="flex justify-between items-end mb-2">
+      {/* 標題與頁籤 */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2">
         <div>
           <h2 className="text-xl font-bold text-slate-800 dark:text-white">人事合規紀錄 ({projectName || '載入中...'})</h2>
           <p className="text-sm text-slate-500 mt-1">管理本計畫之人員名冊、轉任歷史與人力需求合規狀態。</p>
         </div>
-        <button 
-          onClick={() => setIsReqModalOpen(true)}
-          className="flex items-center space-x-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-sm font-bold border border-slate-200 dark:border-slate-700 shadow-sm"
+      </div>
+
+      <div className="flex space-x-6 border-b border-slate-200 dark:border-slate-700 mb-6">
+        <button
+          onClick={() => setActiveSubTab('hr')}
+          className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeSubTab === 'hr' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
         >
-          <Settings size={16} className="text-indigo-500" />
-          <span>設定計畫人力需求</span>
+          人事建檔與編制
+        </button>
+        <button
+          onClick={() => setActiveSubTab('attendance')}
+          className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeSubTab === 'attendance' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+        >
+          考勤紀錄與規政代理
         </button>
       </div>
 
-      {/* 上方統計區塊 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
-          <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400">
-            <CheckCircle2 size={28} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力配置</p>
-            <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
-              {residentCount}
-              <span className="text-lg text-slate-400 mx-1">/ {totalResidentRequiredToday || 0}</span>
-              {totalResidentRequiredToday > 0 && (
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${
-                  isResidentCompliant 
-                    ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-500/30' 
-                    : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-500/30'
-                }`}>
-                  {isResidentCompliant ? '合規' : '不合規'}
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
-          <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400">
-            <Users size={28} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力配置</p>
-            <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
-              {nonResidentCount}
-              <span className="text-lg text-slate-400 mx-1">/ {totalNonResidentRequiredToday || 0}</span>
-              {totalNonResidentRequiredToday > 0 && (
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${
-                  isNonResidentCompliant 
-                    ? 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-500/30' 
-                    : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-500/30'
-                }`}>
-                  {isNonResidentCompliant ? '合規' : '不合規'}
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
-          <div className={`p-3.5 rounded-xl ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
-            <AlertCircle size={28} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">職位異常天數</p>
-            <p className={`text-3xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
-              {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 人員名冊表格與下方彙整區塊 */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden transition-colors flex flex-col">
-        <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
-          <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與異動紀錄</h3>
-          <div className="flex space-x-3">
-            <button className="flex items-center space-x-2 px-4 py-2 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-sm font-bold">
-              <Upload size={16} />
-              <span>匯入考勤 Excel</span>
-            </button>
+      {/* ================= 子頁籤 1: 人事建檔與編制 ================= */}
+      {activeSubTab === 'hr' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          
+          <div className="flex justify-end">
             <button 
-              onClick={() => setIsAddPersonModalOpen(true)}
-              className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold text-sm transition-colors"
+              onClick={handleOpenReqModal}
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-sm font-bold border border-slate-200 dark:border-slate-700 shadow-sm"
             >
-              <Plus size={16} />
-              <span>新增人員</span>
+              <Settings size={16} className="text-indigo-500" />
+              <span>設定計畫人力需求</span>
             </button>
           </div>
-        </div>
-        
-        <div className="overflow-x-auto flex-1">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
-              <tr>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">姓名/單位</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">狀態/駐點</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">現職與轉任日</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">參與計畫期間/到職日</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">相關檔案</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-              {personnel.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="py-16 text-center">
-                    <div className="flex flex-col items-center justify-center">
-                      <Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
-                      <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無人事建檔資料</p>
-                      <p className="text-slate-500 text-sm">請點擊右上方「新增人員」建立計畫專屬人力。</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                personnel.map(u => (
-                  <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
-                    <td className="py-4 px-6">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span>
-                        <span className="text-xs font-medium text-slate-500 mt-1">{u.unit || '未指定單位'}</span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="flex flex-col items-start gap-1">
-                        {u.status === 'active' 
-                          ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>
-                          : <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">離職</span>
-                        }
-                        {u.isResident ? <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">駐點人員</span> : <span className="text-[10px] text-slate-400">非駐點</span>}
-                      </div>
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span>
-                        <span className="text-[10px] text-slate-500 mt-1">就任日: {u.roleStartDate || u.hireDate}</span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="text-sm font-medium text-slate-600 dark:text-slate-300">到職: {u.hireDate}</div>
-                      {(u.contractStart || u.contractEnd) && (
-                        <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                          期間: {u.contractStart} ~ {u.contractEnd}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                          {u.files?.length || 0} 個檔案
-                        </span>
-                        <label className="cursor-pointer p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/20 dark:text-indigo-400 dark:hover:bg-indigo-500/40 rounded-lg transition-colors" title="上傳相關檔案 (例如: 畢業證書)">
-                          <input 
-                            type="file" 
-                            className="hidden" 
-                            onChange={(e) => handlePersonnelFileUpload(e, u.id)} 
-                            disabled={uploadingPersonnelId === u.id}
-                          />
-                          {uploadingPersonnelId === u.id ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                        </label>
-                      </div>
-                    </td>
-                    <td className="py-4 px-6 text-right">
-                      <button 
-                        onClick={() => setHistoryPerson(u)}
-                        className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"
-                      >
-                        <Clock size={14} className="mr-1.5" /> 歷程與檢視
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
 
-        {/* 下方：各單位人數彙整區塊 */}
-        {personnel.length > 0 && (
-          <div className="bg-slate-50 dark:bg-slate-900/50 p-5 border-t border-slate-200 dark:border-slate-700/50">
-            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
-              <PieChart size={16} className="mr-2 text-indigo-500" />
-              計畫單位人數彙整 (僅計在職)
-            </h4>
-            <div className="flex flex-wrap gap-4">
-              {Object.entries(unitSummary).map(([unit, count]) => (
-                <div key={unit} className="px-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
-                  <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span>
-                  <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
-                </div>
-              ))}
-              <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
-                <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span>
-                <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
+              <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400">
+                <CheckCircle2 size={28} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力配置</p>
+                <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
+                  {residentCount}
+                  <span className="text-lg text-slate-400 mx-1">/ {totalResidentRequiredToday || 0}</span>
+                  {totalResidentRequiredToday > 0 && (
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${isResidentCompliant ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400'}`}>
+                      {isResidentCompliant ? '合規' : '不合規'}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
+              <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400">
+                <Users size={28} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力配置</p>
+                <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
+                  {nonResidentCount}
+                  <span className="text-lg text-slate-400 mx-1">/ {totalNonResidentRequiredToday || 0}</span>
+                  {totalNonResidentRequiredToday > 0 && (
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${isNonResidentCompliant ? 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400'}`}>
+                      {isNonResidentCompliant ? '合規' : '不合規'}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
+              <div className={`p-3.5 rounded-xl ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
+                <CalendarDays size={28} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">職位異常空缺天數</p>
+                <p className={`text-3xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
+                  {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
+                </p>
               </div>
             </div>
           </div>
-        )}
-      </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
+              <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與異動紀錄</h3>
+              <div className="flex space-x-3">
+                <button 
+                  onClick={handleOpenAddPersonModal}
+                  className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold text-sm transition-colors"
+                >
+                  <Plus size={16} />
+                  <span>新增人員</span>
+                </button>
+              </div>
+            </div>
+            
+            <div className="overflow-x-auto flex-1">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">姓名/單位</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">狀態/駐點</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">現職與轉任日</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">參與計畫期間/到職日</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">相關檔案</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                  {personnel.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" className="py-16 text-center">
+                        <div className="flex flex-col items-center justify-center">
+                          <Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
+                          <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無人事建檔資料</p>
+                          <p className="text-slate-500 text-sm">請點擊右上方「新增人員」建立計畫專屬人力。</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    personnel.map(u => (
+                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span>
+                            <span className="text-xs font-medium text-slate-500 mt-1">{u.unit || '未指定單位'}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col items-start gap-1">
+                            {u.status === 'active' 
+                              ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>
+                              : <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">離職</span>
+                            }
+                            {u.isResident ? <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">駐點人員</span> : <span className="text-[10px] text-slate-400">非駐點</span>}
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span>
+                            <span className="text-[10px] text-slate-500 mt-1">就任日: {u.roleStartDate || u.hireDate}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="text-sm font-medium text-slate-600 dark:text-slate-300">到職: {u.hireDate}</div>
+                          {(u.contractStart || u.contractEnd) && (
+                            <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                              期間: {u.contractStart} ~ {u.contractEnd}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                              {u.files?.length || 0} 個檔案
+                            </span>
+                            <label className="cursor-pointer p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/20 dark:text-indigo-400 dark:hover:bg-indigo-500/40 rounded-lg transition-colors" title="上傳相關檔案 (例如: 畢業證書)">
+                              <input 
+                                type="file" 
+                                className="hidden" 
+                                onChange={(e) => handlePersonnelFileUpload(e, u.id)} 
+                                disabled={uploadingPersonnelId === u.id}
+                              />
+                              {uploadingPersonnelId === u.id ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                            </label>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6 text-right">
+                          <button 
+                            onClick={() => setHistoryPerson(u)}
+                            className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"
+                          >
+                            <Clock size={14} className="mr-1.5" /> 歷程與檢視
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {personnel.length > 0 && (
+              <div className="bg-slate-50 dark:bg-slate-900/50 p-5 border-t border-slate-200 dark:border-slate-700/50">
+                <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
+                  <PieChart size={16} className="mr-2 text-indigo-500" />
+                  計畫單位人數彙整 (僅計在職)
+                </h4>
+                <div className="flex flex-wrap gap-4">
+                  {Object.entries(unitSummary).map(([unit, count]) => (
+                    <div key={unit} className="px-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                      <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span>
+                      <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
+                    </div>
+                  ))}
+                  <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                    <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span>
+                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= 子頁籤 2: 考勤與規政代理 ================= */}
+      {activeSubTab === 'attendance' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className={`bg-white dark:bg-slate-800 p-6 rounded-2xl border shadow-sm flex items-center space-x-5 transition-colors ${proxyAlertCount > 0 ? 'border-orange-200 dark:border-orange-500/30' : 'border-slate-200 dark:border-slate-700/50'}`}>
+              <div className={`p-3.5 rounded-xl ${proxyAlertCount > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
+                <AlertCircle size={28} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理異常待補件</p>
+                <p className={`text-3xl font-black ${proxyAlertCount > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
+                  {proxyAlertCount} <span className={`text-sm font-medium ${proxyAlertCount > 0 ? 'text-orange-500' : 'text-slate-500'}`}>件</span>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-slate-800 dark:text-white mb-1">匯入出勤紀錄</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">上傳每月考勤 Excel 報表，系統將自動比對請假天數與規政代理合規性。</p>
+            </div>
+            <button className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-sm font-bold flex-shrink-0">
+              <Upload size={18} />
+              <span>匯入考勤 Excel</span>
+            </button>
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/80">
+              <h3 className="font-bold text-slate-800 dark:text-white">規政代理異常名單</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">人員姓名</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">所屬單位</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">異常狀態</th>
+                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                  {personnel.filter(p => p.proxyAlert).length === 0 ? (
+                     <tr>
+                       <td colSpan="4" className="py-12 text-center text-slate-500 dark:text-slate-400 text-sm font-medium">目前無任何代理異常紀錄。</td>
+                     </tr>
+                  ) : (
+                    personnel.filter(p => p.proxyAlert).map(u => (
+                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
+                        <td className="py-4 px-6 font-bold text-slate-900 dark:text-slate-200">{u.name}</td>
+                        <td className="py-4 px-6 text-sm text-slate-600 dark:text-slate-400">{u.unit}</td>
+                        <td className="py-4 px-6">
+                          <span className="inline-flex items-center px-2 py-1 rounded bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold border border-orange-200 dark:border-orange-500/30">
+                            <AlertCircle size={14} className="mr-1" /> 缺代理人
+                          </span>
+                        </td>
+                        <td className="py-4 px-6 text-right">
+                          <button className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 rounded-lg text-xs font-bold transition-colors">
+                            補齊文件
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ================= Modals 區塊 ================= */}
       
