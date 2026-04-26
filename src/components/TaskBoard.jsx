@@ -68,8 +68,9 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const [editForm, setEditForm] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   
-  // 新增：控制指派人員下拉選單的開關
+  // 新增：控制指派人員下拉選單的開關與搜尋
   const [isAssigneeDropdownOpen, setIsAssigneeDropdownOpen] = useState(false);
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('');
 
   // 甘特圖勾選狀態與模式
   const [isGanttMode, setIsGanttMode] = useState(false);
@@ -177,17 +178,17 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         }
 
         // 2. 推算工作期間 (子項目最早起日 ~ 子項目最晚迄日)
-        const validStarts = subTasks.map(s => s.startDate).filter(Boolean).sort();
-        const validEnds = subTasks.map(s => s.due).filter(Boolean).sort((a,b) => new Date(b) - new Date(a));
+        const validStarts = subTasks.map(s => s.startDate).filter(Boolean).sort((a, b) => a.localeCompare(b));
+        const validEnds = subTasks.map(s => s.due).filter(Boolean).sort((a, b) => b.localeCompare(a));
         
-        const expectedStartDate = validStarts.length > 0 ? validStarts[0] : epic.startDate;
-        const expectedEndDate = validEnds.length > 0 ? validEnds[0] : epic.due;
+        const expectedStartDate = validStarts.length > 0 ? validStarts[0] : (epic.startDate || '');
+        const expectedEndDate = validEnds.length > 0 ? validEnds[0] : (epic.due || '');
 
         if (
           epic.status !== expectedStatus || 
-          epic.completedDate !== expectedCompletedDate ||
-          epic.startDate !== expectedStartDate ||
-          epic.due !== expectedEndDate
+          (epic.completedDate || '') !== expectedCompletedDate ||
+          (epic.startDate || '') !== expectedStartDate ||
+          (epic.due || '') !== expectedEndDate
         ) {
           const taskRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_${epic.uid}`);
           updateDoc(taskRef, { 
@@ -469,8 +470,12 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
 
     let rowsHtml = '';
     orderedTasks.forEach(t => {
-       const tStart = new Date(t.startDate).getTime();
-       const tEnd = new Date(t.status === 'completed' && t.completedDate ? t.completedDate : t.due).getTime();
+       const fallbackDate = new Date().toISOString().split('T')[0];
+       const safeStart = t.derivedStart || projectStartDate || fallbackDate;
+       const safeEnd = t.derivedEnd || projectEndDate || fallbackDate;
+
+       const tStart = new Date(safeStart).getTime();
+       const tEnd = new Date(safeEnd).getTime();
        
        if (isNaN(tStart) || isNaN(tEnd)) return; // 避免爛資料壞版
 
@@ -490,14 +495,17 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
        const titleIndent = isEpic ? '10px' : '30px';
        const icon = isEpic ? '📁' : '↳';
 
+       const displayStart = t.derivedStart || '未定';
+       const displayEnd = t.derivedEnd || '未定';
+
        rowsHtml += `
          <div class="gantt-row">
            <div class="gantt-label" style="padding-left: ${titleIndent}">
              <div class="gantt-title">${icon} ${t.title}</div>
-             <div class="gantt-subtitle">${t.assignee || '未指派'} | ${t.startDate || '-'} ~ ${t.due || '-'}</div>
+             <div class="gantt-subtitle">${t.assignee || '未指派'} | ${displayStart} ~ ${displayEnd}</div>
            </div>
            <div class="gantt-timeline">
-             <div class="gantt-bar" style="left: ${left}%; width: ${width}%; background-color: ${barColor}; border-radius: ${isEpic ? '2px' : '6px'}; height: ${isEpic ? '8px' : '16px'};"></div>
+             <div class="gantt-bar" style="left: ${left}%; width: ${width}%; background-color: ${barColor}; border-radius: ${isEpic ? '2px' : '6px'}; height: ${isEpic ? '8px' : '16px'}; box-sizing: border-box;"></div>
            </div>
          </div>
        `;
@@ -732,7 +740,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
             <div className="flex items-center space-x-3 mt-4 md:mt-0 flex-shrink-0">
               {isEditing ? (
                 <>
-                  <button onClick={() => { setIsEditing(false); setEditForm(null); setIsAssigneeDropdownOpen(false); }} className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors flex items-center"><X size={16} className="mr-1.5" /> 取消</button>
+                  <button onClick={() => { setIsEditing(false); setEditForm(null); setIsAssigneeDropdownOpen(false); setAssigneeSearchQuery(''); }} className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors flex items-center"><X size={16} className="mr-1.5" /> 取消</button>
                   <button onClick={handleSaveTask} disabled={isSaving} className="px-4 py-2 bg-indigo-600 text-white font-bold text-sm rounded-lg hover:bg-indigo-700 shadow-sm transition-colors flex items-center">{isSaving ? <Loader2 size={16} className="animate-spin mr-1.5" /> : <Save size={16} className="mr-1.5" />} 儲存變更</button>
                 </>
               ) : (
@@ -742,7 +750,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50">
-            {/* 負責人區塊 (自訂的 Dropdown 與 Chips) */}
+            {/* 負責人區塊 (自訂的 Dropdown 與 Chips，並加入格狀排列與搜尋) */}
             <div className="lg:col-span-1 relative">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
               {isEditing ? (
@@ -762,32 +770,55 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                           <X size={12} />
                         </button>
                       </span>
-                    )) : <span className="text-xs font-bold text-slate-400 pl-1.5 py-0.5">請點選以指派人員...</span>}
+                    )) : <span className="text-xs font-bold text-slate-400 pl-1.5 py-0.5">請點選指派...</span>}
                   </div>
                   
                   {isAssigneeDropdownOpen && (
-                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-48 overflow-y-auto p-2">
-                      {personnel.length === 0 ? (
-                        <p className="text-xs text-center text-slate-500 py-4">系統無建檔人員</p>
-                      ) : (
-                        personnel.map(p => {
-                          const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
-                          return (
-                            <label key={p.id} className="flex items-center space-x-3 py-2 px-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors">
-                              <input 
-                                type="checkbox" 
-                                checked={isChecked}
-                                onChange={() => handleAssigneeChange(p.name)}
-                                className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                              />
-                              <div className="flex flex-col">
-                                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{p.name}</span>
-                                <span className="text-[10px] text-slate-500 font-medium">{p.role}</span>
-                              </div>
-                            </label>
-                          );
-                        })
-                      )}
+                    <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden flex flex-col">
+                      <div className="p-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                        <div className="relative">
+                          <Search size={14} className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                          <input 
+                            type="text" 
+                            placeholder="搜尋人員..." 
+                            value={assigneeSearchQuery}
+                            onChange={(e) => setAssigneeSearchQuery(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-600 rounded-lg text-xs outline-none focus:border-indigo-500 text-slate-700 dark:text-slate-200"
+                          />
+                        </div>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto p-1.5 grid grid-cols-2 gap-1">
+                        {personnel.filter(p => p.name.includes(assigneeSearchQuery) || p.role.includes(assigneeSearchQuery)).length === 0 ? (
+                          <p className="text-xs text-center text-slate-500 py-4 col-span-2">查無人員</p>
+                        ) : (
+                          personnel.filter(p => p.name.includes(assigneeSearchQuery) || p.role.includes(assigneeSearchQuery)).map(p => {
+                            const isChecked = editForm.assignee?.split(',').map(s=>s.trim()).includes(p.name);
+                            return (
+                              <label key={p.id} className="flex items-center space-x-2 py-1.5 px-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg cursor-pointer transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-600">
+                                <input 
+                                  type="checkbox" 
+                                  checked={isChecked}
+                                  onChange={() => handleAssigneeChange(p.name)}
+                                  className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer flex-shrink-0"
+                                />
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{p.name}</span>
+                                  <span className="text-[9px] text-slate-500 font-medium truncate">{p.role}</span>
+                                </div>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                      <div className="p-2 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
+                        <button 
+                          onClick={(e) => { e.preventDefault(); setIsAssigneeDropdownOpen(false); setAssigneeSearchQuery(''); }} 
+                          className="px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+                        >
+                          完成
+                        </button>
+                      </div>
                     </div>
                   )}
                   {editForm.parentUid === 0 && <span className="text-[10px] text-orange-500 font-bold mt-2 block">💡 儲存後將同步覆蓋子任務負責人</span>}
