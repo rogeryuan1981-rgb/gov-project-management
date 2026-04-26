@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, Filter, Plus, ChevronRight, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
-// 嚴格遵守跨檔案模組化架構，統一由 firebase 引入資料庫實體
-import { db } from '../lib/firebase';
+// 嚴格遵守跨檔案模組化架構，引入獨立的 firebase.js
+import { db } from '../lib/firebase.js';
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -67,7 +67,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
     
     if (epics.length === 0) {
       await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'tasks', `${selectedProject}_1`), {
-        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '未指派', due: '', status: 'pending', currentProgress: '', reqDoc: false
+        uid: 1, parentUid: 0, projectName: selectedProject, title: '新增主模組', assignee: '管理員', due: '', status: 'pending', currentProgress: '', reqDoc: false
       });
       targetEpicUid = 1;
     } else {
@@ -152,13 +152,11 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
   const exportTasksToCSV = () => {
     if (!selectedProject) return;
     
-    // 改用陣列儲存每一行，避免字串中的 \n 被 Vercel (esbuild) 解析錯誤
     const csvRows = [
       "UID,Parent_UID,工項名稱,負責人,預計完成日(YYYY-MM-DD),狀態(pending/in-progress/completed/overdue),當前進度,是否需產出文件(是/否)"
     ];
     
     if (tasks.length === 0) {
-      // 專案為空時，給予預設範例結構
       csvRows.push("1,0,模組一：辦公室建置與團隊管理,管理員,-,-,-,否");
       csvRows.push("2,1,任務 1.1：成立專案辦公室,王主任,2026-05-01,in-progress,尋找場地中,是");
       csvRows.push("3,2,尋找合適場地(距署內30分),李助理,2026-04-15,completed,已完成,否");
@@ -300,14 +298,14 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         </div>
         <div className="flex space-x-3">
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
-          <button onClick={exportTasksToCSV} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 text-sm font-medium">
+          <button onClick={exportTasksToCSV} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/30 text-sm font-medium transition-colors">
             <Download size={16} /><span>匯出 CSV (含現有工項)</span>
           </button>
-          <button onClick={triggerFileInput} disabled={isImporting} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 text-sm font-medium">
+          <button onClick={triggerFileInput} disabled={isImporting} className="flex items-center space-x-2 px-4 py-2 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/30 text-sm font-medium transition-colors">
             {isImporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
             <span>匯入 CSV 更新</span>
           </button>
-          <button onClick={handleAddTask} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm text-sm font-medium">
+          <button onClick={handleAddTask} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm text-sm font-medium transition-colors">
             <Plus size={16} /><span>新增任務</span>
           </button>
         </div>
@@ -331,13 +329,13 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                 <td colSpan="6" className="py-16 text-center">
                   <div className="flex flex-col items-center justify-center">
                     <FolderArchive size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
-                    <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無資料</p>
-                    <p className="text-slate-500 text-sm mb-6 max-w-md">您可以點擊「新增任務」，或先匯出空白的 CSV 表頭填寫後匯入。</p>
+                    <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無從 Firebase 讀取到的工項資料</p>
+                    <p className="text-slate-500 text-sm mb-6 max-w-md">您可以手動點擊右上方「新增任務」，或先匯出空白的 CSV 範例檔填寫後進行批次匯入。</p>
                     <div className="flex space-x-4">
-                      <button onClick={exportTasksToCSV} className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium text-sm rounded-lg hover:shadow-sm flex items-center">
-                        <Download size={16} className="mr-2" />匯出空白 CSV 表頭
+                      <button onClick={exportTasksToCSV} className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium text-sm rounded-lg hover:shadow-sm flex items-center transition-all">
+                        <Download size={16} className="mr-2" />匯出空白 CSV 範例
                       </button>
-                      <button onClick={triggerFileInput} disabled={isImporting} className="px-4 py-2 bg-indigo-50 text-indigo-600 font-medium text-sm rounded-lg hover:bg-indigo-100 flex items-center">
+                      <button onClick={triggerFileInput} disabled={isImporting} className="px-4 py-2 bg-indigo-50 text-indigo-600 font-medium text-sm rounded-lg hover:bg-indigo-100 flex items-center transition-colors">
                         {isImporting ? <Loader2 size={16} className="animate-spin mr-2" /> : <FileSpreadsheet size={16} className="mr-2" />}
                         匯入 CSV 工項清單
                       </button>
@@ -347,7 +345,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
               </tr>
             ) : (
               displayTasks.map(task => (
-                <tr key={task.id} onClick={() => setSelectedTask(task)} className="hover:bg-indigo-50/50 dark:hover:bg-indigo-500/10 cursor-pointer group">
+                <tr key={task.id} onClick={() => setSelectedTask(task)} className="hover:bg-indigo-50/50 dark:hover:bg-indigo-500/10 cursor-pointer group transition-colors">
                   <td className="py-4 px-6 text-sm text-slate-500 dark:text-slate-400">{task.epic}</td>
                   <td className="py-4 px-6 text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 transition-colors">
                     <div className="flex items-center">
