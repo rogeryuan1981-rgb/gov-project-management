@@ -207,6 +207,51 @@ export default function HRModule({ user, selectedProject }) {
     return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="inline ml-1 text-indigo-500" /> : <ArrowDown size={14} className="inline ml-1 text-indigo-500" />;
   };
 
+  // 匯出現況人員清冊 (CSV)
+  const exportCurrentPersonnelCSV = () => {
+    if (sortedPersonnel.length === 0) {
+      alert('目前無人員資料可供匯出');
+      return;
+    }
+
+    const headers = ['姓名', 'Email', '計畫單位', '目前職位', '駐點狀態', '在職狀態', '最初到職日', '就任此職位日', '計畫參與開始日', '計畫參與結束日'];
+    const csvRows = [headers.join(',')];
+
+    sortedPersonnel.forEach(p => {
+      const status = getPersonStatus(p);
+      let statusStr = '';
+      if (status === 'active') statusStr = '在職';
+      else if (status === 'inactive') statusStr = '已離職';
+      else if (status === 'pending') statusStr = '尚未到職';
+
+      const residentStr = p.isResident ? '是' : '否';
+
+      const row = [
+        `"${p.name || ''}"`,
+        `"${p.email || ''}"`,
+        `"${p.unit || ''}"`,
+        `"${p.role || ''}"`,
+        residentStr,
+        statusStr,
+        p.hireDate || '',
+        p.roleStartDate || '',
+        p.contractStart || '',
+        p.contractEnd || '至今'
+      ];
+      csvRows.push(row.join(','));
+    });
+
+    const csvContent = "\uFEFF" + csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `現況人員清冊_${projectName || selectedProject}_${today}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // 打開 Modal 時套用最新預設日期
   const handleOpenAddPersonModal = () => {
     setNewPerson({ 
@@ -225,7 +270,7 @@ export default function HRModule({ user, selectedProject }) {
     setEditingPerson(JSON.parse(JSON.stringify(person)));
   };
 
-  // 輔助函式：僅處理 Excel 匯入的日期格式自動補零與符號轉換
+  // 輔助函式：處理 Excel 匯入的日期格式自動補零與符號轉換
   const formatImportDate = (dateStr) => {
     if (!dateStr || dateStr.trim() === '') return '';
     let s = dateStr.trim().replace(/\//g, '-');
@@ -963,6 +1008,13 @@ export default function HRModule({ user, selectedProject }) {
             <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
               <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與動態歷程</h3>
               <div className="flex space-x-3">
+                <button 
+                  onClick={exportCurrentPersonnelCSV}
+                  className="flex items-center space-x-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:shadow-sm transition-all text-sm font-bold"
+                >
+                  <Download size={16} className="text-indigo-500 dark:text-indigo-400" />
+                  <span>匯出現況人員清冊</span>
+                </button>
                 <button 
                   onClick={handleOpenAddPersonModal}
                   className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold text-sm transition-colors"
