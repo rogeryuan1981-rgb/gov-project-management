@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart } from 'lucide-react';
-import { collection, onSnapshot, doc, addDoc, deleteDoc } from 'firebase/firestore';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Clock, ArrowRight } from 'lucide-react';
+import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase.js';
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
@@ -12,11 +12,16 @@ export default function HRModule({ user, selectedProject }) {
   // Modals 控制狀態
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
+  
+  // 轉任與歷程 Modal 狀態
+  const [historyPerson, setHistoryPerson] = useState(null);
+  const [isTransferring, setIsTransferring] = useState(false);
 
   // 取得當年度的 1/1 與 12/31 作為預設值
   const currentYear = new Date().getFullYear();
   const defaultStartDate = `${currentYear}-01-01`;
   const defaultEndDate = `${currentYear}-12-31`;
+  const today = new Date().toISOString().split('T')[0];
 
   // 表單狀態
   const [newPerson, setNewPerson] = useState({
@@ -26,6 +31,10 @@ export default function HRModule({ user, selectedProject }) {
   
   const [newReq, setNewReq] = useState({
     unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1
+  });
+
+  const [transferData, setTransferData] = useState({
+    unit: '', role: '', startDate: today
   });
 
   // 1. 讀取人事資料與人力需求設定
@@ -51,18 +60,34 @@ export default function HRModule({ user, selectedProject }) {
     return () => { unsubHR(); unsubReq(); };
   }, [user, selectedProject]);
 
+  // 動態推導可用的單位與職位清單 (從 requirements 萃取)
+  const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
+  const addAvailablePositions = [...new Set(requirements.filter(r => r.unit === newPerson.unit).map(r => r.position))].filter(Boolean);
+  const transferAvailablePositions = [...new Set(requirements.filter(r => r.unit === transferData.unit).map(r => r.position))].filter(Boolean);
+
   // 2. 處理新增人員
   const handleAddPerson = async (e) => {
     e.preventDefault();
-    if (!newPerson.name || !newPerson.role || !newPerson.hireDate) {
-      alert('請填寫必填欄位 (姓名、職位、到職日)');
+    if (!newPerson.name || !newPerson.role || !newPerson.unit || !newPerson.hireDate) {
+      alert('請填寫必填欄位 (姓名、計畫單位、職務、到職日)');
       return;
     }
     
     try {
       const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
+      
+      // 初始化建立時，將當前職位置入 history 陣列中
+      const initialHistory = [{
+        unit: newPerson.unit,
+        role: newPerson.role,
+        startDate: newPerson.roleStartDate || newPerson.hireDate,
+        endDate: null
+      }];
+
       await addDoc(hrRef, {
         ...newPerson,
+        roleStartDate: newPerson.roleStartDate || newPerson.hireDate,
+        history: initialHistory,
         projectName: selectedProject,
         createdAt: new Date().getTime()
       });
@@ -106,15 +131,67 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 4. 動態計算合規數據與單位人數彙整
-  const today = new Date().toISOString().split('T')[0];
-  
-  // 計算「今天」生效的總人力需求
+  // 4. 處理人員轉任 (更新職位與寫入歷史)
+  const handleTransferSubmit = async (e) => {
+    e.preventDefault();
+    if (!transferData.unit || !transferData.role || !transferData.startDate) {
+      alert('請完整選擇轉任單位、職務與生效日期');
+      return;
+    }
+
+    // 若該人員尚未有 history 陣列，先以現況建構第一筆
+    const currentHistory = historyPerson.history || [{
+      unit: historyPerson.unit,
+      role: historyPerson.role,
+      startDate: historyPerson.roleStartDate || historyPerson.hireDate,
+      endDate: null
+    }];
+
+    const updatedHistory = [...currentHistory];
+    
+    // 將最後一筆(現任)職務的結束日期，設定為新職務的生效日期
+    if (updatedHistory.length > 0) {
+      updatedHistory[updatedHistory.length - 1].endDate = transferData.startDate;
+    }
+
+    // 加入新的轉任紀錄
+    updatedHistory.push({
+      unit: transferData.unit,
+      role: transferData.role,
+      startDate: transferData.startDate,
+      endDate: null
+    });
+
+    try {
+      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', historyPerson.id);
+      await updateDoc(personRef, {
+        unit: transferData.unit,
+        role: transferData.role,
+        roleStartDate: transferData.startDate,
+        history: updatedHistory
+      });
+
+      // 更新本地 Modal 的檢視狀態
+      setHistoryPerson({
+        ...historyPerson,
+        unit: transferData.unit,
+        role: transferData.role,
+        roleStartDate: transferData.startDate,
+        history: updatedHistory
+      });
+      
+      setIsTransferring(false);
+      setTransferData({ unit: '', role: '', startDate: today });
+    } catch (error) {
+      console.error("轉任失敗:", error);
+    }
+  };
+
+  // 5. 動態計算合規數據與單位人數彙整
   const activeReqsToday = requirements.filter(r => r.startDate <= today && r.endDate >= today);
   const totalRequiredToday = activeReqsToday.reduce((sum, req) => sum + req.count, 0);
 
   const totalUsers = personnel.length;
-  // 駐點且在職的實際人數
   const residentCount = personnel.filter(p => p.isResident && p.status === 'active').length;
   const proxyAlertCount = personnel.filter(p => p.proxyAlert && p.status === 'active').length;
 
@@ -281,8 +358,11 @@ export default function HRModule({ user, selectedProject }) {
                       )}
                     </td>
                     <td className="py-4 px-6 text-right">
-                      <button className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 text-sm font-bold transition-colors opacity-0 group-hover:opacity-100">
-                        編輯
+                      <button 
+                        onClick={() => setHistoryPerson(u)}
+                        className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"
+                      >
+                        <Clock size={14} className="mr-1.5" /> 歷程與轉任
                       </button>
                     </td>
                   </tr>
@@ -315,6 +395,8 @@ export default function HRModule({ user, selectedProject }) {
         )}
       </div>
 
+      {/* ================= Modals 區塊 ================= */}
+      
       {/* Modal: 新增人員 */}
       {isAddPersonModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -329,56 +411,160 @@ export default function HRModule({ user, selectedProject }) {
               </button>
             </div>
             <div className="p-6 overflow-y-auto">
-              <form id="addPersonForm" onSubmit={handleAddPerson} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">姓名 <span className="text-red-500">*</span></label>
-                    <input required type="text" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">所屬計畫單位</label>
-                    <input type="text" value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">目前職位 <span className="text-red-500">*</span></label>
-                    <input required type="text" value={newPerson.role} onChange={e => setNewPerson({...newPerson, role: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">是否為駐點人員</label>
-                    <select value={newPerson.isResident} onChange={e => setNewPerson({...newPerson, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                      <option value="true">是 (駐點)</option>
-                      <option value="false">否</option>
-                    </select>
-                  </div>
-                  
-                  {/* 分隔線 */}
-                  <div className="col-span-2 my-1 border-t border-slate-100 dark:border-slate-700"></div>
-
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">最初到職日 <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.hireDate} onChange={e => setNewPerson({...newPerson, hireDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">就任此職位日 (轉任日) <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.roleStartDate} onChange={e => setNewPerson({...newPerson, roleStartDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">計畫參與開始日 <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.contractStart} onChange={e => setNewPerson({...newPerson, contractStart: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2 md:col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">計畫參與結束日 <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.contractEnd} onChange={e => setNewPerson({...newPerson, contractEnd: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
+              {availableUnits.length === 0 ? (
+                <div className="p-6 bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-400 rounded-2xl border border-orange-200 dark:border-orange-500/30 text-center">
+                  <AlertCircle size={32} className="mx-auto mb-3 text-orange-500" />
+                  <p className="font-bold text-sm">請先建立「計畫人力需求設定」</p>
+                  <p className="text-xs mt-2">系統需依據人力需求清單，提供單位與職位選項，以確保人員建檔合規。</p>
                 </div>
-              </form>
+              ) : (
+                <form id="addPersonForm" onSubmit={handleAddPerson} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">姓名 <span className="text-red-500">*</span></label>
+                      <input required type="text" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    </div>
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">所屬計畫單位 <span className="text-red-500">*</span></label>
+                      <select required value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value, role: ''})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <option value="">-- 請選擇單位 --</option>
+                        {availableUnits.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">目前職位 <span className="text-red-500">*</span></label>
+                      <select required value={newPerson.role} onChange={e => setNewPerson({...newPerson, role: e.target.value})} disabled={!newPerson.unit} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50">
+                        <option value="">-- 請選擇職位 --</option>
+                        {addAvailablePositions.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </div>
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">是否為駐點人員</label>
+                      <select value={newPerson.isResident} onChange={e => setNewPerson({...newPerson, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <option value="true">是 (駐點)</option>
+                        <option value="false">否</option>
+                      </select>
+                    </div>
+                    
+                    {/* 分隔線 */}
+                    <div className="col-span-2 my-1 border-t border-slate-100 dark:border-slate-700"></div>
+
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">最初到職日 <span className="text-red-500">*</span></label>
+                      <input required type="date" value={newPerson.hireDate} onChange={e => setNewPerson({...newPerson, hireDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    </div>
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">就任此職位日 (若為轉任) <span className="text-red-500">*</span></label>
+                      <input required type="date" value={newPerson.roleStartDate} onChange={e => setNewPerson({...newPerson, roleStartDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    </div>
+
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">計畫參與開始日 <span className="text-red-500">*</span></label>
+                      <input required type="date" value={newPerson.contractStart} onChange={e => setNewPerson({...newPerson, contractStart: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    </div>
+                    <div className="col-span-2 md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">計畫參與結束日 <span className="text-red-500">*</span></label>
+                      <input required type="date" value={newPerson.contractEnd} onChange={e => setNewPerson({...newPerson, contractEnd: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    </div>
+                  </div>
+                </form>
+              )}
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
-              <button onClick={() => setIsAddPersonModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
-              <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center">
-                <Save size={16} className="mr-2" /> 儲存人員
+            {availableUnits.length > 0 && (
+              <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
+                <button onClick={() => setIsAddPersonModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
+                <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center">
+                  <Save size={16} className="mr-2" /> 儲存人員
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: 人員職位異動歷程與轉任 */}
+      {historyPerson && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center">
+                <Clock size={20} className="mr-2 text-indigo-500" />
+                {historyPerson.name} 的職位異動歷程
+              </h3>
+              <button onClick={() => { setHistoryPerson(null); setIsTransferring(false); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
+                <X size={20} />
               </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
+              {/* 歷程時間軸 */}
+              <div className="space-y-4 mb-8">
+                {(historyPerson.history || [{
+                  unit: historyPerson.unit, role: historyPerson.role, startDate: historyPerson.roleStartDate || historyPerson.hireDate, endDate: null
+                }]).map((record, index) => (
+                  <div key={index} className={`p-4 rounded-xl border flex items-center justify-between ${record.endDate ? 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700' : 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/30'}`}>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${record.endDate ? 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-400'}`}>
+                          {record.endDate ? '歷史職位' : '當前現職'}
+                        </span>
+                        <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm">{record.role}</h4>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 flex items-center">
+                        <span className="font-medium">{record.unit}</span>
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-mono text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded">
+                        {record.startDate} <ArrowRight size={12} className="inline mx-1" /> {record.endDate || '至今'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* 執行轉任設定區塊 */}
+              {isTransferring ? (
+                <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-indigo-200 dark:border-indigo-500/30 shadow-sm animate-in slide-in-from-top-4">
+                  <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-400 mb-3 flex items-center">
+                    <ArrowRight size={16} className="mr-1" /> 設定新職位 (轉任)
+                  </h4>
+                  <form onSubmit={handleTransferSubmit} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">新計畫單位</label>
+                        <select required value={transferData.unit} onChange={e => setTransferData({...transferData, unit: e.target.value, role: ''})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500">
+                          <option value="">-- 請選擇 --</option>
+                          {availableUnits.map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">新擔任職務</label>
+                        <select required value={transferData.role} onChange={e => setTransferData({...transferData, role: e.target.value})} disabled={!transferData.unit} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500 disabled:opacity-50">
+                          <option value="">-- 請選擇 --</option>
+                          {transferAvailablePositions.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">轉任生效日期</label>
+                        <input required type="date" value={transferData.startDate} onChange={e => setTransferData({...transferData, startDate: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end space-x-2 pt-2">
+                      <button type="button" onClick={() => setIsTransferring(false)} className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
+                      <button type="submit" className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors">確認轉任</button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => setIsTransferring(true)}
+                  disabled={historyPerson.status !== 'active'}
+                  className="w-full py-3 border-2 border-dashed border-indigo-200 dark:border-indigo-500/30 text-indigo-600 dark:text-indigo-400 font-bold text-sm rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  + 執行人員職位異動 (轉任)
+                </button>
+              )}
             </div>
           </div>
         </div>
