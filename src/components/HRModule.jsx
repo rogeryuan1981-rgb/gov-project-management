@@ -651,9 +651,12 @@ export default function HRModule({ user, selectedProject }) {
       const status = getPersonStatus(p); let statusStr = '';
       if (status === 'active') statusStr = '在職'; else if (status === 'inactive') statusStr = '已離職'; else if (status === 'pending') statusStr = '尚未到職';
       const residentStr = p.isResident ? '是' : '否';
-      // 修正結束日期的顯示邏輯
-      const endStr = p.contractEnd ? p.contractEnd : (status === 'pending' ? '未定' : '至今');
-      csvRows.push([ `"${p.name || ''}"`, `"${p.email || ''}"`, `"${p.unit || ''}"`, `"${p.role || ''}"`, residentStr, statusStr, p.hireDate || '', p.roleStartDate || '', p.contractStart || '', endStr ].join(','));
+      
+      // 修正在 CSV 匯出時尚未到職人員的日期顯示邏輯
+      const startStr = status === 'pending' ? '尚未到職' : (p.contractStart || '');
+      const endStr = status === 'pending' ? '尚未到職' : (p.contractEnd || '至今');
+      
+      csvRows.push([ `"${p.name || ''}"`, `"${p.email || ''}"`, `"${p.unit || ''}"`, `"${p.role || ''}"`, residentStr, statusStr, p.hireDate || '', p.roleStartDate || '', startStr, endStr ].join(','));
     });
     const blob = new Blob(["\uFEFF" + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -795,7 +798,12 @@ export default function HRModule({ user, selectedProject }) {
                           </td>
                           <td className="py-4 px-6"><span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span></td>
                           <td className="py-4 px-6"><span className="text-sm font-medium text-slate-600 dark:text-slate-300">{u.roleStartDate || u.hireDate}</span></td>
-                          <td className="py-4 px-6"><div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">{u.contractStart || '-'} ~ {u.contractEnd || (status === 'pending' ? '未定' : '至今')}</div><div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div></td>
+                          <td className="py-4 px-6">
+                            <div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">
+                              {status === 'pending' ? '尚未到職' : `${u.contractStart || '-'} ~ ${u.contractEnd || '至今'}`}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div>
+                          </td>
                           <td className="py-4 px-6">
                             <div className="flex items-center space-x-2">
                               <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{u.files?.length || 0} 個檔案</span>
