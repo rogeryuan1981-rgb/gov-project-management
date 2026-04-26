@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -24,6 +24,7 @@ export default function HRModule({ user, selectedProject }) {
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
   const [isVacancyModalOpen, setIsVacancyModalOpen] = useState(false); // 職位空缺明細 Modal
+  const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); // 未來預估明細 Modal
   
   // 維護與編輯人員 Modal 狀態
   const [editingPerson, setEditingPerson] = useState(null);
@@ -355,7 +356,6 @@ export default function HRModule({ user, selectedProject }) {
         if (cols.length >= 2) {
           await addDoc(reqRef, {
             unit: cols[0], position: cols[1], count: parseInt(cols[2], 10) || 1,
-            // 使用 formatImportDate 處理日期格式與自動補零
             startDate: formatImportDate(cols[3]) || defaultStartDate, 
             endDate: formatImportDate(cols[4]) || defaultEndDate,
             isResident: cols[5] === '是' || cols[5] === 'true', note: cols[6] || '',
@@ -406,7 +406,7 @@ export default function HRModule({ user, selectedProject }) {
           alert(`歷程日期錯誤：因後續有轉任【${next.role}】，先前的職務【${current.role}】必須填寫結束日！`);
           return;
         }
-        // 嚴格阻擋重疊：結束日必須確實早於下一個開始日 (轉為 timestamp 比較)
+        // 嚴格阻擋重疊：結束日必須確實早於下一個開始日
         if (new Date(current.endDate).getTime() >= new Date(next.startDate).getTime()) {
           alert(`歷程重疊錯誤：【${current.role}】的結束日 (${current.endDate}) 必須早於【${next.role}】的開始日 (${next.startDate})！\n\n同一個人不可在同一天身兼兩筆歷程。`);
           return;
@@ -466,7 +466,9 @@ export default function HRModule({ user, selectedProject }) {
     }, 1200);
   };
 
-  // 數據統計計算與明細
+  // =========================================================================
+  // 核心邏輯升級：數據統計計算與明細 (結合「過去到今天」與「未來60天預估」)
+  // =========================================================================
   const activeReqsToday = requirements.filter(r => r.startDate <= today && r.endDate >= today);
   const totalResidentRequiredToday = activeReqsToday.filter(r => r.isResident).reduce((sum, req) => sum + req.count, 0);
   const totalNonResidentRequiredToday = activeReqsToday.filter(r => !r.isResident).reduce((sum, req) => sum + req.count, 0);
@@ -479,8 +481,9 @@ export default function HRModule({ user, selectedProject }) {
 
   const proxyAlertCount = personnel.filter(p => p.proxyAlert && checkIsActive(p.contractEnd)).length;
 
+  // -- 1. 計算過去到今天的空缺 (現有異常) --
   let totalVacancyDays = 0;
-  const vacancyBreakdown = []; // 儲存職缺空缺明細
+  const vacancyBreakdown = []; 
   const todayMs = new Date(today).getTime();
 
   requirements.forEach(req => {
@@ -489,38 +492,182 @@ export default function HRModule({ user, selectedProject }) {
     if (reqStartMs > reqEndMs) return;
 
     const segments = [];
+    const personnelInRoleMap = new Map();
+
     personnel.forEach(p => {
       const personContractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : todayMs;
+      
       (p.history || []).forEach(h => {
         if (h.unit === req.unit && h.role === req.position) {
           const sMs = new Date(h.startDate).getTime();
           let eMs = h.endDate ? new Date(h.endDate).getTime() : todayMs;
-          eMs = Math.min(eMs, personContractEndMs); // 人員職務不能超過其整體合約結束日
+          eMs = Math.min(eMs, personContractEndMs); 
+          
           if (sMs <= eMs) {
-            segments.push({ sMs, eMs });
+            if (sMs <= reqEndMs && eMs >= reqStartMs) {
+              const actualStartMs = Math.max(sMs, reqStartMs);
+              const actualEndMs = Math.min(eMs, reqEndMs);
+              
+              if (!personnelInRoleMap.has(p.id)) {
+                personnelInRoleMap.set(p.id, { name: p.name, periods: [] });
+              }
+              personnelInRoleMap.get(p.id).periods.push({
+                start: new Date(actualStartMs).toISOString().split('T')[0],
+                end: actualEndMs === todayMs ? '至今' : new Date(actualEndMs).toISOString().split('T')[0]
+              });
+              segments.push({ sMs, eMs });
+            }
           }
         }
       });
     });
 
     let reqVacancyDays = 0;
+    let currentVacancyPeriod = null;
+    const vacancyPeriods = [];
+
     for (let time = reqStartMs; time <= reqEndMs; time += 86400000) {
       let activeCount = 0;
       segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
-      if (activeCount < req.count) reqVacancyDays += (req.count - activeCount);
+      
+      const missingCount = req.count - activeCount;
+      if (missingCount > 0) {
+        reqVacancyDays += missingCount; 
+
+        const currentDateStr = new Date(time).toISOString().split('T')[0];
+        
+        if (!currentVacancyPeriod) {
+          currentVacancyPeriod = { startDate: currentDateStr, endDate: currentDateStr, missingCount, days: 1 };
+        } else if (currentVacancyPeriod.missingCount === missingCount) {
+          currentVacancyPeriod.endDate = currentDateStr; 
+          currentVacancyPeriod.days += 1;
+        } else {
+          vacancyPeriods.push(currentVacancyPeriod);
+          currentVacancyPeriod = { startDate: currentDateStr, endDate: currentDateStr, missingCount, days: 1 };
+        }
+      } else {
+        if (currentVacancyPeriod) {
+          vacancyPeriods.push(currentVacancyPeriod);
+          currentVacancyPeriod = null;
+        }
+      }
     }
-    
+    if (currentVacancyPeriod) vacancyPeriods.push(currentVacancyPeriod);
+
     totalVacancyDays += reqVacancyDays;
 
     if (reqVacancyDays > 0) {
       vacancyBreakdown.push({
-        unit: req.unit,
-        position: req.position,
-        requiredCount: req.count,
-        vacancyDays: reqVacancyDays,
-        startDate: req.startDate,
-        endDate: req.endDate
+        unit: req.unit, position: req.position, requiredCount: req.count,
+        totalVacancyDays: reqVacancyDays, reqStartDate: req.startDate, reqEndDate: req.endDate,
+        personnelInRole: Array.from(personnelInRoleMap.values()), vacancyPeriods: vacancyPeriods
       });
+    }
+  });
+
+  // -- 2. 未來異動與空缺預測引擎 (未來 60 天內) --
+  const forecastDays = 60;
+  const futureStartMs = todayMs + 86400000; // 從明天開始算
+  const futureEndMs = todayMs + (forecastDays * 86400000);
+  
+  const upcomingEvents = []; // 預估的人員異動 (離職/轉任/新增需求)
+  const futureVacancies = []; // 推演出的職位空缺預測
+
+  // 2-1. 收集未來的人員異動與需求異動
+  personnel.forEach(p => {
+    // 未來離職
+    if (p.contractEnd) {
+      const endMs = new Date(p.contractEnd).getTime();
+      if (endMs >= futureStartMs && endMs <= futureEndMs) {
+        upcomingEvents.push({
+          date: p.contractEnd,
+          dateMs: endMs,
+          type: 'leave',
+          desc: `${p.name} 預計離職 (${p.unit} - ${p.role})`
+        });
+      }
+    }
+    // 未來卸任/轉任
+    (p.history || []).forEach(h => {
+      if (h.endDate && h.endDate !== p.contractEnd) {
+        const hEndMs = new Date(h.endDate).getTime();
+        if (hEndMs >= futureStartMs && hEndMs <= futureEndMs) {
+          upcomingEvents.push({
+            date: h.endDate,
+            dateMs: hEndMs,
+            type: 'transfer',
+            desc: `${p.name} 預計卸任 (${h.unit} - ${h.role})`
+          });
+        }
+      }
+    });
+  });
+
+  requirements.forEach(r => {
+    const rStartMs = new Date(r.startDate).getTime();
+    if (rStartMs >= futureStartMs && rStartMs <= futureEndMs) {
+      upcomingEvents.push({
+        date: r.startDate,
+        dateMs: rStartMs,
+        type: 'new_req',
+        desc: `新增人力需求 (${r.unit} - ${r.position}，共 ${r.count} 人)`
+      });
+    }
+  });
+  upcomingEvents.sort((a, b) => a.dateMs - b.dateMs);
+
+  // 2-2. 模擬未來 60 天的空缺推演
+  requirements.forEach(req => {
+    const reqStartMs = new Date(req.startDate).getTime();
+    const reqEndMs = new Date(req.endDate).getTime();
+
+    // 只取「未來預測窗口」與「需求區間」的交集
+    const checkStartMs = Math.max(futureStartMs, reqStartMs);
+    const checkEndMs = Math.min(futureEndMs, reqEndMs);
+
+    if (checkStartMs <= checkEndMs) {
+      const segments = [];
+      personnel.forEach(p => {
+        // 未來推演：如果有人員合約結束，他未來的 active 狀態會被切斷
+        const personContractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : checkEndMs;
+        (p.history || []).forEach(h => {
+          if (h.unit === req.unit && h.role === req.position) {
+            const sMs = new Date(h.startDate).getTime();
+            let eMs = h.endDate ? new Date(h.endDate).getTime() : checkEndMs;
+            eMs = Math.min(eMs, personContractEndMs);
+            if (sMs <= eMs) {
+              segments.push({ sMs, eMs });
+            }
+          }
+        });
+      });
+
+      let currentFutureVacancy = null;
+      for (let time = checkStartMs; time <= checkEndMs; time += 86400000) {
+        let activeCount = 0;
+        segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
+        
+        const missingCount = req.count - activeCount;
+        if (missingCount > 0) {
+          const currentDateStr = new Date(time).toISOString().split('T')[0];
+          if (!currentFutureVacancy) {
+            currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
+          } else if (currentFutureVacancy.missingCount === missingCount) {
+            currentFutureVacancy.endDate = currentDateStr;
+          } else {
+            futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
+            currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
+          }
+        } else {
+          if (currentFutureVacancy) {
+            futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
+            currentFutureVacancy = null;
+          }
+        }
+      }
+      if (currentFutureVacancy) {
+        futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
+      }
     }
   });
 
@@ -583,40 +730,30 @@ export default function HRModule({ user, selectedProject }) {
             </button>
           </div>
 
-          {/* 上方統計區塊 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* 上方統計區塊 (變更為 Grid-Cols-4) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
               <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400">
-                <CheckCircle2 size={28} />
+                <CheckCircle2 size={24} />
               </div>
               <div>
-                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力配置</p>
-                <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
+                <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力</p>
+                <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">
                   {residentCount}
-                  <span className="text-lg text-slate-400 mx-1">/ {totalResidentRequiredToday || 0}</span>
-                  {totalResidentRequiredToday > 0 && (
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${isResidentCompliant ? 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400'}`}>
-                      {isResidentCompliant ? '合規' : '不合規'}
-                    </span>
-                  )}
+                  <span className="text-sm text-slate-400 mx-1">/ {totalResidentRequiredToday || 0}</span>
                 </p>
               </div>
             </div>
 
             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
               <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400">
-                <Users size={28} />
+                <Users size={24} />
               </div>
               <div>
-                <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力配置</p>
-                <p className="text-3xl font-black text-slate-800 dark:text-white flex items-baseline">
+                <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力</p>
+                <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">
                   {nonResidentCount}
-                  <span className="text-lg text-slate-400 mx-1">/ {totalNonResidentRequiredToday || 0}</span>
-                  {totalNonResidentRequiredToday > 0 && (
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ml-2 border ${isNonResidentCompliant ? 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400'}`}>
-                      {isNonResidentCompliant ? '合規' : '不合規'}
-                    </span>
-                  )}
+                  <span className="text-sm text-slate-400 mx-1">/ {totalNonResidentRequiredToday || 0}</span>
                 </p>
               </div>
             </div>
@@ -627,22 +764,43 @@ export default function HRModule({ user, selectedProject }) {
             >
               <div className="flex items-center space-x-5">
                 <div className={`p-3.5 rounded-xl transition-transform ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
-                  <CalendarDays size={28} />
+                  <CalendarDays size={24} />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">職位異常空缺天數</p>
-                  <p className={`text-3xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">今日異常空缺</p>
+                  <p className={`text-2xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
                     {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
                   </p>
                 </div>
               </div>
               {totalVacancyDays > 0 && (
-                <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
-                  <span className="text-[10px] font-bold mb-1">點擊看明細</span>
+                <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity">
                   <ChevronRight size={16} />
                 </div>
               )}
             </div>
+
+            {/* 新增：近期異動預估卡片 */}
+            <div 
+              onClick={() => setIsForecastModalOpen(true)}
+              className="p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-500/30 cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 group"
+            >
+              <div className="flex items-center space-x-5">
+                <div className="p-3.5 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <LineChart size={24} />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">近期異動預估</p>
+                  <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                    {futureVacancies.length + upcomingEvents.length} <span className="text-sm font-medium text-indigo-500">項警示</span>
+                  </p>
+                </div>
+              </div>
+              <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                <ChevronRight size={16} />
+              </div>
+            </div>
+
           </div>
 
           {/* 將各單位人數彙整區塊移動到這裡 */}
@@ -1390,52 +1548,208 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 職位空缺明細 */}
+      {/* Modal: 未來異動預測與職缺空窗警告 */}
+      {isForecastModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center">
+                <LineChart size={20} className="mr-2 text-indigo-500" />
+                近期異動與空窗預測分析 (未來 60 天內)
+              </h3>
+              <button onClick={() => setIsForecastModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-8">
+              
+              {/* 預估的人員與需求異動 */}
+              <div>
+                <h4 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center border-b border-slate-200 dark:border-slate-700 pb-2">
+                  <ArrowUpDown size={18} className="mr-2 text-slate-400" /> 已知的人員離職、轉任與新增需求
+                </h4>
+                {upcomingEvents.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400 italic bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">未來 60 天內無已知的變動。</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {upcomingEvents.map((evt, idx) => (
+                      <div key={idx} className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-start shadow-sm">
+                        <div className={`p-2 rounded-lg mr-3 flex-shrink-0 ${
+                          evt.type === 'leave' ? 'bg-red-50 text-red-500 dark:bg-red-500/10' :
+                          evt.type === 'transfer' ? 'bg-amber-50 text-amber-500 dark:bg-amber-500/10' :
+                          'bg-emerald-50 text-emerald-500 dark:bg-emerald-500/10'
+                        }`}>
+                          <CalendarDays size={18} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5">預計發生日：{evt.date}</p>
+                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{evt.desc}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 未來空窗推演結果 */}
+              <div>
+                <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-4 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2">
+                  <AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                  依據上述已知變動進行推演，若不補齊人力，下列職務將在特定日期產生空缺斷層：
+                </p>
+                {futureVacancies.length === 0 ? (
+                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                    <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" />
+                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {futureVacancies.map((fv, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-white dark:bg-slate-800 border-l-4 border-l-orange-500 border border-slate-200 dark:border-slate-700 p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{fv.unit} - {fv.role}</span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono tracking-tight">
+                            空窗區間：{fv.startDate} ~ {fv.endDate}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 px-3 py-1.5 rounded-lg border border-orange-100 dark:border-orange-500/30">
+                            預計缺少 {fv.missingCount} 人
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+            </div>
+            
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
+              <button onClick={() => setIsForecastModalOpen(false)} className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl transition-colors shadow-sm hover:bg-indigo-700">
+                了解，關閉視窗
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: 今日職位空缺明細 (詳細卡片版) */}
       {isVacancyModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-800 w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
               <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center">
                 <CalendarDays size={20} className="mr-2 text-orange-500" />
-                職位異常空缺明細
+                今日職位異常空缺明細分析
               </h3>
               <button onClick={() => setIsVacancyModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
-              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
-                    <tr>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位 / 職位</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">需求人數</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">需求區間</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">累計空缺天數</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {vacancyBreakdown.length === 0 ? (
-                      <tr><td colSpan="4" className="py-8 text-center text-xs text-slate-500">目前無職位空缺異常</td></tr>
-                    ) : (
-                      vacancyBreakdown.map((item, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                          <td className="py-3 px-4">
-                            <div className="font-bold text-sm text-slate-800 dark:text-slate-200">{item.position}</div>
-                            <div className="text-[10px] text-slate-500">{item.unit}</div>
-                          </td>
-                          <td className="py-3 px-4 text-center font-bold text-slate-700 dark:text-slate-300">{item.requiredCount}</td>
-                          <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 font-mono tracking-tight">{item.startDate} ~ {item.endDate}</td>
-                          <td className="py-3 px-4 text-right font-black text-orange-600 dark:text-orange-400">{item.vacancyDays} <span className="text-xs font-medium">天</span></td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-6">
+              {vacancyBreakdown.length === 0 ? (
+                <div className="py-12 text-center text-slate-500">
+                  <CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400 opacity-50" />
+                  <p className="font-bold text-lg">目前無職位空缺異常</p>
+                  <p className="text-sm mt-2">各項計畫人力需求皆已補齊。</p>
+                </div>
+              ) : (
+                vacancyBreakdown.map((item, idx) => (
+                  <div key={idx} className="bg-white dark:bg-slate-800 rounded-2xl border border-orange-200 dark:border-orange-500/30 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                    
+                    {/* 卡片標題區 */}
+                    <div className="bg-orange-50 dark:bg-orange-500/10 p-4 border-b border-orange-100 dark:border-orange-500/20 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center space-x-3 mb-1">
+                          <span className="font-bold text-slate-800 dark:text-slate-200 text-base">{item.unit}</span>
+                          <span className="text-slate-300 dark:text-slate-600">|</span>
+                          <span className="font-bold text-indigo-700 dark:text-indigo-400 text-base">{item.position}</span>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 font-mono tracking-tight">
+                          需求規定：{item.requiredCount} 人 <span className="mx-1">•</span> 區間：{item.reqStartDate} ~ {item.reqEndDate}
+                        </div>
+                      </div>
+                      <div className="bg-white dark:bg-slate-800 px-4 py-2 rounded-xl border border-orange-100 dark:border-orange-500/30 flex items-center justify-center shadow-sm">
+                        <span className="text-xs font-bold text-slate-500 mr-2">累計空缺：</span>
+                        <span className="text-xl font-black text-orange-600 dark:text-orange-400">{item.totalVacancyDays} <span className="text-sm font-medium">人天</span></span>
+                      </div>
+                    </div>
+
+                    {/* 明細內容區 */}
+                    <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-8">
+                      
+                      {/* 左側：在職人員歷史 */}
+                      <div>
+                        <h5 className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-3 flex items-center border-b border-slate-100 dark:border-slate-700 pb-2">
+                          <Users size={16} className="mr-2 text-slate-400" />
+                          該期間內擔任過此職務之人員
+                        </h5>
+                        {item.personnelInRole.length === 0 ? (
+                          <p className="text-sm text-slate-400 italic bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg text-center">此期間內尚無任何人員在職紀錄。</p>
+                        ) : (
+                          <ul className="space-y-3">
+                            {item.personnelInRole.map((p, pIdx) => (
+                              <li key={pIdx} className="bg-slate-50 dark:bg-slate-700/30 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                                <div className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-1">{p.name}</div>
+                                <div className="space-y-1">
+                                  {p.periods.map((per, perIdx) => (
+                                    <div key={perIdx} className="text-xs text-slate-500 dark:text-slate-400 flex items-center font-mono">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-2"></div>
+                                      {per.start} <ChevronRight size={12} className="mx-1" /> {per.end}
+                                    </div>
+                                  ))}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+
+                      {/* 右側：確切的斷層區段 */}
+                      <div>
+                        <h5 className="text-sm font-bold text-orange-600 dark:text-orange-400 mb-3 flex items-center border-b border-orange-100 dark:border-orange-500/20 pb-2">
+                          <AlertCircle size={16} className="mr-2" />
+                          確切的人力空窗區段
+                        </h5>
+                        <ul className="space-y-3">
+                          {item.vacancyPeriods.map((vp, vpIdx) => (
+                            <li key={vpIdx} className="flex items-center justify-between bg-white dark:bg-slate-800 border border-orange-200 dark:border-orange-500/30 p-3 rounded-xl shadow-sm relative overflow-hidden">
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-orange-400"></div>
+                              <div className="flex flex-col ml-2">
+                                <span className="text-slate-800 dark:text-slate-200 font-bold text-sm font-mono tracking-tight mb-0.5">
+                                  {vp.startDate} <ChevronRight size={12} className="inline text-slate-400 mx-0.5" /> {vp.endDate}
+                                </span>
+                                <span className="text-xs font-bold text-orange-500 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 px-2 py-0.5 rounded w-fit mt-1">
+                                  缺少 {vp.missingCount} 人
+                                </span>
+                              </div>
+                              <div className="text-right flex flex-col items-end">
+                                <span className="text-lg font-black text-orange-600 dark:text-orange-400">{vp.days}</span>
+                                <span className="text-[10px] text-slate-400">天</span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
-              <button onClick={() => setIsVacancyModalOpen(false)} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">關閉</button>
+            
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
+              <button 
+                onClick={() => setIsVacancyModalOpen(false)} 
+                className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white text-slate-700 text-sm font-bold rounded-xl transition-colors"
+              >
+                關閉明細
+              </button>
             </div>
           </div>
         </div>
