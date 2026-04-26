@@ -13,6 +13,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [requirements, setRequirements] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [projectName, setProjectName] = useState('');
+  const [projectStartDate, setProjectStartDate] = useState(''); // 新增：專案起始日狀態
   const [isDataLoaded, setIsDataLoaded] = useState(false);
 
   // 取得今年初到今天的預設區間
@@ -36,11 +37,14 @@ export default function ReportsModule({ user, selectedProject }) {
   useEffect(() => {
     if (!user || !selectedProject) return;
 
-    // 取得專案名稱
+    // 取得專案名稱與專案起始日
     const projectRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
     const unsubProject = onSnapshot(projectRef, (snapshot) => {
       const currentProj = snapshot.docs.map(d => ({id: d.id, ...d.data()})).find(p => p.id === selectedProject);
-      if (currentProj) setProjectName(currentProj.name);
+      if (currentProj) {
+        setProjectName(currentProj.name);
+        if (currentProj.startDate) setProjectStartDate(currentProj.startDate);
+      }
     });
 
     const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
@@ -123,6 +127,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
+    const projStartMs = projectStartDate ? new Date(projectStartDate).getTime() : 0;
 
     if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
 
@@ -155,8 +160,8 @@ export default function ReportsModule({ user, selectedProject }) {
       if (pStartMs <= endMs && pEndMs >= startMs) {
          const events = [];
          
-         // 決定報表上的「第一筆生效日」：取「計畫參與開始日」與「報表起始日」較晚者
-         const effectiveStartMs = Math.max(pStartMs, startMs);
+         // 【修正邏輯】：取「計畫參與開始日」與「計畫起始日」較晚者
+         const effectiveStartMs = Math.max(pStartMs, projStartMs);
          const effectiveStartDateStr = new Date(effectiveStartMs).toISOString().split('T')[0];
          
          // 尋找在該「生效日」時擔任的單位與職位
@@ -208,7 +213,7 @@ export default function ReportsModule({ user, selectedProject }) {
         return getRoleWeight(a.role) - getRoleWeight(b.role);
     });
 
-    // 產生異動軌跡的 HTML Rows (新版呈現方式)
+    // 產生異動軌跡的 HTML Rows
     let changeRecordsHtml = '';
     if (activePersonnelChanges.length === 0) {
       changeRecordsHtml = '<tr><td colspan="2" class="text-center" style="color:#94a3b8;">此區間內無任何人員在職紀錄</td></tr>';
@@ -246,9 +251,13 @@ export default function ReportsModule({ user, selectedProject }) {
           if (!roleOccupantsMap[key]) {
             roleOccupantsMap[key] = { unit: h.unit, role: h.role, occupants: [] };
           }
+          // 【修正邏輯】：擔任職位期間，起日也取「該歷程起日」與「計畫起始日」較晚者
+          const displayStartMs = Math.max(hStartMs, projStartMs);
+          const displayStartDateStr = new Date(displayStartMs).toISOString().split('T')[0];
+
           roleOccupantsMap[key].occupants.push({
             name: p.name,
-            start: h.startDate,
+            start: displayStartDateStr,
             end: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
           });
         }
@@ -372,7 +381,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
         <h2>一、 期間內人事異動軌跡</h2>
-        <p style="font-size: 12px; color: #64748b;">說明：列出本區間曾在職之人員及其職務異動。首筆紀錄為參與計畫期間內的最初職位，離職日認定為最後工作日之隔日。人員排序依據其最初職務之單位與職位順序排序。</p>
+        <p style="font-size: 12px; color: #64748b;">說明：列出本區間曾在職之人員及其職務異動。首筆紀錄為參與計畫期間內的最初職位（起始日依據實際加入日與計畫起始日較晚者認定），離職日認定為最後工作日之隔日。人員排序依據其最初職務之單位與職位順序排序。</p>
         <table>
           <tr>
             <th style="width:150px;">姓名</th>
