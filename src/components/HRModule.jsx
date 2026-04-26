@@ -137,6 +137,10 @@ export default function HRModule({ user, selectedProject }) {
         bValue = (checkIsActive(b.contractEnd) ? '1' : '0') + (b.isResident ? '1' : '0');
         break;
       case 'role':
+        aValue = a.role || '';
+        bValue = b.role || '';
+        break;
+      case 'roleDate':
         aValue = a.roleStartDate || a.hireDate || '';
         bValue = b.roleStartDate || b.hireDate || '';
         break;
@@ -715,7 +719,7 @@ export default function HRModule({ user, selectedProject }) {
               </div>
             )}
             
-            <div className="overflow-x-auto flex-1">
+            <div className="overflow-x-auto flex-1 min-h-[450px]">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                   <tr>
@@ -735,7 +739,13 @@ export default function HRModule({ user, selectedProject }) {
                       className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
                       onClick={() => handleSort('role')}
                     >
-                      現職與開始日 <SortIcon columnKey="role" />
+                      現任職務 <SortIcon columnKey="role" />
+                    </th>
+                    <th 
+                      className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
+                      onClick={() => handleSort('roleDate')}
+                    >
+                      就任日期 <SortIcon columnKey="roleDate" />
                     </th>
                     <th 
                       className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
@@ -750,7 +760,7 @@ export default function HRModule({ user, selectedProject }) {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
                   {personnel.length === 0 ? (
                     <tr>
-                      <td colSpan="6" className="py-16 text-center">
+                      <td colSpan="7" className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center">
                           <Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
                           <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無人事建檔資料</p>
@@ -760,7 +770,7 @@ export default function HRModule({ user, selectedProject }) {
                     </tr>
                   ) : sortedPersonnel.length === 0 ? (
                     <tr>
-                      <td colSpan="6" className="py-16 text-center">
+                      <td colSpan="7" className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center">
                           <Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
                           <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">查無符合目前條件之人員資料</p>
@@ -790,10 +800,10 @@ export default function HRModule({ user, selectedProject }) {
                             </div>
                           </td>
                           <td className="py-4 px-6">
-                            <div className="flex flex-col">
-                              <span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span>
-                              <span className="text-[10px] text-slate-500 mt-1">現職日: {u.roleStartDate || u.hireDate}</span>
-                            </div>
+                            <span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span>
+                          </td>
+                          <td className="py-4 px-6">
+                            <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{u.roleStartDate || u.hireDate}</span>
                           </td>
                           <td className="py-4 px-6">
                             <div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">
