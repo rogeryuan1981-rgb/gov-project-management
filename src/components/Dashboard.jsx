@@ -1,117 +1,152 @@
-import React, { useState } from 'react';
-import { Sun, Moon, Bell, LogOut, ChevronDown, Users, ArrowLeft, Settings } from 'lucide-react';
-import { signInAnonymously, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
-import { auth } from '../lib/firebase.js';
+import React, { useState, useEffect } from 'react';
+import { CheckSquare, AlertCircle, FileBarChart, Calculator, Upload, ArrowRightLeft, Users, Star } from 'lucide-react';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db } from '../lib/firebase.js';
 
-export default function Header({ darkMode, setDarkMode, user, selectedTask, setSelectedTask, activeTab }) {
-  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-  const handleGoogleLogin = async () => {
-    try { 
-      await signInWithPopup(auth, new GoogleAuthProvider()); 
-      setIsUserDropdownOpen(false); 
-    } catch (error) { 
-      console.error("登入失敗:", error); 
-    }
-  };
+// 對應系統中所有可加入最愛的模組設定
+const AVAILABLE_MODULES = [
+  { id: 'tasks', icon: ArrowRightLeft, color: 'text-amber-600 dark:text-amber-400', title: '工項與進度追蹤', desc: '快速轉派或檢視待辦清單' },
+  { id: 'hr', icon: Users, color: 'text-pink-600 dark:text-pink-400', title: '人事合規紀錄', desc: '人員名冊與考勤匯入' },
+  { id: 'archive', icon: Upload, color: 'text-emerald-600 dark:text-emerald-400', title: '雲端歸檔空間', desc: '直連 Google Drive 空間' },
+  { id: 'reimbursement', icon: Calculator, color: 'text-indigo-600 dark:text-indigo-400', title: '核銷作業專區', desc: '產出考勤、異動與成果報告' },
+];
 
-  const handleLogout = async () => {
-    try { 
-      await signOut(auth); 
-      setIsUserDropdownOpen(false); 
-      await signInAnonymously(auth); 
-    } catch (error) { 
-      console.error("登出失敗:", error); 
-    }
-  };
+export default function Dashboard({ user, selectedProject, setActiveTab, setSelectedTask, favoriteIds }) {
+  const [tasks, setTasks] = useState([]);
 
-  const getPageTitle = () => {
-    if (selectedTask) return '工項詳細資料';
-    const titles = { 
-      dashboard: '總覽儀表板', 
-      tasks: '工項與進度追蹤', 
-      hr: '人事合規與代理紀錄', 
-      archive: '雲端歸檔空間', 
-      reimbursement: '核銷作業與報表中心',
-      settings: '系統設定與日誌'
-    };
-    return titles[activeTab] || '標案管理系統';
+  // 監聽專案下的所有任務狀態
+  useEffect(() => {
+    if (!user || !selectedProject) return;
+    const tasksRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'tasks');
+    const unsubscribe = onSnapshot(tasksRef, (snapshot) => {
+      const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTasks(allTasks.filter(t => t.projectName === selectedProject));
+    });
+    return () => unsubscribe();
+  }, [user, selectedProject]);
+
+  // 計算統計數字
+  const inProgressCount = tasks.filter(t => t.status === 'in-progress').length;
+  const overdueCount = tasks.filter(t => t.status === 'overdue').length;
+  const reqDocPendingCount = tasks.filter(t => t.reqDoc && t.status !== 'completed').length;
+  const overdueTasks = tasks.filter(t => t.status === 'overdue');
+
+  // 過濾出使用者設定的最愛模組
+  const favoriteModules = AVAILABLE_MODULES.filter(m => favoriteIds?.includes(m.id));
+
+  const handleTaskView = (task) => {
+    setSelectedTask(task);
+    setActiveTab('tasks');
   };
 
   return (
-    <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-8 sticky top-0 z-10 transition-colors duration-200 shadow-sm">
-      <h1 className="text-xl font-bold text-slate-800 dark:text-white flex items-center tracking-tight">
-        {selectedTask && (
-          <button 
-            onClick={() => setSelectedTask(null)} 
-            className="mr-3 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
-          >
-            <ArrowLeft size={20} />
-          </button>
-        )}
-        {activeTab === 'settings' && !selectedTask && <Settings size={22} className="mr-3 text-indigo-500" />}
-        <span>{getPageTitle()}</span>
-      </h1>
-      
-      <div className="flex items-center space-x-4">
-        <button className="p-2 rounded-full text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative">
-          <Bell size={20} />
-          <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900"></span>
-        </button>
-        
-        <button 
-          onClick={() => setDarkMode(!darkMode)}
-          className="p-2 rounded-full text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-        >
-          {darkMode ? <Sun size={20} /> : <Moon size={20} />}
-        </button>
-
-        <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 mx-2"></div>
-
-        <div className="relative">
-          <div 
-            className="flex items-center space-x-3 cursor-pointer group" 
-            onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
-          >
-            <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold shadow-sm group-hover:shadow-md transition-shadow overflow-hidden border border-slate-200 dark:border-slate-700">
-              {user && !user.isAnonymous && user.photoURL ? (
-                <img src={user.photoURL} alt="avatar" className="w-full h-full object-cover" />
-              ) : (
-                "管"
-              )}
+    <div className="space-y-6 animate-in fade-in duration-300 max-w-5xl mx-auto">
+      {/* 上方數據統計區 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {[
+          { label: '進行中工項', value: inProgressCount, icon: CheckSquare, color: 'text-blue-500 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-900/30' },
+          { label: '逾期任務', value: overdueCount, icon: AlertCircle, color: 'text-red-500 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-900/30' },
+          { label: '待歸檔文件', subLabel: '(已設定需產出文件)', value: reqDocPendingCount, icon: FileBarChart, color: 'text-orange-500 dark:text-orange-400', bg: 'bg-orange-50 dark:bg-orange-900/30' },
+        ].map((stat, i) => (
+          <div key={i} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700/80 shadow-sm flex items-center justify-between transition-colors">
+            <div>
+              <p className="text-sm font-bold text-slate-600 dark:text-slate-400 mb-0.5">{stat.label}</p>
+              {stat.subLabel && <p className="text-[10px] text-slate-400 dark:text-slate-500 mb-1">{stat.subLabel}</p>}
+              <h3 className="text-3xl font-black text-slate-900 dark:text-white mt-1">{stat.value}</h3>
             </div>
-            <div className="hidden md:block text-left">
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
-                {user && !user.isAnonymous ? user.displayName : '訪客 / 匿名使用者'}
-              </p>
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                {user && !user.isAnonymous ? user.email : (user ? `已連線 (${user.uid.slice(0, 6)})` : '連線中...')}
-              </p>
+            <div className={`p-4 rounded-xl ${stat.bg} ${stat.color}`}>
+              <stat.icon size={28} />
             </div>
-            <ChevronDown size={16} className={`text-slate-400 transition-transform ${isUserDropdownOpen ? 'rotate-180' : ''}`} />
           </div>
+        ))}
+      </div>
 
-          {isUserDropdownOpen && (
-            <div className="absolute right-0 mt-3 w-48 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 overflow-hidden">
-              {user && !user.isAnonymous ? (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 合規異常與逾期警示區塊 */}
+        <div className="lg:col-span-2 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/80 shadow-sm overflow-hidden flex flex-col">
+          <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700/80 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+            <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center">
+              <AlertCircle size={18} className="mr-2 text-red-500 dark:text-red-400" />
+              合規異常與逾期警示
+            </h3>
+          </div>
+          <div className="p-2 flex-1">
+            {overdueTasks.map(task => (
+              <div key={task.id} className="flex items-start space-x-4 p-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-xl transition-colors">
+                <div className="mt-1.5 w-2 h-2 rounded-full bg-red-500 shadow-sm flex-shrink-0"></div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">【工項逾期】{task.title} 已逾期未完成！</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">負責人: {task.assignee} | 期限: {task.due}</p>
+                </div>
                 <button 
-                  onClick={handleLogout} 
-                  className="w-full text-left px-4 py-3 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center transition-colors font-bold"
+                  onClick={() => handleTaskView(task)} 
+                  className="text-xs px-4 py-2 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-500/20 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/30 font-bold transition-colors"
                 >
-                  <LogOut size={16} className="mr-2" /> 登出系統
+                  查看
                 </button>
-              ) : (
+              </div>
+            ))}
+            
+            {/* 無逾期任務時的空狀態 */}
+            {overdueTasks.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-full mb-4">
+                  <CheckSquare size={32} className="text-emerald-500 dark:text-emerald-400" />
+                </div>
+                <p className="text-sm font-bold text-slate-600 dark:text-slate-300">太棒了！目前專案無任何逾期工項。</p>
+                <p className="text-xs text-slate-500 mt-2">請繼續保持良好的進度控管。</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 我的最愛區塊 */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col">
+          <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800/50 flex justify-between items-center">
+            <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center">
+              <Star size={16} className="mr-2 text-amber-500" />
+              我的最愛功能
+            </h3>
+          </div>
+          <div className="p-4 space-y-3 flex-1 overflow-auto">
+            {favoriteModules.length > 0 ? (
+              favoriteModules.map(btn => (
                 <button 
-                  onClick={handleGoogleLogin} 
-                  className="w-full text-left px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center transition-colors font-bold"
+                  key={btn.id} 
+                  onClick={() => setActiveTab(btn.id)} 
+                  className="w-full flex items-center p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-500/50 hover:shadow-md transition-all bg-white dark:bg-slate-800/50 group"
                 >
-                  <Users size={16} className="mr-2 text-indigo-500" /> 使用 Google 登入
+                  <div className={`p-2.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg shadow-sm mr-3 ${btn.color} group-hover:scale-110 transition-transform`}>
+                    <btn.icon size={18} />
+                  </div>
+                  <div className="text-left">
+                    <span className={`block text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-700 dark:group-hover:text-indigo-400 transition-colors`}>
+                      {btn.title}
+                    </span>
+                    <span className="block text-[10px] font-medium text-slate-500 dark:text-slate-400 mt-0.5">
+                      {btn.desc}
+                    </span>
+                  </div>
                 </button>
-              )}
-            </div>
-          )}
+              ))
+            ) : (
+              <div className="flex flex-col items-center justify-center py-10 text-center">
+                <Star size={24} className="text-slate-300 dark:text-slate-600 mb-3" />
+                <p className="text-sm font-bold text-slate-600 dark:text-slate-400">尚無最愛功能</p>
+                <p className="text-xs text-slate-500 mt-2">請至「系統設定」勾選您常用的模組。</p>
+                <button 
+                  onClick={() => setActiveTab('settings')} 
+                  className="mt-4 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                >
+                  前往設定
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </header>
+    </div>
   );
 }
