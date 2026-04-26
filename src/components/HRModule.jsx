@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -33,6 +33,10 @@ export default function HRModule({ user, selectedProject }) {
   const [isImportingReq, setIsImportingReq] = useState(false);
   const [isImportingPerson, setIsImportingPerson] = useState(false);
   const [uploadingPersonnelId, setUploadingPersonnelId] = useState(null);
+
+  // 排序與過濾狀態
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  const [selectedUnitFilter, setSelectedUnitFilter] = useState('ALL');
 
   // 動態取得專案設定日期 (若無則預設當年度)
   const currentYear = new Date().getFullYear();
@@ -97,16 +101,69 @@ export default function HRModule({ user, selectedProject }) {
     return () => { unsubHR(); unsubReq(); };
   }, [user, selectedProject]);
 
-  // 動態推導可用的單位與職位清單
-  const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
-  const getPositionsForUnit = (unit) => [...new Set(requirements.filter(r => r.unit === unit).map(r => r.position))].filter(Boolean);
-  const addAvailablePositions = getPositionsForUnit(newPerson.unit);
-  const transferAvailablePositions = getPositionsForUnit(transferData.unit);
-
   // 動態判定在職狀態邏輯
   const checkIsActive = (contractEnd) => {
     if (!contractEnd) return true;
     return contractEnd >= today;
+  };
+
+  // 動態推導可用的單位與職位清單
+  const availableUnits = [...new Set(requirements.map(r => r.unit))].filter(Boolean);
+  // 保留目前已經有建檔的單位 (可能有些單位沒有在需求清單裡，但在 personnel 裡面)
+  const allExistingUnits = [...new Set([...availableUnits, ...personnel.map(p => p.unit)])].filter(Boolean);
+  
+  const getPositionsForUnit = (unit) => [...new Set(requirements.filter(r => r.unit === unit).map(r => r.position))].filter(Boolean);
+  const addAvailablePositions = getPositionsForUnit(newPerson.unit);
+  const transferAvailablePositions = getPositionsForUnit(transferData.unit);
+
+  // 處理排序與過濾邏輯
+  const filteredPersonnel = personnel.filter(p => {
+    if (selectedUnitFilter === 'ALL') return true;
+    return p.unit === selectedUnitFilter;
+  });
+
+  const sortedPersonnel = [...filteredPersonnel].sort((a, b) => {
+    if (!sortConfig.key) return 0;
+    let aValue = '';
+    let bValue = '';
+
+    switch (sortConfig.key) {
+      case 'name':
+        aValue = a.name || '';
+        bValue = b.name || '';
+        break;
+      case 'status':
+        aValue = (checkIsActive(a.contractEnd) ? '1' : '0') + (a.isResident ? '1' : '0');
+        bValue = (checkIsActive(b.contractEnd) ? '1' : '0') + (b.isResident ? '1' : '0');
+        break;
+      case 'role':
+        aValue = a.roleStartDate || a.hireDate || '';
+        bValue = b.roleStartDate || b.hireDate || '';
+        break;
+      case 'date':
+        aValue = a.contractStart || a.hireDate || ''; 
+        bValue = b.contractStart || b.hireDate || '';
+        break;
+      default:
+        break;
+    }
+
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }) => {
+    if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="inline ml-1 text-slate-300 dark:text-slate-600" />;
+    return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="inline ml-1 text-indigo-500" /> : <ArrowDown size={14} className="inline ml-1 text-indigo-500" />;
   };
 
   // 打開 Modal 時套用最新預設日期
@@ -546,6 +603,7 @@ export default function HRModule({ user, selectedProject }) {
             </button>
           </div>
 
+          {/* 上方統計區塊 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
               <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400">
@@ -596,6 +654,29 @@ export default function HRModule({ user, selectedProject }) {
             </div>
           </div>
 
+          {/* 將各單位人數彙整區塊移動到這裡 */}
+          {personnel.length > 0 && (
+            <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm transition-colors">
+              <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
+                <PieChart size={16} className="mr-2 text-indigo-500" />
+                計畫單位人數彙整 (僅計在職)
+              </h4>
+              <div className="flex flex-wrap gap-4">
+                {Object.entries(unitSummary).map(([unit, count]) => (
+                  <div key={unit} className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-between min-w-[160px]">
+                    <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span>
+                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
+                  </div>
+                ))}
+                <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                  <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span>
+                  <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 人員名冊表格與動態歷程 */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden flex flex-col">
             <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
               <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與動態歷程</h3>
@@ -610,14 +691,58 @@ export default function HRModule({ user, selectedProject }) {
               </div>
             </div>
             
+            {/* 單位過濾區塊 */}
+            {allExistingUnits.length > 0 && (
+              <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-800 flex flex-wrap gap-2 items-center">
+                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-2 flex items-center">
+                  <Filter size={14} className="mr-1" /> 單位過濾：
+                </span>
+                <button 
+                  onClick={() => setSelectedUnitFilter('ALL')}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}
+                >
+                  全部 (ALL)
+                </button>
+                {allExistingUnits.map(unit => (
+                  <button 
+                    key={unit}
+                    onClick={() => setSelectedUnitFilter(unit)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === unit ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            )}
+            
             <div className="overflow-x-auto flex-1">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                   <tr>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">姓名/單位</th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">狀態/駐點</th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">現職與開始日</th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">參與計畫期間/到職日</th>
+                    <th 
+                      className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
+                      onClick={() => handleSort('name')}
+                    >
+                      姓名/單位 <SortIcon columnKey="name" />
+                    </th>
+                    <th 
+                      className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
+                      onClick={() => handleSort('status')}
+                    >
+                      狀態/駐點 <SortIcon columnKey="status" />
+                    </th>
+                    <th 
+                      className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
+                      onClick={() => handleSort('role')}
+                    >
+                      現職與開始日 <SortIcon columnKey="role" />
+                    </th>
+                    <th 
+                      className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none"
+                      onClick={() => handleSort('date')}
+                    >
+                      參與計畫期間/到職日 <SortIcon columnKey="date" />
+                    </th>
                     <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">相關檔案</th>
                     <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
                   </tr>
@@ -633,8 +758,18 @@ export default function HRModule({ user, selectedProject }) {
                         </div>
                       </td>
                     </tr>
+                  ) : sortedPersonnel.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" className="py-16 text-center">
+                        <div className="flex flex-col items-center justify-center">
+                          <Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
+                          <p className="text-slate-700 dark:text-slate-300 font-medium mb-1">查無符合目前條件之人員資料</p>
+                          <p className="text-slate-500 text-sm">請嘗試切換上方的「單位過濾」條件。</p>
+                        </div>
+                      </td>
+                    </tr>
                   ) : (
-                    personnel.map(u => {
+                    sortedPersonnel.map(u => {
                       const isActive = checkIsActive(u.contractEnd);
                       return (
                         <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
@@ -699,27 +834,6 @@ export default function HRModule({ user, selectedProject }) {
                 </tbody>
               </table>
             </div>
-
-            {personnel.length > 0 && (
-              <div className="bg-slate-50 dark:bg-slate-900/50 p-5 border-t border-slate-200 dark:border-slate-700/50">
-                <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
-                  <PieChart size={16} className="mr-2 text-indigo-500" />
-                  計畫單位人數彙整 (僅計在職)
-                </h4>
-                <div className="flex flex-wrap gap-4">
-                  {Object.entries(unitSummary).map(([unit, count]) => (
-                    <div key={unit} className="px-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
-                      <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span>
-                      <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
-                    </div>
-                  ))}
-                  <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
-                    <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span>
-                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
