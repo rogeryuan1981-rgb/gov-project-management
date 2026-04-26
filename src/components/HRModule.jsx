@@ -42,7 +42,7 @@ export default function HRModule({ user, selectedProject }) {
   });
   
   const [newReq, setNewReq] = useState({
-    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, note: ''
+    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: ''
   });
 
   const [transferData, setTransferData] = useState({
@@ -146,10 +146,11 @@ export default function HRModule({ user, selectedProject }) {
       await addDoc(reqRef, {
         ...newReq,
         count: parseInt(newReq.count, 10) || 1,
+        isResident: String(newReq.isResident) === 'true',
         projectId: selectedProject,
         createdAt: new Date().getTime()
       });
-      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, note: '' });
+      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: '' });
     } catch (error) {
       console.error("新增人力需求失敗:", error);
       if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
@@ -167,7 +168,7 @@ export default function HRModule({ user, selectedProject }) {
 
   // 匯出人力需求 CSV 範例檔
   const exportReqCSVTemplate = () => {
-    const csvContent = "\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),額外需求說明\n範例單位,專員,2,2026-01-01,2026-12-31,需具備相關證照";
+    const csvContent = "\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明\n範例單位,專員,2,2026-01-01,2026-12-31,是,需具備相關證照";
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -199,7 +200,8 @@ export default function HRModule({ user, selectedProject }) {
             count: parseInt(cols[2], 10) || 1,
             startDate: cols[3] || defaultStartDate,
             endDate: cols[4] || defaultEndDate,
-            note: cols[5] || '',
+            isResident: cols[5] === '是' || cols[5] === 'true',
+            note: cols[6] || '',
             projectId: selectedProject,
             createdAt: new Date().getTime()
           });
@@ -244,12 +246,17 @@ export default function HRModule({ user, selectedProject }) {
       endDate: null
     });
 
+    // 取得新職務的駐點設定
+    const matchedReq = requirements.find(r => r.unit === transferData.unit && r.position === transferData.role);
+    const newIsResident = matchedReq ? matchedReq.isResident : false;
+
     try {
       const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', historyPerson.id);
       await updateDoc(personRef, {
         unit: transferData.unit,
         role: transferData.role,
         roleStartDate: transferData.startDate,
+        isResident: newIsResident,
         history: updatedHistory
       });
 
@@ -258,6 +265,7 @@ export default function HRModule({ user, selectedProject }) {
         unit: transferData.unit,
         role: transferData.role,
         roleStartDate: transferData.startDate,
+        isResident: newIsResident,
         history: updatedHistory
       });
       
@@ -477,7 +485,6 @@ export default function HRModule({ user, selectedProject }) {
                         </div>
                       )}
                     </td>
-                    {/* 新增的相關檔案欄位 */}
                     <td className="py-4 px-6">
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -563,24 +570,31 @@ export default function HRModule({ user, selectedProject }) {
                     </div>
                     <div className="col-span-2 md:col-span-1">
                       <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">所屬計畫單位 <span className="text-red-500">*</span></label>
-                      <select required value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value, role: ''})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                      <select required value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value, role: '', isResident: false})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
                         <option value="">-- 請選擇單位 --</option>
                         {availableUnits.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>
                     <div className="col-span-2 md:col-span-1">
                       <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">目前職位 <span className="text-red-500">*</span></label>
-                      <select required value={newPerson.role} onChange={e => setNewPerson({...newPerson, role: e.target.value})} disabled={!newPerson.unit} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50">
+                      <select required value={newPerson.role} onChange={e => {
+                        const selectedRole = e.target.value;
+                        const req = requirements.find(r => r.unit === newPerson.unit && r.position === selectedRole);
+                        setNewPerson({...newPerson, role: selectedRole, isResident: req ? req.isResident : false});
+                      }} disabled={!newPerson.unit} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50">
                         <option value="">-- 請選擇職位 --</option>
                         {addAvailablePositions.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
-                    <div className="col-span-2 md:col-span-1">
-                      <label className="block text-xs font-bold text-slate-500 mb-1">是否為駐點人員</label>
-                      <select value={newPerson.isResident} onChange={e => setNewPerson({...newPerson, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                        <option value="true">是 (駐點)</option>
-                        <option value="false">否</option>
-                      </select>
+                    <div className="col-span-2 md:col-span-1 flex flex-col justify-end pb-1.5">
+                      {newPerson.role && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs font-bold text-slate-500 dark:text-slate-400">駐點狀態：</span>
+                          <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${newPerson.isResident ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'}`}>
+                            {newPerson.isResident ? '✅ 駐點人員' : '❌ 非駐點人員'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     
                     {/* 分隔線 */}
@@ -775,7 +789,7 @@ export default function HRModule({ user, selectedProject }) {
                   <Plus size={16} className="mr-1" /> 新增需求區間
                 </h4>
                 <form onSubmit={handleAddReq}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-start mb-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">計畫單位</label>
                       <input required type="text" value={newReq.unit} onChange={e=>setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
@@ -789,6 +803,15 @@ export default function HRModule({ user, selectedProject }) {
                       <input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
                     <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">是否為駐點職缺</label>
+                      <select required value={newReq.isResident} onChange={e=>setNewReq({...newReq, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500">
+                        <option value="true">是 (駐點人員)</option>
+                        <option value="false">否 (非駐點人員)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
+                    <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label>
                       <input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
@@ -796,15 +819,15 @@ export default function HRModule({ user, selectedProject }) {
                       <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label>
                       <input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
-                  </div>
-                  <div className="mb-4">
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
-                    <textarea 
-                      value={newReq.note} 
-                      onChange={e=>setNewReq({...newReq, note: e.target.value})} 
-                      placeholder="請輸入特殊條件、備註或其他詳細需求說明..." 
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 resize-y min-h-[80px]" 
-                    />
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
+                      <textarea 
+                        value={newReq.note} 
+                        onChange={e=>setNewReq({...newReq, note: e.target.value})} 
+                        placeholder="請輸入特殊條件、備註或其他詳細需求說明..." 
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 resize-y min-h-[80px]" 
+                      />
+                    </div>
                   </div>
                   <div className="flex justify-end">
                     <button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
@@ -821,7 +844,8 @@ export default function HRModule({ user, selectedProject }) {
                     <tr>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[250px]">額外需求說明</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">駐點屬性</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[200px]">額外需求說明</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">操作</th>
@@ -829,7 +853,7 @@ export default function HRModule({ user, selectedProject }) {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {requirements.length === 0 ? (
-                      <tr><td colSpan="6" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
+                      <tr><td colSpan="7" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
                     ) : (
                       requirements.sort((a,b) => new Date(a.startDate) - new Date(b.startDate)).map(req => {
                         const isActiveToday = req.startDate <= today && req.endDate >= today;
@@ -840,7 +864,10 @@ export default function HRModule({ user, selectedProject }) {
                               <div className="text-[10px] text-slate-500">{req.unit}</div>
                             </td>
                             <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
-                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 truncate max-w-[250px]" title={req.note}>{req.note || '-'}</td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">
+                              {req.isResident ? <span className="text-indigo-600 dark:text-indigo-400">是</span> : <span className="text-slate-400">否</span>}
+                            </td>
+                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 truncate max-w-[200px]" title={req.note}>{req.note || '-'}</td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400">{req.startDate} ~ {req.endDate}</td>
                             <td className="py-3 px-4 text-center">
                               {isActiveToday 
