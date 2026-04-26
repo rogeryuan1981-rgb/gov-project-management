@@ -45,6 +45,7 @@ export default function HRModule({ user, selectedProject }) {
   const defaultStartDate = projectData.startDate || `${currentYear}-01-01`;
   const defaultEndDate = projectData.endDate || `${currentYear}-12-31`;
   const today = new Date().toISOString().split('T')[0];
+  const todayMs = new Date(today).getTime();
 
   // 表單狀態
   const [newPerson, setNewPerson] = useState({
@@ -103,10 +104,14 @@ export default function HRModule({ user, selectedProject }) {
     return () => { unsubHR(); unsubReq(); };
   }, [user, selectedProject]);
 
-  // 動態判定在職狀態邏輯
-  const checkIsActive = (contractEnd) => {
-    if (!contractEnd) return true;
-    return contractEnd >= today;
+  // 動態判定在職狀態邏輯 (新增：尚未到職 pending)
+  const getPersonStatus = (p) => {
+    const startMs = new Date(p.contractStart || p.hireDate).getTime();
+    const endMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+
+    if (startMs > todayMs) return 'pending';  // 尚未到職
+    if (endMs < todayMs) return 'inactive';   // 已離職
+    return 'active';                          // 在職
   };
 
   // 動態推導可用的單位與職位清單
@@ -153,8 +158,9 @@ export default function HRModule({ user, selectedProject }) {
         bValue = b.name || '';
         break;
       case 'status':
-        aValue = (checkIsActive(a.contractEnd) ? '1' : '0') + (a.isResident ? '1' : '0');
-        bValue = (checkIsActive(b.contractEnd) ? '1' : '0') + (b.isResident ? '1' : '0');
+        const order = { 'active': 1, 'pending': 2, 'inactive': 3 };
+        aValue = `${order[getPersonStatus(a)]}-${a.isResident ? '1' : '0'}`;
+        bValue = `${order[getPersonStatus(b)]}-${b.isResident ? '1' : '0'}`;
         break;
       case 'role':
         aValue = a.role || '';
@@ -492,18 +498,17 @@ export default function HRModule({ user, selectedProject }) {
   const totalResidentRequiredToday = activeReqsToday.filter(r => r.isResident).reduce((sum, req) => sum + req.count, 0);
   const totalNonResidentRequiredToday = activeReqsToday.filter(r => !r.isResident).reduce((sum, req) => sum + req.count, 0);
 
-  const residentCount = personnel.filter(p => p.isResident && checkIsActive(p.contractEnd)).length;
-  const nonResidentCount = personnel.filter(p => !p.isResident && checkIsActive(p.contractEnd)).length;
+  const residentCount = personnel.filter(p => p.isResident && getPersonStatus(p) === 'active').length;
+  const nonResidentCount = personnel.filter(p => !p.isResident && getPersonStatus(p) === 'active').length;
 
   const isResidentCompliant = totalResidentRequiredToday > 0 ? residentCount >= totalResidentRequiredToday : true;
   const isNonResidentCompliant = totalNonResidentRequiredToday > 0 ? nonResidentCount >= totalNonResidentRequiredToday : true;
 
-  const proxyAlertCount = personnel.filter(p => p.proxyAlert && checkIsActive(p.contractEnd)).length;
+  const proxyAlertCount = personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length;
 
   // -- 1. 計算過去到今天的空缺 (現有異常) --
   let totalVacancyDays = 0;
   const vacancyBreakdown = []; 
-  const todayMs = new Date(today).getTime();
 
   requirements.forEach(req => {
     const reqStartMs = new Date(req.startDate).getTime();
@@ -594,46 +599,106 @@ export default function HRModule({ user, selectedProject }) {
 
   // 2-1. 收集未來的人員異動與需求異動
   personnel.forEach(p => {
+    // 【新增】：尚未到職 (Onboard)
+    const pStartMs = new Date(p.contractStart || p.hireDate).getTime();
+    if (pStartMs >= futureStartMs && pStartMs <= futureEndMs) {
+      const firstHistory = p.history?.[0];
+      upcomingEvents.push({
+        date: p.contractStart || p.hireDate,
+        dateMs: pStartMs,
+        type: 'onboard',
+        unit: firstHistory?.unit,
+        role: firstHistory?.role,
+        personId: p.id,
+        personName: p.name,
+        desc: `${p.name} 預計新進到職 (${firstHistory?.unit || ''} - ${firstHistory?.role || ''})`
+      });
+    }
+
     // 未來離職
     if (p.contractEnd) {
       const endMs = new Date(p.contractEnd).getTime();
       if (endMs >= futureStartMs && endMs <= futureEndMs) {
-        upcomingEvents.push({
-          date: p.contractEnd,
-          dateMs: endMs,
-          type: 'leave',
-          desc: `${p.name} 預計離職 (${p.unit} - ${p.role})`
-        });
+        const lastHistory = p.history?.[p.history.length - 1];
+        if (lastHistory) {
+          upcomingEvents.push({
+            date: p.contractEnd,
+            dateMs: endMs,
+            type: 'leave',
+            unit: lastHistory.unit,
+            role: lastHistory.role,
+            personId: p.id,
+            personName: p.name,
+            desc: `${p.name} 預計離職退出計畫 (${lastHistory.unit} - ${lastHistory.role})`
+          });
+        }
       }
     }
-    // 未來卸任/轉任
-    (p.history || []).forEach(h => {
+
+    // 未來內部轉任 (包含轉出與轉入)
+    (p.history || []).forEach((h, i) => {
+      // 轉任出
       if (h.endDate && h.endDate !== p.contractEnd) {
         const hEndMs = new Date(h.endDate).getTime();
         if (hEndMs >= futureStartMs && hEndMs <= futureEndMs) {
           upcomingEvents.push({
-            date: h.endDate,
-            dateMs: hEndMs,
-            type: 'transfer',
-            desc: `${p.name} 預計卸任 (${h.unit} - ${h.role})`
+            date: h.endDate, dateMs: hEndMs,
+            type: 'transfer_out', unit: h.unit, role: h.role, personId: p.id, personName: p.name,
+            desc: `${p.name} 預計卸任原職務 (${h.unit} - ${h.role})`
+          });
+        }
+      }
+      // 轉任入 (排除掉跟剛到職同一天的那一筆，避免跟 onboard 重複)
+      if (i > 0) {
+        const hStartMs = new Date(h.startDate).getTime();
+        if (hStartMs >= futureStartMs && hStartMs <= futureEndMs) {
+          upcomingEvents.push({
+            date: h.startDate, dateMs: hStartMs,
+            type: 'transfer_in', unit: h.unit, role: h.role, personId: p.id, personName: p.name,
+            desc: `${p.name} 預計轉任接手 (${h.unit} - ${h.role})`
           });
         }
       }
     });
   });
 
+  // 新增人力需求
   requirements.forEach(r => {
     const rStartMs = new Date(r.startDate).getTime();
     if (rStartMs >= futureStartMs && rStartMs <= futureEndMs) {
       upcomingEvents.push({
-        date: r.startDate,
-        dateMs: rStartMs,
-        type: 'new_req',
-        desc: `新增人力需求 (${r.unit} - ${r.position}，共 ${r.count} 人)`
+        date: r.startDate, dateMs: rStartMs,
+        type: 'new_req', unit: r.unit, role: r.position, count: r.count,
+        desc: `計畫新增人力編制需求 (${r.unit} - ${r.position}，擴編 ${r.count} 人)`
       });
     }
   });
+
+  // 排序所有事件
   upcomingEvents.sort((a, b) => a.dateMs - b.dateMs);
+
+  // 【核心功能：尋找補位人員】
+  // 針對會產生「空缺」的事件 (離職、轉出、新需求)，往後掃描 30 天內是否有新人員補上此單位職務
+  upcomingEvents.forEach(evt => {
+    if (['leave', 'transfer_out', 'new_req'].includes(evt.type)) {
+      const gapDateMs = evt.dateMs;
+      const replacements = personnel.filter(p => {
+        if (p.id === evt.personId) return false; // 自己不能補自己的位子
+        return (p.history || []).some(h => {
+           if (h.unit === evt.unit && h.role === evt.role) {
+              const hStartMs = new Date(h.startDate).getTime();
+              const diffDays = (hStartMs - gapDateMs) / 86400000;
+              // 補位條件：開始日期與空缺日同一天 (或前一天)，至多容許 30 天內的銜接
+              return diffDays >= -1 && diffDays <= 30; 
+           }
+           return false;
+        });
+      });
+      if (replacements.length > 0) {
+        evt.replacements = replacements;
+      }
+    }
+  });
 
   // 2-2. 模擬未來 60 天的空缺推演
   requirements.forEach(req => {
@@ -691,7 +756,7 @@ export default function HRModule({ user, selectedProject }) {
   });
 
   const unitSummary = personnel.reduce((acc, curr) => {
-    if (checkIsActive(curr.contractEnd)) {
+    if (getPersonStatus(curr) === 'active') {
       const unitName = curr.unit || '未指定單位';
       acc[unitName] = (acc[unitName] || 0) + 1;
     }
@@ -749,7 +814,7 @@ export default function HRModule({ user, selectedProject }) {
             </button>
           </div>
 
-          {/* 上方統計區塊 (變更為 Grid-Cols-4) */}
+          {/* 上方統計區塊 */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5 transition-colors">
               <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400">
@@ -799,7 +864,7 @@ export default function HRModule({ user, selectedProject }) {
               )}
             </div>
 
-            {/* 新增：近期異動預估卡片 */}
+            {/* 近期異動預估卡片 */}
             <div 
               onClick={() => setIsForecastModalOpen(true)}
               className="p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-500/30 cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 group"
@@ -811,7 +876,7 @@ export default function HRModule({ user, selectedProject }) {
                 <div>
                   <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">近期異動預估</p>
                   <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
-                    {futureVacancies.length + upcomingEvents.length} <span className="text-sm font-medium text-indigo-500">項警示</span>
+                    {upcomingEvents.length} <span className="text-sm font-medium text-indigo-500">項變動</span>
                   </p>
                 </div>
               </div>
@@ -822,7 +887,7 @@ export default function HRModule({ user, selectedProject }) {
 
           </div>
 
-          {/* 將各單位人數彙整區塊移動到這裡 */}
+          {/* 各單位人數彙整區塊 */}
           {personnel.length > 0 && (
             <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm transition-colors">
               <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
@@ -944,11 +1009,11 @@ export default function HRModule({ user, selectedProject }) {
                     </tr>
                   ) : (
                     sortedPersonnel.map(u => {
-                      const isActive = checkIsActive(u.contractEnd);
+                      const status = getPersonStatus(u);
                       return (
                         <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
                           <td className="py-4 px-6">
-                            <div className="flex flex-col">
+                            <div className="flex flex-col items-start">
                               <span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span>
                               <span className="text-[10px] text-slate-400 mb-1">{u.email || '未建立 Email'}</span>
                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(u.unit)}`}>
@@ -958,10 +1023,9 @@ export default function HRModule({ user, selectedProject }) {
                           </td>
                           <td className="py-4 px-6">
                             <div className="flex flex-col items-start gap-1">
-                              {isActive 
-                                ? <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>
-                                : <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">已離職</span>
-                              }
+                              {status === 'active' && <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>}
+                              {status === 'inactive' && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">已離職</span>}
+                              {status === 'pending' && <span className="px-2 py-0.5 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 rounded text-[10px] font-bold border border-blue-200 dark:border-blue-500/30">尚未到職</span>}
                               {u.isResident ? <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">駐點人員</span> : <span className="text-[10px] text-slate-400">非駐點</span>}
                             </div>
                           </td>
@@ -1057,12 +1121,12 @@ export default function HRModule({ user, selectedProject }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                  {personnel.filter(p => p.proxyAlert && checkIsActive(p.contractEnd)).length === 0 ? (
+                  {personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length === 0 ? (
                      <tr>
                        <td colSpan="4" className="py-12 text-center text-slate-500 dark:text-slate-400 text-sm font-medium">目前無任何代理異常紀錄。</td>
                      </tr>
                   ) : (
-                    personnel.filter(p => p.proxyAlert && checkIsActive(p.contractEnd)).map(u => (
+                    personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').map(u => (
                       <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
                         <td className="py-4 px-6 font-bold text-slate-900 dark:text-slate-200">{u.name}</td>
                         <td className="py-4 px-6 text-sm text-slate-600 dark:text-slate-400">{u.unit}</td>
@@ -1588,27 +1652,44 @@ export default function HRModule({ user, selectedProject }) {
               {/* 預估的人員與需求異動 */}
               <div>
                 <h4 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center border-b border-slate-200 dark:border-slate-700 pb-2">
-                  <ArrowUpDown size={18} className="mr-2 text-slate-400" /> 已知的人員離職、轉任與新增需求
+                  <ArrowUpDown size={18} className="mr-2 text-slate-400" /> 系統分析之未來事件預演
                 </h4>
                 {upcomingEvents.length === 0 ? (
                   <p className="text-sm text-slate-500 dark:text-slate-400 italic bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">未來 60 天內無已知的變動。</p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {upcomingEvents.map((evt, idx) => (
-                      <div key={idx} className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-start shadow-sm">
-                        <div className={`p-2 rounded-lg mr-3 flex-shrink-0 ${
-                          evt.type === 'leave' ? 'bg-red-50 text-red-500 dark:bg-red-500/10' :
-                          evt.type === 'transfer' ? 'bg-amber-50 text-amber-500 dark:bg-amber-500/10' :
-                          'bg-emerald-50 text-emerald-500 dark:bg-emerald-500/10'
+                    {upcomingEvents.map((evt, idx) => {
+                      const isResolved = evt.replacements && evt.replacements.length > 0;
+                      
+                      let bgClass = '';
+                      if (isResolved || evt.type === 'onboard' || evt.type === 'transfer_in') {
+                        bgClass = 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/10 dark:border-emerald-500/30 text-emerald-600';
+                      } else if (evt.type === 'leave' || evt.type === 'transfer_out') {
+                        bgClass = 'bg-red-50 border-red-200 dark:bg-red-900/10 dark:border-red-500/30 text-red-600';
+                      } else {
+                        bgClass = 'bg-amber-50 border-amber-200 dark:bg-amber-900/10 dark:border-amber-500/30 text-amber-600';
+                      }
+
+                      return (
+                        <div key={idx} className={`p-4 rounded-xl border flex items-start shadow-sm transition-colors ${
+                          isResolved ? 'bg-emerald-50/50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-500/30' 
+                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
                         }`}>
-                          <CalendarDays size={18} />
+                          <div className={`p-2 rounded-lg mr-3 flex-shrink-0 ${bgClass}`}>
+                             {isResolved ? <CheckCircle2 size={18} /> : <CalendarDays size={18} />}
+                          </div>
+                          <div className="flex-1">
+                             <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5">預計發生日：{evt.date}</p>
+                             <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1">{evt.desc}</p>
+                             {isResolved && (
+                               <div className="inline-flex items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/30 px-2 py-1 rounded mt-1 border border-emerald-200 dark:border-emerald-500/30">
+                                  ✅ 已安排補位：{evt.replacements.map(r => r.name).join(', ')}
+                               </div>
+                             )}
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-0.5">預計發生日：{evt.date}</p>
-                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{evt.desc}</p>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1619,12 +1700,13 @@ export default function HRModule({ user, selectedProject }) {
                   <AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警
                 </h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                  依據上述已知變動進行推演，若不補齊人力，下列職務將在特定日期產生空缺斷層：
+                  依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：
                 </p>
                 {futureVacancies.length === 0 ? (
                   <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
                     <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" />
                     <p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p>
+                    <p className="text-xs text-slate-500 mt-1">目前已知的離職與轉任皆已有替補人員銜接。</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
