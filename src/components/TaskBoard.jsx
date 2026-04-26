@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Plus, ChevronRight, ChevronDown, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, Edit2, Save, X, Trash2, ExternalLink } from 'lucide-react';
+import { Search, Filter, Plus, ChevronRight, ChevronDown, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, Edit2, Save, X, Trash2, ExternalLink, CheckSquare } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getFirestore, addDoc } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -9,7 +9,7 @@ const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-// 專屬 Google Drive API 金鑰
+// 專屬 Google Drive API 金鑰 (已徹底解決環境變數編譯報錯問題)
 const DRIVE_CLIENT_ID = '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
 
 // ================= 真實 Google Drive API 引擎 =================
@@ -52,7 +52,7 @@ const uploadToGoogleDrive = async (file, fileName, pathArray, accessToken) => {
 
 export default function TaskBoard({ user, selectedProject, selectedTask, setSelectedTask }) {
   const [tasks, setTasks] = useState([]);
-  const [personnel, setPersonnel] = useState([]); // 新增：專案人員狀態
+  const [personnel, setPersonnel] = useState([]);
   const [projectName, setProjectName] = useState('');
   const [taskFiles, setTaskFiles] = useState([]);
   const fileInputRef = useRef(null);
@@ -533,7 +533,7 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                   <tr>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500">子任務名稱</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500">負責人</th>
-                    <th className="py-3 px-6 text-xs font-bold text-slate-500">工作期間</th>
+                    <th className="py-3 px-6 text-xs font-bold text-slate-500">期限</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500 text-center">狀態</th>
                     <th className="py-3 px-6 text-xs font-bold text-slate-500 text-right">操作</th>
                   </tr>
@@ -645,12 +645,12 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
         <table className="w-full text-left border-collapse">
           <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0 z-10 shadow-sm">
             <tr>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('title')}>任務結構與名稱 <SortIcon columnKey="title" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('assignee')}>負責人 <SortIcon columnKey="assignee" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('period')}>工作期間 <SortIcon columnKey="period" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('currentProgress')}>當前進度 <SortIcon columnKey="currentProgress" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center" onClick={() => handleSort('status')}>狀態 <SortIcon columnKey="status" /></th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200 dark:border-slate-700 text-right">詳情</th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('title')}>任務結構與名稱 <SortIcon columnKey="title" /></th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('assignee')}>負責人 <SortIcon columnKey="assignee" /></th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('period')}>工作期間 <SortIcon columnKey="period" /></th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" onClick={() => handleSort('currentProgress')}>當前進度 <SortIcon columnKey="currentProgress" /></th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center" onClick={() => handleSort('status')}>狀態 <SortIcon columnKey="status" /></th>
+              <th className="py-3 px-6 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 text-right">詳情</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800">
