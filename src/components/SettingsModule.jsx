@@ -1,12 +1,22 @@
-import React, { useState } from 'react';
-import { User, Image as ImageIcon, Star, Save, CheckCircle2, Loader2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Image as ImageIcon, Star, Save, CheckCircle2, Loader2, Settings, Shield, Trash2, AlertTriangle, X } from 'lucide-react';
 import { updateProfile } from 'firebase/auth';
+import { collection, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+
+const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
 export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
+  // ================= 個人化設定狀態 =================
   // 將 Firebase 中儲存的 photoURL 放入 input state
   const [avatarUrl, setAvatarUrl] = useState(user?.photoURL || '');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+
+  // ================= 專案管理狀態 =================
+  const [projects, setProjects] = useState([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(null);
 
   // 系統功能模組常數，用於渲染勾選清單 (非假資料)
   const ALL_MODULES = [
@@ -15,6 +25,18 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
     { id: 'archive', label: '雲端歸檔空間' },
     { id: 'reimbursement', label: '核銷作業專區' },
   ];
+
+  // 載入專案清單
+  useEffect(() => {
+    if (!user) return;
+    const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
+    const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
+      const loadedProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      loadedProjects.sort((a, b) => a.createdAt - b.createdAt);
+      setProjects(loadedProjects);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   const handleToggleFavorite = (id) => {
     if (favoriteIds.includes(id)) {
@@ -41,9 +63,22 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
     }
   };
 
+  const handleDeleteProject = async (projectId) => {
+    setIsDeleting(projectId);
+    try {
+      await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', projectId));
+      setConfirmDeleteId(null);
+    } catch (error) {
+      console.error("刪除專案失敗:", error);
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-300">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-300">
       
+      {/* ================= 區塊 1：個人化設定 ================= */}
       <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center mb-6 border-b border-slate-100 dark:border-slate-700/50 pb-4">
           <User className="mr-3 text-indigo-500" size={24} />
@@ -126,6 +161,78 @@ export default function SettingsModule({ user, favoriteIds, setFavoriteIds }) {
 
         </div>
       </div>
+
+      {/* ================= 區塊 2：系統設定與專案管理 ================= */}
+      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
+        <div className="mb-6 border-b border-slate-100 dark:border-slate-700/50 pb-4">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center mb-2">
+            <Settings className="mr-3 text-slate-500" size={24} />
+            系統管理與專案設定
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 pl-9">
+            此區塊為系統管理專區。您可以在此控管各專案的存取權限，或進行專案空間的永久刪除。
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {projects.length === 0 ? (
+            <div className="text-center py-12 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 border-dashed">
+              <p className="text-slate-500 dark:text-slate-400 text-sm font-bold">目前系統中尚無建立任何專案</p>
+            </div>
+          ) : (
+            projects.map(project => (
+              <div key={project.id} className="flex flex-col md:flex-row md:items-center justify-between p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow">
+                
+                <div className="mb-4 md:mb-0">
+                  <h3 className="font-bold text-slate-800 dark:text-white text-lg flex items-center">
+                    {project.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    建立時間：{new Date(project.createdAt).toLocaleDateString()} &nbsp; | &nbsp; 專案 ID: {project.id.slice(0, 8)}...
+                  </p>
+                </div>
+                
+                {/* 操作按鈕區 */}
+                <div className="flex items-center space-x-3">
+                  <button className="flex items-center px-4 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-bold rounded-xl hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors">
+                    <Shield size={16} className="mr-2 text-indigo-500" /> 管理權限
+                  </button>
+
+                  {/* 防呆刪除確認邏輯 */}
+                  {confirmDeleteId === project.id ? (
+                    <div className="flex items-center space-x-2 bg-red-50 dark:bg-red-500/10 px-3 py-1.5 rounded-xl border border-red-200 dark:border-red-500/30 animate-in fade-in zoom-in-95">
+                      <AlertTriangle size={16} className="text-red-500" />
+                      <span className="text-xs text-red-600 dark:text-red-400 font-bold mr-2">確認刪除此專案？</span>
+                      <button 
+                        onClick={() => handleDeleteProject(project.id)}
+                        disabled={isDeleting === project.id}
+                        className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center"
+                      >
+                        {isDeleting === project.id ? <Loader2 size={14} className="animate-spin mr-1" /> : '確定'}
+                      </button>
+                      <button 
+                        onClick={() => setConfirmDeleteId(null)}
+                        className="px-2 py-1.5 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 bg-white dark:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 text-xs transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDeleteId(project.id)}
+                      className="flex items-center px-4 py-2 bg-white dark:bg-slate-800 border border-red-200 dark:border-red-500/30 text-red-600 dark:text-red-400 text-sm font-bold rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                    >
+                      <Trash2 size={16} className="mr-2" /> 刪除專案
+                    </button>
+                  )}
+                </div>
+
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      
     </div>
   );
 }
