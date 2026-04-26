@@ -19,7 +19,7 @@ export default function ArchiveModule({ user, selectedProject }) {
     const projectsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
     const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
       const loadedProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // 【修復】：改用專案專屬 UID (id) 進行精準比對
+      // 改用專案專屬 UID (id) 進行精準比對
       const currentProject = loadedProjects.find(p => p.id === selectedProject);
       
       if (currentProject) {
@@ -37,6 +37,16 @@ export default function ArchiveModule({ user, selectedProject }) {
 
     return () => unsubscribe();
   }, [user, selectedProject]);
+
+  // 將資料夾按第一層分類 (Group by level1)
+  const groupedFolders = React.useMemo(() => {
+    return projectFolders.reduce((acc, folder) => {
+      const groupName = folder.level1 ? folder.level1.trim() : '未分類目錄';
+      if (!acc[groupName]) acc[groupName] = [];
+      acc[groupName].push(folder);
+      return acc;
+    }, {});
+  }, [projectFolders]);
 
   // ================= 拖曳與上傳事件處理 =================
   const handleDragEnter = (e, folderId) => {
@@ -111,7 +121,7 @@ export default function ArchiveModule({ user, selectedProject }) {
           </div>
         )}
 
-        {/* 動態目錄拖曳區塊 */}
+        {/* 動態目錄拖曳區塊 (群組化呈現) */}
         {projectFolders.length === 0 ? (
           <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-16 flex flex-col items-center justify-center text-center bg-slate-50 dark:bg-slate-800/50">
             <AlertTriangle size={48} className="text-amber-500 mb-4" />
@@ -121,59 +131,69 @@ export default function ArchiveModule({ user, selectedProject }) {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {projectFolders.map((folder) => (
-              <div 
-                key={folder.id}
-                onDragEnter={(e) => handleDragEnter(e, folder.id)}
-                onDragLeave={handleDragLeave}
-                onDragOver={(e) => handleDragOver(e, folder.id)}
-                onDrop={(e) => handleDrop(e, folder)}
-                onClick={() => document.getElementById(`file-upload-${folder.id}`).click()}
-                className={`relative overflow-hidden flex flex-col items-center justify-center p-8 rounded-2xl border-2 transition-all cursor-pointer group ${
-                  dragActiveId === folder.id 
-                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/20 scale-105 shadow-lg' 
-                    : 'border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-700/50 hover:border-indigo-400 dark:hover:border-indigo-500/50'
-                }`}
-              >
-                {/* 隱藏的檔案輸入器 */}
-                <input 
-                  type="file" 
-                  id={`file-upload-${folder.id}`} 
-                  className="hidden" 
-                  onChange={(e) => handleFileChange(e, folder)}
-                />
-
-                {uploadingTo === folder.id ? (
-                  <div className="flex flex-col items-center justify-center text-indigo-600 dark:text-indigo-400">
-                    <Loader2 size={40} className="animate-spin mb-3" />
-                    <p className="text-sm font-bold animate-pulse">正在同步至 Google Drive...</p>
-                  </div>
-                ) : (
-                  <>
-                    <div className={`p-4 rounded-full mb-4 transition-transform duration-300 ${dragActiveId === folder.id ? 'bg-indigo-100 dark:bg-indigo-900/50 scale-110' : 'bg-slate-100 dark:bg-slate-700 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/30'}`}>
-                      <FileUp size={32} className={`${dragActiveId === folder.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400'}`} />
-                    </div>
-                    
-                    <div className="text-center space-y-1 w-full">
-                      <p className="text-xs text-slate-400 dark:text-slate-500 font-medium">拖曳至此以歸檔</p>
-                      <div className="flex items-center justify-center text-sm font-bold text-slate-800 dark:text-slate-200">
-                        <span className="truncate max-w-[120px]" title={folder.level1}>{folder.level1}</span>
-                        {folder.level2 && (
-                          <>
-                            <ChevronRight size={14} className="mx-1 text-slate-400 flex-shrink-0" />
-                            <span className="truncate max-w-[120px]" title={folder.level2}>{folder.level2}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
+          <div className="space-y-8">
+            {Object.entries(groupedFolders).map(([groupName, folders]) => (
+              <div key={groupName} className="bg-slate-50/50 dark:bg-slate-900/20 p-5 rounded-2xl border border-slate-100 dark:border-slate-700/50">
+                <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center border-b border-slate-200 dark:border-slate-700/50 pb-3">
+                  <Folder className="mr-2 text-indigo-500" size={20} />
+                  {groupName}
+                  <span className="ml-3 px-2.5 py-0.5 bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 text-xs rounded-full font-medium">
+                    共 {folders.length} 項
+                  </span>
+                </h3>
                 
-                {/* 裝飾性遮罩 (當處於拖曳狀態時顯示) */}
-                {dragActiveId === folder.id && !uploadingTo && (
-                  <div className="absolute inset-0 bg-indigo-500/10 pointer-events-none rounded-2xl"></div>
-                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {folders.map((folder) => (
+                    <div 
+                      key={folder.id}
+                      onDragEnter={(e) => handleDragEnter(e, folder.id)}
+                      onDragLeave={handleDragLeave}
+                      onDragOver={(e) => handleDragOver(e, folder.id)}
+                      onDrop={(e) => handleDrop(e, folder)}
+                      onClick={() => document.getElementById(`file-upload-${folder.id}`).click()}
+                      className={`relative overflow-hidden flex flex-col items-center justify-center p-6 rounded-2xl border-2 transition-all cursor-pointer group ${
+                        dragActiveId === folder.id 
+                          ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/20 scale-[1.02] shadow-lg' 
+                          : 'border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-700/50 hover:border-indigo-400 dark:hover:border-indigo-500/50'
+                      }`}
+                    >
+                      {/* 隱藏的檔案輸入器 */}
+                      <input 
+                        type="file" 
+                        id={`file-upload-${folder.id}`} 
+                        className="hidden" 
+                        onChange={(e) => handleFileChange(e, folder)}
+                      />
+
+                      {uploadingTo === folder.id ? (
+                        <div className="flex flex-col items-center justify-center text-indigo-600 dark:text-indigo-400 min-h-[100px]">
+                          <Loader2 size={36} className="animate-spin mb-3" />
+                          <p className="text-sm font-bold animate-pulse">正在同步至 Google Drive...</p>
+                        </div>
+                      ) : (
+                        <div className="min-h-[100px] flex flex-col items-center justify-center w-full">
+                          <div className={`p-3 rounded-full mb-3 transition-transform duration-300 ${dragActiveId === folder.id ? 'bg-indigo-100 dark:bg-indigo-900/50 scale-110' : 'bg-slate-100 dark:bg-slate-700 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/30'}`}>
+                            <FileUp size={28} className={`${dragActiveId === folder.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400'}`} />
+                          </div>
+                          
+                          <div className="text-center w-full">
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium mb-1">拖曳至此以歸檔</p>
+                            <div className="flex items-center justify-center text-base font-bold text-slate-800 dark:text-slate-200">
+                              <span className="truncate max-w-[180px]" title={folder.level2 || `${groupName} (根目錄)`}>
+                                {folder.level2 ? folder.level2 : <span className="text-slate-500 italic text-sm">此為第一層根目錄</span>}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* 裝飾性遮罩 (當處於拖曳狀態時顯示) */}
+                      {dragActiveId === folder.id && !uploadingTo && (
+                        <div className="absolute inset-0 bg-indigo-500/5 pointer-events-none rounded-2xl"></div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
