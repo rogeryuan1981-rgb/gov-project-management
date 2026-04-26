@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2 } from 'lucide-react';
-import { collection, onSnapshot, doc, setDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart } from 'lucide-react';
+import { collection, onSnapshot, doc, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase.js';
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
@@ -13,13 +13,19 @@ export default function HRModule({ user, selectedProject }) {
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
 
+  // 取得當年度的 1/1 與 12/31 作為預設值
+  const currentYear = new Date().getFullYear();
+  const defaultStartDate = `${currentYear}-01-01`;
+  const defaultEndDate = `${currentYear}-12-31`;
+
   // 表單狀態
   const [newPerson, setNewPerson] = useState({
-    name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false
+    name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false,
+    contractStart: defaultStartDate, contractEnd: defaultEndDate
   });
   
   const [newReq, setNewReq] = useState({
-    unit: '', position: '', startDate: '', endDate: '', count: 1
+    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1
   });
 
   // 1. 讀取人事資料與人力需求設定
@@ -61,7 +67,10 @@ export default function HRModule({ user, selectedProject }) {
         createdAt: new Date().getTime()
       });
       setIsAddPersonModalOpen(false);
-      setNewPerson({ name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false });
+      setNewPerson({ 
+        name: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', status: 'active', proxyAlert: false,
+        contractStart: defaultStartDate, contractEnd: defaultEndDate 
+      });
     } catch (error) {
       console.error("新增人員失敗:", error);
     }
@@ -83,7 +92,7 @@ export default function HRModule({ user, selectedProject }) {
         projectName: selectedProject,
         createdAt: new Date().getTime()
       });
-      setNewReq({ unit: '', position: '', startDate: '', endDate: '', count: 1 });
+      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1 });
     } catch (error) {
       console.error("新增人力需求失敗:", error);
     }
@@ -97,7 +106,7 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 4. 動態計算合規數據
+  // 4. 動態計算合規數據與單位人數彙整
   const today = new Date().toISOString().split('T')[0];
   
   // 計算「今天」生效的總人力需求
@@ -105,11 +114,21 @@ export default function HRModule({ user, selectedProject }) {
   const totalRequiredToday = activeReqsToday.reduce((sum, req) => sum + req.count, 0);
 
   const totalUsers = personnel.length;
-  // 駐點且在職的實際人數 (此處可進一步比對 role 與 unit，目前先以駐點總數計算全貌)
+  // 駐點且在職的實際人數
   const residentCount = personnel.filter(p => p.isResident && p.status === 'active').length;
   const proxyAlertCount = personnel.filter(p => p.proxyAlert && p.status === 'active').length;
 
   const isCompliant = totalRequiredToday > 0 ? residentCount >= totalRequiredToday : true;
+
+  // 彙整：計算各單位在職人數
+  const unitSummary = personnel.reduce((acc, curr) => {
+    if (curr.status === 'active') {
+      const unitName = curr.unit || '未指定單位';
+      acc[unitName] = (acc[unitName] || 0) + 1;
+    }
+    return acc;
+  }, {});
+  const totalActivePersonnel = Object.values(unitSummary).reduce((a, b) => a + b, 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-6xl mx-auto">
@@ -178,8 +197,8 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       </div>
 
-      {/* 人員名冊表格 */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden transition-colors">
+      {/* 人員名冊表格與下方彙整區塊 */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden transition-colors flex flex-col">
         <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
           <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與異動紀錄</h3>
           <div className="flex space-x-3">
@@ -197,14 +216,14 @@ export default function HRModule({ user, selectedProject }) {
           </div>
         </div>
         
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto flex-1">
           <table className="w-full text-left border-collapse">
             <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
               <tr>
                 <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">姓名/單位</th>
                 <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">狀態/駐點</th>
                 <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">現職與轉任日</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">到職日</th>
+                <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">參與計畫期間/到職日</th>
                 <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">合規標記</th>
                 <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
               </tr>
@@ -244,7 +263,14 @@ export default function HRModule({ user, selectedProject }) {
                         <span className="text-[10px] text-slate-500 mt-1">就任日: {u.roleStartDate || u.hireDate}</span>
                       </div>
                     </td>
-                    <td className="py-4 px-6 text-sm font-medium text-slate-600 dark:text-slate-300">{u.hireDate}</td>
+                    <td className="py-4 px-6">
+                      <div className="text-sm font-medium text-slate-600 dark:text-slate-300">到職: {u.hireDate}</div>
+                      {(u.contractStart || u.contractEnd) && (
+                        <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                          期間: {u.contractStart} ~ {u.contractEnd}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-4 px-6">
                       {u.proxyAlert ? (
                         <span className="inline-flex items-center px-2 py-1 rounded bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold border border-orange-200 dark:border-orange-500/30">
@@ -265,6 +291,28 @@ export default function HRModule({ user, selectedProject }) {
             </tbody>
           </table>
         </div>
+
+        {/* 下方：各單位人數彙整區塊 */}
+        {personnel.length > 0 && (
+          <div className="bg-slate-50 dark:bg-slate-900/50 p-5 border-t border-slate-200 dark:border-slate-700/50">
+            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
+              <PieChart size={16} className="mr-2 text-indigo-500" />
+              計畫單位人數彙整 (僅計在職)
+            </h4>
+            <div className="flex flex-wrap gap-4">
+              {Object.entries(unitSummary).map(([unit, count]) => (
+                <div key={unit} className="px-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                  <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span>
+                  <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
+                </div>
+              ))}
+              <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span>
+                <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal: 新增人員 */}
@@ -283,32 +331,45 @@ export default function HRModule({ user, selectedProject }) {
             <div className="p-6 overflow-y-auto">
               <form id="addPersonForm" onSubmit={handleAddPerson} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
+                  <div className="col-span-2 md:col-span-1">
                     <label className="block text-xs font-bold text-slate-500 mb-1">姓名 <span className="text-red-500">*</span></label>
                     <input required type="text" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">所屬單位</label>
-                    <input type="text" value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <div className="col-span-2 md:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">所屬計畫單位</label>
+                    <input type="text" value={newPerson.unit} onChange={e => setNewPerson({...newPerson, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
-                  <div>
+                  <div className="col-span-2 md:col-span-1">
                     <label className="block text-xs font-bold text-slate-500 mb-1">目前職位 <span className="text-red-500">*</span></label>
                     <input required type="text" value={newPerson.role} onChange={e => setNewPerson({...newPerson, role: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">就任此職位日期 (轉任日) <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.roleStartDate} onChange={e => setNewPerson({...newPerson, roleStartDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">最初到職日 <span className="text-red-500">*</span></label>
-                    <input required type="date" value={newPerson.hireDate} onChange={e => setNewPerson({...newPerson, hireDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
-                  <div>
+                  <div className="col-span-2 md:col-span-1">
                     <label className="block text-xs font-bold text-slate-500 mb-1">是否為駐點人員</label>
                     <select value={newPerson.isResident} onChange={e => setNewPerson({...newPerson, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none">
                       <option value="true">是 (駐點)</option>
                       <option value="false">否</option>
                     </select>
+                  </div>
+                  
+                  {/* 分隔線 */}
+                  <div className="col-span-2 my-1 border-t border-slate-100 dark:border-slate-700"></div>
+
+                  <div className="col-span-2 md:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">最初到職日 <span className="text-red-500">*</span></label>
+                    <input required type="date" value={newPerson.hireDate} onChange={e => setNewPerson({...newPerson, hireDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div className="col-span-2 md:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">就任此職位日 (轉任日) <span className="text-red-500">*</span></label>
+                    <input required type="date" value={newPerson.roleStartDate} onChange={e => setNewPerson({...newPerson, roleStartDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+
+                  <div className="col-span-2 md:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">計畫參與開始日 <span className="text-red-500">*</span></label>
+                    <input required type="date" value={newPerson.contractStart} onChange={e => setNewPerson({...newPerson, contractStart: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  </div>
+                  <div className="col-span-2 md:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">計畫參與結束日 <span className="text-red-500">*</span></label>
+                    <input required type="date" value={newPerson.contractEnd} onChange={e => setNewPerson({...newPerson, contractEnd: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
                 </div>
               </form>
@@ -356,12 +417,12 @@ export default function HRModule({ user, selectedProject }) {
                     <input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
                   </div>
                   <div className="col-span-2 md:col-span-1">
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">需求開始日</label>
-                    <input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label>
+                    <input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-xs outline-none focus:border-indigo-500" />
                   </div>
                   <div className="col-span-2 md:col-span-1">
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">需求結束日</label>
-                    <input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-indigo-500" />
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label>
+                    <input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-xs outline-none focus:border-indigo-500" />
                   </div>
                   <div className="col-span-2 md:col-span-1">
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors">
