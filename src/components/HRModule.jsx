@@ -40,11 +40,17 @@ export default function HRModule({ user, selectedProject }) {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   const [selectedUnitFilter, setSelectedUnitFilter] = useState('ALL');
 
-  // 動態取得專案設定日期 (若無則預設當年度)
+  // 動態取得專案設定日期與精準本地今天日期
   const currentYear = new Date().getFullYear();
   const defaultStartDate = projectData.startDate || `${currentYear}-01-01`;
   const defaultEndDate = projectData.endDate || `${currentYear}-12-31`;
-  const today = new Date().toISOString().split('T')[0];
+  
+  const getLocalTodayStr = () => {
+    const d = new Date();
+    const tzOffset = d.getTimezoneOffset() * 60000;
+    return new Date(d - tzOffset).toISOString().split('T')[0];
+  };
+  const today = getLocalTodayStr();
   const todayMs = new Date(today).getTime();
 
   // 表單狀態
@@ -104,7 +110,7 @@ export default function HRModule({ user, selectedProject }) {
     return () => { unsubHR(); unsubReq(); };
   }, [user, selectedProject]);
 
-  // 動態判定在職狀態邏輯 (新增：尚未到職 pending)
+  // 動態判定在職狀態邏輯
   const getPersonStatus = (p) => {
     const startMs = new Date(p.contractStart || p.hireDate).getTime();
     const endMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
@@ -112,6 +118,11 @@ export default function HRModule({ user, selectedProject }) {
     if (startMs > todayMs) return 'pending';  // 尚未到職
     if (endMs < todayMs) return 'inactive';   // 已離職
     return 'active';                          // 在職
+  };
+
+  const checkIsActive = (contractEnd) => {
+    if (!contractEnd) return true;
+    return new Date(contractEnd).getTime() >= todayMs;
   };
 
   // 動態推導可用的單位與職位清單
@@ -214,7 +225,7 @@ export default function HRModule({ user, selectedProject }) {
     setEditingPerson(JSON.parse(JSON.stringify(person)));
   };
 
-  // 輔助函式：僅處理 Excel 匯入的日期格式自動補零與符號轉換 (YYYY/M/D -> YYYY-MM-DD)
+  // 輔助函式：僅處理 Excel 匯入的日期格式自動補零與符號轉換
   const formatImportDate = (dateStr) => {
     if (!dateStr || dateStr.trim() === '') return '';
     let s = dateStr.trim().replace(/\//g, '-');
@@ -256,7 +267,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 匯出計畫人員 CSV 範例檔
   const exportPersonCSVTemplate = () => {
     const csvContent = `\uFEFF姓名,Email,計畫單位,目前職位,最初到職日(YYYY-MM-DD),就任此職位日(YYYY-MM-DD),計畫參與開始日(YYYY-MM-DD),計畫參與結束日(留空或YYYY-MM-DD)\n王大明,wang@example.com,專案辦公室,專員,${defaultStartDate},${defaultStartDate},${defaultStartDate},`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -266,7 +276,6 @@ export default function HRModule({ user, selectedProject }) {
     link.click();
   };
 
-  // 處理計畫人員 CSV 批次匯入
   const handlePersonFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !user || !selectedProject) return;
@@ -288,7 +297,6 @@ export default function HRModule({ user, selectedProject }) {
           const unit = cols[2];
           const role = cols[3];
           
-          // 使用 formatImportDate 處理日期格式與自動補零
           const hireDate = formatImportDate(cols[4]) || defaultStartDate;
           const roleStartDate = formatImportDate(cols[5]) || hireDate;
           const contractStart = formatImportDate(cols[6]) || defaultStartDate;
@@ -322,7 +330,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 3. 處理新增/刪除人力需求
   const handleAddReq = async (e) => {
     e.preventDefault();
     if (!newReq.unit || !newReq.position || !newReq.startDate || !newReq.endDate) {
@@ -342,7 +349,7 @@ export default function HRModule({ user, selectedProject }) {
       setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: '' });
     } catch (error) {
       console.error("新增人力需求失敗:", error);
-      if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。請至 Firebase 控制台更新 Rules！');
+      if (error.code === 'permission-denied') alert('【權限不足】寫入被 Firebase 拒絕並還原。');
     }
   };
 
@@ -399,7 +406,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 4. 儲存編輯的人員資料與歷程
   const handleSaveEditPerson = async (e) => {
     e.preventDefault();
     if (!editingPerson.name || !editingPerson.hireDate) {
@@ -413,15 +419,13 @@ export default function HRModule({ user, selectedProject }) {
       return;
     }
 
-    // 按開始日期排序以進行防呆檢查
-    const sortedHistory = [...validHistory].sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+    const sortedHistory = [...validHistory].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
 
-    // 區間重疊與邏輯防呆檢查
     for (let i = 0; i < sortedHistory.length; i++) {
       const current = sortedHistory[i];
       const next = sortedHistory[i + 1];
 
-      if (current.endDate && new Date(current.startDate) > new Date(current.endDate)) {
+      if (current.endDate && new Date(current.startDate).getTime() > new Date(current.endDate).getTime()) {
         alert(`歷程日期錯誤：【${current.role}】的開始日不能晚於結束日！`);
         return;
       }
@@ -465,7 +469,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 6. 處理個別人員的相關檔案上傳
   const handlePersonnelFileUpload = async (e, personId) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -492,45 +495,48 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   // =========================================================================
-  // 核心邏輯升級：數據統計計算與明細 (結合「過去到今天」與「未來60天預估」)
+  // 核心邏輯升級：【聚合式】防呆與強制正規化的空缺推演引擎
   // =========================================================================
-  const activeReqsToday = requirements.filter(r => r.startDate <= today && r.endDate >= today);
-  const totalResidentRequiredToday = activeReqsToday.filter(r => r.isResident).reduce((sum, req) => sum + req.count, 0);
-  const totalNonResidentRequiredToday = activeReqsToday.filter(r => !r.isResident).reduce((sum, req) => sum + req.count, 0);
-
-  const residentCount = personnel.filter(p => p.isResident && getPersonStatus(p) === 'active').length;
-  const nonResidentCount = personnel.filter(p => !p.isResident && getPersonStatus(p) === 'active').length;
-
-  const isResidentCompliant = totalResidentRequiredToday > 0 ? residentCount >= totalResidentRequiredToday : true;
-  const isNonResidentCompliant = totalNonResidentRequiredToday > 0 ? nonResidentCount >= totalNonResidentRequiredToday : true;
-
-  const proxyAlertCount = personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length;
+  
+  // 將人力需求依照 Unit + Role 聚合，避免多筆設定互相干擾導致漏抓空窗
+  const reqGroups = {};
+  requirements.forEach(req => {
+    const key = `${req.unit}::${req.position}`;
+    if (!reqGroups[key]) reqGroups[key] = { unit: req.unit, role: req.position, reqs: [] };
+    
+    const rCount = parseInt(req.count, 10) || 1;
+    const sMs = req.startDate ? new Date(req.startDate).getTime() : 0;
+    const eMs = req.endDate ? new Date(req.endDate).getTime() : Infinity;
+    
+    reqGroups[key].reqs.push({ count: rCount, sMs, eMs, originalReq: req });
+  });
 
   // -- 1. 計算過去到今天的空缺 (現有異常) --
   let totalVacancyDays = 0;
   const vacancyBreakdown = []; 
 
-  requirements.forEach(req => {
-    const reqStartMs = new Date(req.startDate).getTime();
-    const reqEndMs = Math.min(new Date(req.endDate).getTime(), todayMs); // 只計算到今天
-    if (reqStartMs > reqEndMs) return;
+  Object.values(reqGroups).forEach(group => {
+    const { unit, role, reqs } = group;
+    let minStartMs = Math.min(...reqs.map(r => r.sMs));
+    let maxEndMs = todayMs;
+
+    if (minStartMs > maxEndMs) return;
 
     const segments = [];
     const personnelInRoleMap = new Map();
 
     personnel.forEach(p => {
       const personContractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : todayMs;
-      
       (p.history || []).forEach(h => {
-        if (h.unit === req.unit && h.role === req.position) {
-          const sMs = new Date(h.startDate).getTime();
+        if (h.unit === unit && h.role === role) {
+          const sMs = h.startDate ? new Date(h.startDate).getTime() : 0;
           let eMs = h.endDate ? new Date(h.endDate).getTime() : todayMs;
           eMs = Math.min(eMs, personContractEndMs); 
           
           if (sMs <= eMs) {
-            if (sMs <= reqEndMs && eMs >= reqStartMs) {
-              const actualStartMs = Math.max(sMs, reqStartMs);
-              const actualEndMs = Math.min(eMs, reqEndMs);
+            if (sMs <= maxEndMs && eMs >= minStartMs) {
+              const actualStartMs = Math.max(sMs, minStartMs);
+              const actualEndMs = Math.min(eMs, maxEndMs);
               
               if (!personnelInRoleMap.has(p.id)) {
                 personnelInRoleMap.set(p.id, { name: p.name, periods: [] });
@@ -549,12 +555,25 @@ export default function HRModule({ user, selectedProject }) {
     let reqVacancyDays = 0;
     let currentVacancyPeriod = null;
     const vacancyPeriods = [];
+    let maxReqCount = 0;
 
-    for (let time = reqStartMs; time <= reqEndMs; time += 86400000) {
+    for (let time = minStartMs; time <= maxEndMs; time += 86400000) {
+      let requiredCountToday = 0;
+      reqs.forEach(r => { if (time >= r.sMs && time <= r.eMs) requiredCountToday += r.count; });
+      maxReqCount = Math.max(maxReqCount, requiredCountToday);
+
+      if (requiredCountToday === 0) {
+        if (currentVacancyPeriod) {
+            vacancyPeriods.push(currentVacancyPeriod);
+            currentVacancyPeriod = null;
+        }
+        continue;
+      }
+
       let activeCount = 0;
-      segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
+      segments.forEach(seg => { if (time >= seg.sMs && time <= seg.eMs) activeCount++; });
       
-      const missingCount = req.count - activeCount;
+      const missingCount = requiredCountToday - activeCount;
       if (missingCount > 0) {
         reqVacancyDays += missingCount; 
 
@@ -582,8 +601,10 @@ export default function HRModule({ user, selectedProject }) {
 
     if (reqVacancyDays > 0) {
       vacancyBreakdown.push({
-        unit: req.unit, position: req.position, requiredCount: req.count,
-        totalVacancyDays: reqVacancyDays, reqStartDate: req.startDate, reqEndDate: req.endDate,
+        unit: unit, position: role, requiredCount: maxReqCount,
+        totalVacancyDays: reqVacancyDays, 
+        reqStartDate: new Date(minStartMs).toISOString().split('T')[0], 
+        reqEndDate: new Date(maxEndMs).toISOString().split('T')[0],
         personnelInRole: Array.from(personnelInRoleMap.values()), vacancyPeriods: vacancyPeriods
       });
     }
@@ -594,12 +615,12 @@ export default function HRModule({ user, selectedProject }) {
   const futureStartMs = todayMs + 86400000; // 從明天開始算
   const futureEndMs = todayMs + (forecastDays * 86400000);
   
-  const upcomingEvents = []; // 預估的人員異動 (離職/轉任/新增需求)
-  const futureVacancies = []; // 推演出的職位空缺預測
+  const upcomingEvents = []; 
+  const futureVacancies = []; 
 
   // 2-1. 收集未來的人員異動與需求異動
   personnel.forEach(p => {
-    // 【新增】：尚未到職 (Onboard)
+    // 尚未到職 (Onboard)
     const pStartMs = new Date(p.contractStart || p.hireDate).getTime();
     if (pStartMs >= futureStartMs && pStartMs <= futureEndMs) {
       const firstHistory = p.history?.[0];
@@ -635,7 +656,7 @@ export default function HRModule({ user, selectedProject }) {
       }
     }
 
-    // 未來內部轉任 (包含轉出與轉入)
+    // 未來內部轉任
     (p.history || []).forEach((h, i) => {
       // 轉任出
       if (h.endDate && h.endDate !== p.contractEnd) {
@@ -648,7 +669,7 @@ export default function HRModule({ user, selectedProject }) {
           });
         }
       }
-      // 轉任入 (排除掉跟剛到職同一天的那一筆，避免跟 onboard 重複)
+      // 轉任入
       if (i > 0) {
         const hStartMs = new Date(h.startDate).getTime();
         if (hStartMs >= futureStartMs && hStartMs <= futureEndMs) {
@@ -664,32 +685,31 @@ export default function HRModule({ user, selectedProject }) {
 
   // 新增人力需求
   requirements.forEach(r => {
-    const rStartMs = new Date(r.startDate).getTime();
+    const rStartMs = r.startDate ? new Date(r.startDate).getTime() : 0;
+    const rCount = parseInt(r.count, 10) || 1;
     if (rStartMs >= futureStartMs && rStartMs <= futureEndMs) {
       upcomingEvents.push({
         date: r.startDate, dateMs: rStartMs,
-        type: 'new_req', unit: r.unit, role: r.position, count: r.count,
-        desc: `計畫新增人力編制需求 (${r.unit} - ${r.position}，擴編 ${r.count} 人)`
+        type: 'new_req', unit: r.unit, role: r.position, count: rCount,
+        desc: `計畫新增人力編制需求 (${r.unit} - ${r.position}，擴編 ${rCount} 人)`
       });
     }
   });
 
-  // 排序所有事件
   upcomingEvents.sort((a, b) => a.dateMs - b.dateMs);
 
-  // 【核心功能：尋找補位人員】
-  // 針對會產生「空缺」的事件 (離職、轉出、新需求)，往後掃描 30 天內是否有新人員補上此單位職務
+  // 【核心緊縮：嚴格補位偵測】
   upcomingEvents.forEach(evt => {
     if (['leave', 'transfer_out', 'new_req'].includes(evt.type)) {
       const gapDateMs = evt.dateMs;
       const replacements = personnel.filter(p => {
-        if (p.id === evt.personId) return false; // 自己不能補自己的位子
+        if (p.id === evt.personId) return false; 
         return (p.history || []).some(h => {
            if (h.unit === evt.unit && h.role === evt.role) {
               const hStartMs = new Date(h.startDate).getTime();
               const diffDays = (hStartMs - gapDateMs) / 86400000;
-              // 補位條件：開始日期與空缺日同一天 (或前一天)，至多容許 30 天內的銜接
-              return diffDays >= -1 && diffDays <= 30; 
+              // 嚴格對齊：新職務開始日必須在空缺發生的前 3 天到後 7 天內，才算具備專屬補位意圖
+              return diffDays >= -3 && diffDays <= 7; 
            }
            return false;
         });
@@ -700,58 +720,63 @@ export default function HRModule({ user, selectedProject }) {
     }
   });
 
-  // 2-2. 模擬未來 60 天的空缺推演
-  requirements.forEach(req => {
-    const reqStartMs = new Date(req.startDate).getTime();
-    const reqEndMs = new Date(req.endDate).getTime();
+  // 2-2. 模擬未來 60 天的空缺推演 (使用聚合引擎)
+  Object.values(reqGroups).forEach(group => {
+    const { unit, role, reqs } = group;
+    const checkStartMs = futureStartMs;
+    const checkEndMs = futureEndMs;
 
-    // 只取「未來預測窗口」與「需求區間」的交集
-    const checkStartMs = Math.max(futureStartMs, reqStartMs);
-    const checkEndMs = Math.min(futureEndMs, reqEndMs);
-
-    if (checkStartMs <= checkEndMs) {
-      const segments = [];
-      personnel.forEach(p => {
-        // 未來推演：如果有人員合約結束，他未來的 active 狀態會被切斷
-        const personContractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : checkEndMs;
-        (p.history || []).forEach(h => {
-          if (h.unit === req.unit && h.role === req.position) {
-            const sMs = new Date(h.startDate).getTime();
-            let eMs = h.endDate ? new Date(h.endDate).getTime() : checkEndMs;
-            eMs = Math.min(eMs, personContractEndMs);
-            if (sMs <= eMs) {
-              segments.push({ sMs, eMs });
-            }
-          }
-        });
-      });
-
-      let currentFutureVacancy = null;
-      for (let time = checkStartMs; time <= checkEndMs; time += 86400000) {
-        let activeCount = 0;
-        segments.forEach(seg => { if (seg.sMs <= time && time <= seg.eMs) activeCount++; });
-        
-        const missingCount = req.count - activeCount;
-        if (missingCount > 0) {
-          const currentDateStr = new Date(time).toISOString().split('T')[0];
-          if (!currentFutureVacancy) {
-            currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
-          } else if (currentFutureVacancy.missingCount === missingCount) {
-            currentFutureVacancy.endDate = currentDateStr;
-          } else {
-            futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
-            currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
-          }
-        } else {
-          if (currentFutureVacancy) {
-            futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
-            currentFutureVacancy = null;
+    const segments = [];
+    personnel.forEach(p => {
+      const personContractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : checkEndMs + 86400000;
+      (p.history || []).forEach(h => {
+        if (h.unit === unit && h.role === role) {
+          const sMs = h.startDate ? new Date(h.startDate).getTime() : 0;
+          let eMs = h.endDate ? new Date(h.endDate).getTime() : checkEndMs + 86400000;
+          eMs = Math.min(eMs, personContractEndMs);
+          if (sMs <= eMs && sMs <= checkEndMs && eMs >= checkStartMs) {
+            segments.push({ sMs, eMs });
           }
         }
+      });
+    });
+
+    let currentFutureVacancy = null;
+    for (let time = checkStartMs; time <= checkEndMs; time += 86400000) {
+      let requiredCountToday = 0;
+      reqs.forEach(r => { if (time >= r.sMs && time <= r.eMs) requiredCountToday += r.count; });
+
+      if (requiredCountToday === 0) {
+        if (currentFutureVacancy) {
+            futureVacancies.push({...currentFutureVacancy, unit, role});
+            currentFutureVacancy = null;
+        }
+        continue;
       }
-      if (currentFutureVacancy) {
-        futureVacancies.push({...currentFutureVacancy, unit: req.unit, role: req.position});
+
+      let activeCount = 0;
+      segments.forEach(seg => { if (time >= seg.sMs && time <= seg.eMs) activeCount++; });
+      
+      const missingCount = requiredCountToday - activeCount;
+      if (missingCount > 0) {
+        const currentDateStr = new Date(time).toISOString().split('T')[0];
+        if (!currentFutureVacancy) {
+          currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
+        } else if (currentFutureVacancy.missingCount === missingCount) {
+          currentFutureVacancy.endDate = currentDateStr;
+        } else {
+          futureVacancies.push({...currentFutureVacancy, unit, role});
+          currentFutureVacancy = { startDate: currentDateStr, endDate: currentDateStr, missingCount };
+        }
+      } else {
+        if (currentFutureVacancy) {
+          futureVacancies.push({...currentFutureVacancy, unit, role});
+          currentFutureVacancy = null;
+        }
       }
+    }
+    if (currentFutureVacancy) {
+      futureVacancies.push({...currentFutureVacancy, unit, role});
     }
   });
 
@@ -763,6 +788,30 @@ export default function HRModule({ user, selectedProject }) {
     return acc;
   }, {});
   const totalActivePersonnel = Object.values(unitSummary).reduce((a, b) => a + b, 0);
+
+  // 上方卡片數據準備 (動態計算聚合結果)
+  let activeReqsSum = 0;
+  let activeReqsNonResSum = 0;
+  Object.values(reqGroups).forEach(group => {
+    let dayCountRes = 0;
+    let dayCountNonRes = 0;
+    group.reqs.forEach(r => {
+      if (todayMs >= r.sMs && todayMs <= r.eMs) {
+        if (r.originalReq.isResident) dayCountRes += r.count;
+        else dayCountNonRes += r.count;
+      }
+    });
+    activeReqsSum += dayCountRes;
+    activeReqsNonResSum += dayCountNonRes;
+  });
+
+  const residentCount = personnel.filter(p => p.isResident && getPersonStatus(p) === 'active').length;
+  const nonResidentCount = personnel.filter(p => !p.isResident && getPersonStatus(p) === 'active').length;
+
+  const isResidentCompliant = activeReqsSum > 0 ? residentCount >= activeReqsSum : true;
+  const isNonResidentCompliant = activeReqsNonResSum > 0 ? nonResidentCount >= activeReqsNonResSum : true;
+
+  const proxyAlertCount = personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-6xl mx-auto">
@@ -824,7 +873,7 @@ export default function HRModule({ user, selectedProject }) {
                 <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力</p>
                 <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">
                   {residentCount}
-                  <span className="text-sm text-slate-400 mx-1">/ {totalResidentRequiredToday || 0}</span>
+                  <span className="text-sm text-slate-400 mx-1">/ {activeReqsSum || 0}</span>
                 </p>
               </div>
             </div>
@@ -837,7 +886,7 @@ export default function HRModule({ user, selectedProject }) {
                 <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力</p>
                 <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">
                   {nonResidentCount}
-                  <span className="text-sm text-slate-400 mx-1">/ {totalNonResidentRequiredToday || 0}</span>
+                  <span className="text-sm text-slate-400 mx-1">/ {activeReqsNonResSum || 0}</span>
                 </p>
               </div>
             </div>
@@ -853,7 +902,7 @@ export default function HRModule({ user, selectedProject }) {
                 <div>
                   <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">異常空缺現況</p>
                   <p className={`text-2xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
-                    {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>天</span>
+                    {totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>人天</span>
                   </p>
                 </div>
               </div>
@@ -887,7 +936,7 @@ export default function HRModule({ user, selectedProject }) {
 
           </div>
 
-          {/* 各單位人數彙整區塊 */}
+          {/* 將各單位人數彙整區塊移動到這裡 */}
           {personnel.length > 0 && (
             <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm transition-colors">
               <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center">
@@ -1696,12 +1745,14 @@ export default function HRModule({ user, selectedProject }) {
 
               {/* 未來空窗推演結果 */}
               <div>
-                <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-4 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2">
+                <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2">
                   <AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警
                 </h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
                   依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：
+                  <br/><span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-bold mt-1 inline-block">💡 提示：若某人員離職，但下方未出現空缺警示，表示該職位「已有其他人員重疊交接中，滿足總量需求」或「該需求區間已到期」。</span>
                 </p>
+                
                 {futureVacancies.length === 0 ? (
                   <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
                     <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" />
@@ -1774,7 +1825,7 @@ export default function HRModule({ user, selectedProject }) {
                           <span className="font-bold text-indigo-700 dark:text-indigo-400 text-base">{item.position}</span>
                         </div>
                         <div className="text-xs text-slate-500 dark:text-slate-400 font-mono tracking-tight">
-                          需求規定：{item.requiredCount} 人 <span className="mx-1">•</span> 區間：{item.reqStartDate} ~ {item.reqEndDate}
+                          最高需求：{item.requiredCount} 人 <span className="mx-1">•</span> 區間：{item.reqStartDate} ~ {item.reqEndDate}
                         </div>
                       </div>
                       <div className="bg-white dark:bg-slate-800 px-4 py-2 rounded-xl border border-orange-100 dark:border-orange-500/30 flex items-center justify-center shadow-sm">
