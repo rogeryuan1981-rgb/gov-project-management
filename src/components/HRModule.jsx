@@ -126,6 +126,7 @@ export default function HRModule({ user, selectedProject }) {
   // 2. 處理單筆新增人員
   const handleAddPerson = async (e) => {
     e.preventDefault();
+    // 修正：移除 email 必填驗證
     if (!newPerson.name || !newPerson.role || !newPerson.unit || !newPerson.hireDate) {
       alert('請填寫必填欄位 (姓名、計畫單位、職務、到職日)');
       return;
@@ -297,6 +298,7 @@ export default function HRModule({ user, selectedProject }) {
   // 4. 儲存編輯的人員資料與歷程
   const handleSaveEditPerson = async (e) => {
     e.preventDefault();
+    // 修正：移除 email 必填驗證
     if (!editingPerson.name || !editingPerson.hireDate) {
       alert("請填寫必填欄位：姓名與最初到職日");
       return;
@@ -318,7 +320,7 @@ export default function HRModule({ user, selectedProject }) {
       const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', editingPerson.id);
       await updateDoc(personRef, {
         name: editingPerson.name,
-        email: editingPerson.email,
+        email: editingPerson.email || '', // 允許為空
         hireDate: editingPerson.hireDate,
         contractStart: editingPerson.contractStart || '',
         contractEnd: editingPerson.contractEnd || '',
