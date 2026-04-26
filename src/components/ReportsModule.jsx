@@ -126,7 +126,14 @@ export default function ReportsModule({ user, selectedProject }) {
 
     if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
 
-    // 1. 撈取區間內的人事異動軌跡 (以人員為群組)
+    // 定義排序權重邏輯
+    const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
+    const getUnitWeight = (unit) => unitWeights[unit] || 99;
+
+    const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
+    const getRoleWeight = (role) => roleWeights[role] || 99;
+
+    // 1. 撈取區間內的人事異動軌跡
     const activePersonnelChanges = [];
     
     personnel.forEach(p => {
@@ -136,7 +143,7 @@ export default function ReportsModule({ user, selectedProject }) {
       let pEndMs = Infinity;
       let exitDateStr = '';
       
-      // 計算實際離職日：依據政府機關規定為最後工作日(contractEnd)的隔日
+      // 計算實際離職日：政府機關規定為最後工作日(contractEnd)的隔日
       if (p.contractEnd) {
          const d = new Date(p.contractEnd);
          d.setDate(d.getDate() + 1); // 隔日
@@ -148,82 +155,78 @@ export default function ReportsModule({ user, selectedProject }) {
       if (pStartMs <= endMs && pEndMs >= startMs) {
          const events = [];
          
-         // a. 到職事件 (以參與計畫開始日)
-         if (pStartMs >= startMs && pStartMs <= endMs) {
-             const firstRole = p.history && p.history.length > 0 ? `${p.history[0].unit} - ${p.history[0].role}` : `${p.unit} - ${p.role}`;
-             events.push({ date: pStart, type: '加入計畫', desc: `擔任 ${firstRole}` });
-         }
-
-         // b. 轉任事件
-         (p.history || []).forEach((h, idx) => {
-             if (idx > 0 && h.startDate) {
+         // 決定報表上的「第一筆生效日」：取「計畫參與開始日」與「報表起始日」較晚者
+         const effectiveStartMs = Math.max(pStartMs, startMs);
+         const effectiveStartDateStr = new Date(effectiveStartMs).toISOString().split('T')[0];
+         
+         // 尋找在該「生效日」時擔任的單位與職位
+         let initialUnit = p.unit;
+         let initialRole = p.role;
+         
+         if (p.history && p.history.length > 0) {
+             for (let i = p.history.length - 1; i >= 0; i--) {
+                 const h = p.history[i];
                  const hStartMs = new Date(h.startDate).getTime();
-                 if (hStartMs >= startMs && hStartMs <= endMs && h.startDate !== pStart) {
-                     events.push({ date: h.startDate, type: '職務轉任', desc: `轉任至 ${h.unit} - ${h.role}` });
+                 if (hStartMs <= effectiveStartMs) {
+                     initialUnit = h.unit;
+                     initialRole = h.role;
+                     break;
+                 }
+             }
+         }
+         
+         events.push(`${effectiveStartDateStr} 擔任 (${initialUnit}) (${initialRole})`);
+
+         // 後續職務轉任事件 (必須發生在生效日之後、且在報表結束日之前)
+         (p.history || []).forEach(h => {
+             if (h.startDate) {
+                 const hStartMs = new Date(h.startDate).getTime();
+                 if (hStartMs > effectiveStartMs && hStartMs <= endMs) {
+                     events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
                  }
              }
          });
 
-         // c. 離職事件 (注意政府規定隔日)
+         // 離職事件
          if (p.contractEnd && pEndMs >= startMs && pEndMs <= endMs) {
-             events.push({ date: exitDateStr, type: '退出計畫', desc: `最後工作日為 ${p.contractEnd}` });
+             events.push(`${exitDateStr} 離職`);
          }
-
-         // 若該區間內有在職但無具體異動，給予一個穩定在職的標示
-         if (events.length === 0) {
-             events.push({ date: '-', type: '無異動', desc: '區間內穩定在職' });
-         }
-
-         // 依日期排序該員的異動
-         events.sort((a, b) => {
-            if (a.date === '-') return 1;
-            if (b.date === '-') return -1;
-            return new Date(a.date).getTime() - new Date(b.date).getTime();
-         });
 
          activePersonnelChanges.push({
              name: p.name,
+             unit: initialUnit, 
+             role: initialRole, 
              events: events
          });
       }
     });
 
-    // 依據人員姓名排序
-    activePersonnelChanges.sort((a, b) => a.name.localeCompare(b.name));
+    // 依據單位與職位排序人員 (軌跡表)
+    activePersonnelChanges.sort((a, b) => {
+        const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+        if (uDiff !== 0) return uDiff;
+        return getRoleWeight(a.role) - getRoleWeight(b.role);
+    });
 
-    // 產生異動軌跡的 HTML Rows
+    // 產生異動軌跡的 HTML Rows (新版呈現方式)
     let changeRecordsHtml = '';
     if (activePersonnelChanges.length === 0) {
-      changeRecordsHtml = '<tr><td colspan="4" class="text-center" style="color:#94a3b8;">此區間內無任何人員在職紀錄</td></tr>';
+      changeRecordsHtml = '<tr><td colspan="2" class="text-center" style="color:#94a3b8;">此區間內無任何人員在職紀錄</td></tr>';
     } else {
       activePersonnelChanges.forEach(ap => {
-        if (ap.events.length === 0) return; 
-        // 第一列需包含 rowspan 顯示姓名
+        const eventsHtml = ap.events.map(e => `<div style="margin-bottom: 4px;">${e}</div>`).join('');
         changeRecordsHtml += `
           <tr>
-            <td rowspan="${ap.events.length}"><strong>${ap.name}</strong></td>
-            <td>${ap.events[0].date}</td>
-            <td>${ap.events[0].type}</td>
-            <td>${ap.events[0].desc}</td>
+            <td style="vertical-align: top; width: 150px; font-weight: bold;">${ap.name}</td>
+            <td style="vertical-align: top; font-family: monospace; font-size: 13px;">${eventsHtml}</td>
           </tr>
         `;
-        // 後續列僅顯示事件
-        for (let i = 1; i < ap.events.length; i++) {
-          changeRecordsHtml += `
-            <tr>
-              <td>${ap.events[i].date}</td>
-              <td>${ap.events[i].type}</td>
-              <td>${ap.events[i].desc}</td>
-            </tr>
-          `;
-        }
       });
     }
 
-    // 2. 撈取每個職位的人員狀況 (Personnel Status per Position)
+    // 2. 撈取每個職位的人員狀況
     const roleOccupantsMap = {};
     
-    // 先把人力需求清單放入 Map 確保就算沒人也顯示該職位
     requirements.forEach(req => {
       const key = `${req.unit}::${req.position}`;
       if (!roleOccupantsMap[key]) {
@@ -231,7 +234,6 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     });
 
-    // 填入區間內有在職紀錄的人員
     personnel.forEach(p => {
       const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
       (p.history || []).forEach(h => {
@@ -239,13 +241,11 @@ export default function ReportsModule({ user, selectedProject }) {
         const hStartMs = new Date(h.startDate).getTime();
         const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
         
-        // 檢查該歷程是否與選擇區間有交集
         if (hStartMs <= endMs && hEndMs >= startMs) {
           const key = `${h.unit}::${h.role}`;
           if (!roleOccupantsMap[key]) {
             roleOccupantsMap[key] = { unit: h.unit, role: h.role, occupants: [] };
           }
-          // 放入人員與其實際在該職位的區間 (不受查詢區間裁切，保留詳細完整區間)
           roleOccupantsMap[key].occupants.push({
             name: p.name,
             start: h.startDate,
@@ -256,11 +256,12 @@ export default function ReportsModule({ user, selectedProject }) {
     });
 
     const roleOccupantsList = Object.values(roleOccupantsMap).sort((a, b) => {
-      if (a.unit !== b.unit) return a.unit.localeCompare(b.unit);
-      return a.role.localeCompare(b.role);
+      const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+      if (uDiff !== 0) return uDiff;
+      return getRoleWeight(a.role) - getRoleWeight(b.role);
     });
 
-    // 3. 計算區間內的空缺天數 (Vacancy Calculation)
+    // 3. 計算區間內的空缺天數
     const reqGroups = {};
     requirements.forEach(req => {
       const key = `${req.unit}::${req.position}`;
@@ -332,6 +333,13 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     });
 
+    vacancyReports.sort((a, b) => {
+      const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
+      if (uDiff !== 0) return uDiff;
+      return getRoleWeight(a.role) - getRoleWeight(b.role);
+    });
+
+
     // 4. 產出列印用 HTML
     const printContent = `
       <!DOCTYPE html>
@@ -344,7 +352,7 @@ export default function ReportsModule({ user, selectedProject }) {
           h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
           h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
           .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
-          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; }
+          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 14px; }
           th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: left; }
           th { background-color: #f8fafc; color: #475569; font-weight: bold; white-space: nowrap; }
           .text-center { text-align: center; }
@@ -364,13 +372,11 @@ export default function ReportsModule({ user, selectedProject }) {
         <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
         <h2>一、 期間內人事異動軌跡</h2>
-        <p style="font-size: 12px; color: #64748b;">說明：列出區間內曾在職之所有人員及其發生的異動事件。若區間內無異動則標示「區間內無異動」。政府機關認定之退出計畫日（離職日）為最後工作日之隔日。</p>
+        <p style="font-size: 12px; color: #64748b;">說明：列出本區間曾在職之人員及其職務異動。首筆紀錄為參與計畫期間內的最初職位，離職日認定為最後工作日之隔日。人員排序依據其最初職務之單位與職位順序排序。</p>
         <table>
           <tr>
-            <th style="width:100px;">人員姓名</th>
-            <th style="width:120px;">異動日期</th>
-            <th style="width:100px;">異動類型</th>
-            <th>異動說明</th>
+            <th style="width:150px;">姓名</th>
+            <th>計劃期間異動軌跡</th>
           </tr>
           ${changeRecordsHtml}
         </table>
