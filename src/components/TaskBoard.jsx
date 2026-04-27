@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Plus, ChevronRight, ChevronDown, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, Edit2, Save, X, Trash2, ExternalLink, CheckSquare, BarChart2 } from 'lucide-react';
+import { Search, Filter, Plus, ChevronRight, ChevronDown, AlertCircle, Calendar, FolderArchive, FileText, Download, Loader2, FileSpreadsheet, Edit2, Save, X, Trash2, ExternalLink, CheckSquare, BarChart2, CheckCircle2 } from 'lucide-react';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getFirestore, addDoc } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -696,7 +696,6 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
         )}
 
-        {/* 【修正】移除了 parent 的 overflow-hidden，確保下拉選單能順利蓋出版面外 */}
         <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm relative transition-all">
           <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500 rounded-l-2xl"></div>
           
@@ -752,7 +751,6 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mt-8 pt-6 border-t border-slate-100 dark:border-slate-700/50 pl-2">
-            {/* 負責人區塊 (自訂的 Dropdown 與 Chips，並加入格狀排列與搜尋) */}
             <div className="lg:col-span-1 relative">
               <p className="text-xs font-bold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wider">指派負責人</p>
               {isEditing ? (
@@ -1069,6 +1067,15 @@ export default function TaskBoard({ user, selectedProject, selectedTask, setSele
                     <FolderArchive size={48} className="text-slate-300 dark:text-slate-600 mb-4" />
                     <p className="text-slate-700 dark:text-slate-300 font-bold mb-1">此專案目前尚無從 Firebase 讀取到的工項資料</p>
                     <p className="text-slate-500 text-sm mb-6 max-w-md font-medium">請點擊上方「新增任務」，或匯出 CSV 填寫後進行批次匯入。</p>
+                    <div className="flex space-x-4">
+                      <button onClick={exportTasksToCSV} className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 font-medium text-sm rounded-lg hover:shadow-sm flex items-center">
+                        <Download size={16} className="mr-2" />匯出空白 CSV 範例
+                      </button>
+                      <button onClick={triggerFileInput} disabled={isImporting} className="px-4 py-2 bg-indigo-50 text-indigo-600 font-medium text-sm rounded-lg hover:bg-indigo-100 flex items-center">
+                        {isImporting ? <Loader2 size={16} className="animate-spin mr-2" /> : <FileSpreadsheet size={16} className="mr-2" />}
+                        匯入 CSV 工項清單
+                      </button>
+                    </div>
                   </div>
                 </td>
               </tr>
