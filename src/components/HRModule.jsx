@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart, ExternalLink } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart, ExternalLink, Check, ListChecks } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -94,7 +94,7 @@ export default function HRModule({ user, selectedProject }) {
   });
   
   const [newReq, setNewReq] = useState({
-    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: ''
+    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
   });
 
   const tokenClientRef = useRef(null);
@@ -237,7 +237,7 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const handleOpenReqModal = () => {
-    setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: '' });
+    setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
     setIsReqModalOpen(true);
   };
 
@@ -261,7 +261,7 @@ export default function HRModule({ user, selectedProject }) {
       const initialHistory = [{ unit: newPerson.unit, role: newPerson.role, startDate: newPerson.roleStartDate || newPerson.hireDate, endDate: '' }];
       await addDoc(hrRef, {
         ...newPerson, roleStartDate: newPerson.roleStartDate || newPerson.hireDate,
-        history: initialHistory, projectId: selectedProject, createdAt: new Date().getTime()
+        history: initialHistory, fulfilledReqs: [], projectId: selectedProject, createdAt: new Date().getTime()
       });
       setIsAddPersonModalOpen(false);
     } catch (error) { console.error("新增人員失敗:", error); }
@@ -305,7 +305,7 @@ export default function HRModule({ user, selectedProject }) {
 
           await addDoc(hrRef, {
             name, email, unit, role, isResident, hireDate, roleStartDate, contractStart, contractEnd,
-            status: 'active', proxyAlert: false, files: [], history: initialHistory,
+            status: 'active', proxyAlert: false, files: [], history: initialHistory, fulfilledReqs: [],
             projectId: selectedProject, createdAt: new Date().getTime()
           });
           importCount++;
@@ -320,13 +320,21 @@ export default function HRModule({ user, selectedProject }) {
   const handleAddReq = async (e) => {
     e.preventDefault();
     if (!newReq.unit || !newReq.position || !newReq.startDate || !newReq.endDate) return;
+    
+    // 過濾掉空白的條列項目
+    const filteredNoteItems = (newReq.noteItems || []).filter(n => n.trim() !== '');
+
     try {
       const reqRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs');
       await addDoc(reqRef, {
-        ...newReq, count: parseInt(newReq.count, 10) || 1, isResident: String(newReq.isResident) === 'true',
-        projectId: selectedProject, createdAt: new Date().getTime()
+        ...newReq, 
+        count: parseInt(newReq.count, 10) || 1, 
+        isResident: String(newReq.isResident) === 'true',
+        noteItems: filteredNoteItems,
+        projectId: selectedProject, 
+        createdAt: new Date().getTime()
       });
-      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, note: '' });
+      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
     } catch (error) { console.error("新增人力需求失敗:", error); }
   };
 
@@ -336,7 +344,7 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const exportReqCSVTemplate = () => {
-    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明\n範例單位,專員,2,${defaultStartDate},${defaultEndDate},是,需具備相關證照`;
+    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明(多項請用分號;隔開)\n範例單位,專員,2,${defaultStartDate},${defaultEndDate},是,需具備相關證照;需三年專案經驗`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -360,10 +368,13 @@ export default function HRModule({ user, selectedProject }) {
       for (let i = startIndex; i < rows.length; i++) {
         const cols = rows[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         if (cols.length >= 2) {
+          const importedNotes = cols[6] ? cols[6].split(';').map(n => n.trim()).filter(Boolean) : [];
+          
           await addDoc(reqRef, {
             unit: cols[0], position: cols[1], count: parseInt(cols[2], 10) || 1,
             startDate: formatImportDate(cols[3]) || defaultStartDate, endDate: formatImportDate(cols[4]) || defaultEndDate,
-            isResident: cols[5] === '是' || cols[5] === 'true', note: cols[6] || '',
+            isResident: cols[5] === '是' || cols[5] === 'true', 
+            noteItems: importedNotes,
             projectId: selectedProject, createdAt: new Date().getTime()
           });
           importCount++;
@@ -400,7 +411,8 @@ export default function HRModule({ user, selectedProject }) {
         name: editingPerson.name, email: editingPerson.email || '', hireDate: editingPerson.hireDate,
         contractStart: editingPerson.contractStart || '', contractEnd: editingPerson.contractEnd || '',
         history: sortedHistory, unit: latestRecord.unit, role: latestRecord.role,
-        roleStartDate: latestRecord.startDate, isResident: newIsResident
+        roleStartDate: latestRecord.startDate, isResident: newIsResident,
+        fulfilledReqs: editingPerson.fulfilledReqs || [] // 儲存打勾的額外需求項目
       });
       setEditingPerson(null);
     } catch (error) { console.error("更新人員失敗:", error); }
@@ -652,7 +664,6 @@ export default function HRModule({ user, selectedProject }) {
       if (status === 'active') statusStr = '在職'; else if (status === 'inactive') statusStr = '已離職'; else if (status === 'pending') statusStr = '尚未到職';
       const residentStr = p.isResident ? '是' : '否';
       
-      // 修正在 CSV 匯出時尚未到職人員的日期顯示邏輯
       const startStr = status === 'pending' ? '尚未到職' : (p.contractStart || '');
       const endStr = status === 'pending' ? '尚未到職' : (p.contractEnd || '至今');
       
@@ -959,8 +970,60 @@ export default function HRModule({ user, selectedProject }) {
                   </div>
                 </div>
 
+                {/* 3. 額外需求符合確認 */}
                 <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                  <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 border-b border-slate-100 dark:border-slate-700 pb-2 flex items-center"><FileText size={16} className="mr-2 text-indigo-500" /> 3. 相關檔案與證明</h4>
+                  <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 border-b border-slate-100 dark:border-slate-700 pb-2 flex items-center">
+                    <ListChecks size={16} className="mr-2 text-indigo-500" /> 3. 額外需求符合確認
+                  </h4>
+                  {(() => {
+                    const lastHistory = editingPerson.history?.[editingPerson.history.length - 1];
+                    const activeUnit = lastHistory?.unit || editingPerson.unit;
+                    const activeRole = lastHistory?.role || editingPerson.role;
+                    const matchedRequirement = requirements.find(r => r.unit === activeUnit && r.position === activeRole);
+                    const extraRequirements = matchedRequirement?.noteItems?.length > 0 
+                        ? matchedRequirement.noteItems 
+                        : (matchedRequirement?.note ? [matchedRequirement.note] : []);
+
+                    if (extraRequirements.length === 0) {
+                      return <p className="text-xs text-slate-500 dark:text-slate-400 p-2">目前職位 ({activeUnit} - {activeRole}) 尚無設定任何額外需求說明。</p>;
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {extraRequirements.map((reqStr, idx) => {
+                          const isChecked = (editingPerson.fulfilledReqs || []).includes(reqStr);
+                          return (
+                            <label key={idx} className={`flex items-start space-x-3 p-3 rounded-xl border cursor-pointer transition-colors ${isChecked ? 'bg-indigo-50 border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-500/30' : 'bg-slate-50 border-slate-200 dark:bg-slate-900 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-500/50'}`}>
+                              <div className="relative flex items-center justify-center mt-0.5 shrink-0">
+                                <input 
+                                  type="checkbox" 
+                                  className="peer sr-only" 
+                                  checked={isChecked} 
+                                  onChange={() => {
+                                    const currentFulfills = editingPerson.fulfilledReqs || [];
+                                    const newFulfills = isChecked 
+                                      ? currentFulfills.filter(r => r !== reqStr) 
+                                      : [...currentFulfills, reqStr];
+                                    setEditingPerson({...editingPerson, fulfilledReqs: newFulfills});
+                                  }} 
+                                />
+                                <div className="w-5 h-5 border-2 border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 peer-checked:bg-indigo-500 peer-checked:border-indigo-500 transition-all flex items-center justify-center">
+                                  <Check size={14} className="text-white opacity-0 peer-checked:opacity-100 transition-opacity" />
+                                </div>
+                              </div>
+                              <span className={`text-sm font-medium leading-tight ${isChecked ? 'text-indigo-900 dark:text-indigo-200' : 'text-slate-700 dark:text-slate-300'}`}>
+                                {reqStr}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                  <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 border-b border-slate-100 dark:border-slate-700 pb-2 flex items-center"><FileText size={16} className="mr-2 text-indigo-500" /> 4. 相關檔案與證明</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {editingPerson.files && editingPerson.files.length > 0 ? (
                       editingPerson.files.map(file => (
@@ -1012,9 +1075,48 @@ export default function HRModule({ user, selectedProject }) {
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label><input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
-                    <div className="md:col-span-2"><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label><textarea value={newReq.note} onChange={e=>setNewReq({...newReq, note: e.target.value})} placeholder="請輸入特殊條件、備註或其他詳細需求說明..." className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 resize-y min-h-[80px]" /></div>
+                    
+                    {/* 更新：條列式額外需求說明 */}
+                    <div className="md:col-span-4 mt-2">
+                      <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
+                      <div className="space-y-2">
+                        {(newReq.noteItems || []).map((item, idx) => (
+                          <div key={idx} className="flex items-center space-x-2">
+                            <input 
+                              type="text" 
+                              value={item} 
+                              onChange={(e) => {
+                                const newItems = [...(newReq.noteItems || [])];
+                                newItems[idx] = e.target.value;
+                                setNewReq({...newReq, noteItems: newItems});
+                              }}
+                              placeholder="請輸入需求項目 (例如：需具備三年專案經驗、需取得 PMP 證照)..." 
+                              className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" 
+                            />
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                const newItems = (newReq.noteItems || []).filter((_, i) => i !== idx);
+                                setNewReq({...newReq, noteItems: newItems});
+                              }}
+                              className="p-2 text-slate-400 hover:text-red-500 bg-slate-100 hover:bg-red-50 dark:bg-slate-800 dark:hover:bg-red-500/10 rounded-lg transition-colors"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        ))}
+                        <button 
+                          type="button" 
+                          onClick={() => setNewReq({...newReq, noteItems: [...(newReq.noteItems || []), '']})}
+                          className="flex items-center text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors mt-2 px-1"
+                        >
+                          <Plus size={14} className="mr-1" /> 新增一項條列說明
+                        </button>
+                      </div>
+                    </div>
+
                   </div>
-                  <div className="flex justify-end"><button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">加入設定</button></div>
+                  <div className="flex justify-end mt-2"><button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">加入設定</button></div>
                 </form>
               </div>
 
@@ -1032,12 +1134,20 @@ export default function HRModule({ user, selectedProject }) {
                     ) : (
                       requirements.sort((a,b) => new Date(a.startDate) - new Date(b.startDate)).map(req => {
                         const isActiveToday = req.startDate <= today && req.endDate >= today;
+                        const displayNotes = req.noteItems && req.noteItems.length > 0 ? req.noteItems : (req.note ? [req.note] : []);
+                        
                         return (
                           <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
                             <td className="py-3 px-4"><div className="font-bold text-sm text-slate-800 dark:text-slate-200">{req.position}</div><div className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(req.unit)}`}>{req.unit}</div></td>
                             <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
                             <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">{req.isResident ? <span className="text-indigo-600 dark:text-indigo-400">是</span> : <span className="text-slate-400">否</span>}</td>
-                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 truncate max-w-[200px]" title={req.note}>{req.note || '-'}</td>
+                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 max-w-[200px]">
+                               {displayNotes.length > 0 ? (
+                                   <ul className="list-disc pl-4 space-y-0.5">
+                                      {displayNotes.map((n, i) => <li key={i} className="break-words">{n}</li>)}
+                                   </ul>
+                               ) : '-'}
+                            </td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400">{req.startDate} ~ {req.endDate}</td>
                             <td className="py-3 px-4 text-center">{isActiveToday ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold rounded">現正要求中</span> : <span className="px-2 py-0.5 bg-slate-100 text-slate-500 dark:bg-slate-700 text-[10px] font-bold rounded">非現行區間</span>}</td>
                             <td className="py-3 px-4 text-right"><button onClick={() => handleDeleteReq(req.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={16} /></button></td>
