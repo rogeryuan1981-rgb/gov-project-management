@@ -66,7 +66,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubTasks(); };
   }, [user, selectedProject]);
 
-  // ================= 報表匯出邏輯 =================
+  // ================= 報表核心邏輯 =================
 
   const exportVacancyReportPDF = () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
@@ -80,7 +80,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
     const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
     const getUnitWeight = (unit) => unitWeights[unit] || 99;
-
     const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
     const getRoleWeight = (role) => roleWeights[role] || 99;
 
@@ -88,7 +87,6 @@ export default function ReportsModule({ user, selectedProject }) {
     const activePersonnelChanges = [];
     personnel.forEach(p => {
       const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
-      
       const validHistory = (p.history || []).filter(h => {
           if (!h.unit || !h.role || !h.startDate) return false;
           const hStartMs = new Date(h.startDate).getTime();
@@ -98,7 +96,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (validHistory.length > 0) {
          const events = [];
-         
          validHistory.forEach((h, idx) => {
              const hStartMs = new Date(h.startDate).getTime();
              if (idx === 0) {
@@ -109,7 +106,6 @@ export default function ReportsModule({ user, selectedProject }) {
                  events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
              }
          });
-
          if (p.contractEnd) {
              const exitD = new Date(p.contractEnd);
              exitD.setDate(exitD.getDate() + 1);
@@ -118,13 +114,7 @@ export default function ReportsModule({ user, selectedProject }) {
                  events.push(`${exitD.toISOString().split('T')[0]} 離職`);
              }
          }
-
-         activePersonnelChanges.push({
-             name: p.name,
-             unit: validHistory[0].unit, 
-             role: validHistory[0].role, 
-             events: events
-         });
+         activePersonnelChanges.push({ name: p.name, unit: validHistory[0].unit, role: validHistory[0].role, events: events });
       }
     });
 
@@ -138,9 +128,7 @@ export default function ReportsModule({ user, selectedProject }) {
     const roleGroups = {};
     requirements.forEach(req => {
         const key = `${req.unit}::${req.position}`;
-        if (!roleGroups[key]) {
-            roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
-        }
+        if (!roleGroups[key]) roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
         roleGroups[key].reqs.push({
             count: parseInt(req.count, 10) || 1,
             sMs: req.startDate ? new Date(req.startDate).getTime() : 0,
@@ -158,14 +146,10 @@ export default function ReportsModule({ user, selectedProject }) {
             if (roleGroups[key]) {
                 const hStartMs = new Date(h.startDate).getTime();
                 const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
-                
                 const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
-                
                 if (effectiveStartMs <= hEndMs && effectiveStartMs <= endMs) {
                     roleGroups[key].segments.push({
-                        name: p.name,
-                        startMs: effectiveStartMs,
-                        endMs: hEndMs,
+                        name: p.name, startMs: effectiveStartMs, endMs: hEndMs,
                         startStr: new Date(effectiveStartMs).toISOString().split('T')[0],
                         endStr: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
                     });
@@ -187,7 +171,6 @@ export default function ReportsModule({ user, selectedProject }) {
         let maxReqCount = 0;
         const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs)));
         const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
-        
         if (groupStartLimitMs > groupEndLimitMs) return;
 
         for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
@@ -219,20 +202,16 @@ export default function ReportsModule({ user, selectedProject }) {
             }
         });
 
-        // 為每個 Slot 注入空缺(紅字)標記
         [...slots, ...overstaffSlots].forEach(slot => {
             const finalTimeline = [];
             let currentTime = groupStartLimitMs;
-            
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             
             sortedOccs.forEach(occ => {
                 if (occ.startMs > currentTime) {
                     const vStart = currentTime;
                     const vEnd = occ.startMs - 86400000;
-                    if (vStart <= vEnd) {
-                        finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] });
-                    }
+                    if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] });
                 }
                 finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr });
                 currentTime = occ.endMs + 86400000;
@@ -246,10 +225,9 @@ export default function ReportsModule({ user, selectedProject }) {
 
         expandedSlots.push(...slots, ...overstaffSlots);
 
-        // 3. 空缺天數精算
+        // 空缺天數精算
         let currentVacancy = null; const vacancyPeriods = [];
         let totalPenaltyDays = 0; let totalGraceDays = 0;
-
         for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
             let dailyReq = 0; let dailyPenaltyReq = 0;
             group.reqs.forEach(r => {
@@ -291,7 +269,7 @@ export default function ReportsModule({ user, selectedProject }) {
         if (!currentUnitGroup || currentUnitGroup.unit !== slot.unit) {
             currentUnitGroup = { unit: slot.unit, roles: [], rowSpan: 0 };
             groupedData.push(currentUnitGroup);
-            currentRoleGroup = null; // 切換單位時重置職位群組
+            currentRoleGroup = null; 
         }
         if (!currentRoleGroup || currentRoleGroup.role !== slot.role) {
             currentRoleGroup = { role: slot.role, posIndex: posIndexCounter++, slots: [], rowSpan: 0 };
@@ -304,7 +282,7 @@ export default function ReportsModule({ user, selectedProject }) {
     });
 
     let table2Html = `
-      <h2>二、 期間內各職位人員在職狀況 (按員額 Slot 拆分)</h2>
+      <h2 style="page-break-before: always; margin-top: 0;">二、 期間內各職位人員在職狀況 (按員額 Slot 拆分)</h2>
       <p style="font-size: 11px; color: #64748b;">說明：依據職務編制與人員歷程最佳化分配。起始日抓取該員實際就任此職位之日期，並排除重疊計算。</p>
       <table style="border: 2px solid #1e293b; border-collapse: collapse;">
         <colgroup>
@@ -328,7 +306,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 const timeline = slot.timeline.length > 0 ? slot.timeline : [{ isEmpty: true }];
                 timeline.forEach((event, eIdx) => {
                     const rowClasses = [];
-                    // 不同單位產生粗體橫線分隔
                     if (isUnitStart && rIdx === 0 && sIdx === 0 && eIdx === 0) rowClasses.push('unit-top-border');
                     
                     table2Html += `<tr class="${rowClasses.join(' ')}">`;
@@ -371,7 +348,7 @@ export default function ReportsModule({ user, selectedProject }) {
     });
 
     let table3Html = `
-        <h2>三、 職位空缺天數精算 (合併精算與違約判定)</h2>
+        <h2 style="page-break-before: always; margin-top: 0;">三、 職位空缺天數精算 (合併精算與違約判定)</h2>
         <p style="font-size: 11px; color: #64748b;">說明：以「單位＋職位」合併精算空缺。當發生空缺時，若日期位於招募寬限期內，則計入「免罰寬限」，反之計入「違約空窗」。</p>
         <table style="border: 2px solid #1e293b; border-collapse: collapse;">
           <colgroup><col style="width:100px;"><col style="width:110px;"><col style="width:70px;"><col><col style="width:80px;"><col style="width:80px;"></colgroup>
@@ -429,7 +406,7 @@ export default function ReportsModule({ user, selectedProject }) {
           h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
           h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
           .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
-          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; table-layout: fixed; }
+          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; table-layout: fixed; border: 1px solid #cbd5e1; }
           th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; word-wrap: break-word; }
           th { background-color: #f8fafc; color: #475569; font-weight: bold; }
           .text-center { text-align: center; }
@@ -440,7 +417,10 @@ export default function ReportsModule({ user, selectedProject }) {
           .grace { color: #10b981; font-weight: bold; }
           .unit-top-border td { border-top: 2px solid #1e293b !important; }
           .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; border-radius: 5px; font-weight: bold; cursor: pointer; border:none; }
-          @media print { .no-print { display: none !important; } body { padding: 0; } }
+          @media print { 
+            .no-print { display: none !important; } 
+            body { padding: 0; } 
+          }
         </style>
       </head>
       <body>
@@ -451,7 +431,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <h1>【${projectName}】人事異動與空缺紀錄表</h1>
         <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
-        <h2>一、 期間內人事異動軌跡</h2>
+        <h2 style="margin-top: 0;">一、 期間內人事異動軌跡</h2>
         <p style="font-size: 11px; color: #64748b;">說明：參與計畫起始日取「實際就任日」與「計畫起日 (${projectStartDate})」之較晚者。退出日為最後工作日之隔日。</p>
         <table>
           <colgroup><col style="width: 120px;"><col></colgroup>
