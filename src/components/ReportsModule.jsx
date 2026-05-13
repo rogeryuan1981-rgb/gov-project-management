@@ -364,7 +364,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </style>
       </head>
       <body>
-        <div class="no-print" style="text-align:center; background:#f0fdf4; padding:15px; border-radius:8px;">
+        <div class="no-print" style="text-align:center; background:#f0fdf4; padding:15px; border:1px solid #bbf7d0; border-radius:8px;">
           <button class="print-btn" onclick="window.print()">列印 / 儲存為 PDF</button>
         </div>
 
