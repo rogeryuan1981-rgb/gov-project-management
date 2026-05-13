@@ -87,6 +87,7 @@ export default function ReportsModule({ user, selectedProject }) {
     const activePersonnelChanges = [];
     personnel.forEach(p => {
       const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
+      
       const validHistory = (p.history || []).filter(h => {
           if (!h.unit || !h.role || !h.startDate) return false;
           const hStartMs = new Date(h.startDate).getTime();
@@ -96,6 +97,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (validHistory.length > 0) {
          const events = [];
+         
          validHistory.forEach((h, idx) => {
              const hStartMs = new Date(h.startDate).getTime();
              if (idx === 0) {
@@ -106,6 +108,7 @@ export default function ReportsModule({ user, selectedProject }) {
                  events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
              }
          });
+
          if (p.contractEnd) {
              const exitD = new Date(p.contractEnd);
              exitD.setDate(exitD.getDate() + 1);
@@ -114,7 +117,13 @@ export default function ReportsModule({ user, selectedProject }) {
                  events.push(`${exitD.toISOString().split('T')[0]} 離職`);
              }
          }
-         activePersonnelChanges.push({ name: p.name, unit: validHistory[0].unit, role: validHistory[0].role, events: events });
+
+         activePersonnelChanges.push({
+             name: p.name,
+             unit: validHistory[0].unit, 
+             role: validHistory[0].role, 
+             events: events
+         });
       }
     });
 
@@ -128,7 +137,9 @@ export default function ReportsModule({ user, selectedProject }) {
     const roleGroups = {};
     requirements.forEach(req => {
         const key = `${req.unit}::${req.position}`;
-        if (!roleGroups[key]) roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
+        if (!roleGroups[key]) {
+            roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
+        }
         roleGroups[key].reqs.push({
             count: parseInt(req.count, 10) || 1,
             sMs: req.startDate ? new Date(req.startDate).getTime() : 0,
@@ -146,10 +157,14 @@ export default function ReportsModule({ user, selectedProject }) {
             if (roleGroups[key]) {
                 const hStartMs = new Date(h.startDate).getTime();
                 const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
+                
                 const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
+                
                 if (effectiveStartMs <= hEndMs && effectiveStartMs <= endMs) {
                     roleGroups[key].segments.push({
-                        name: p.name, startMs: effectiveStartMs, endMs: hEndMs,
+                        name: p.name,
+                        startMs: effectiveStartMs,
+                        endMs: hEndMs,
                         startStr: new Date(effectiveStartMs).toISOString().split('T')[0],
                         endStr: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
                     });
@@ -171,6 +186,7 @@ export default function ReportsModule({ user, selectedProject }) {
         let maxReqCount = 0;
         const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs)));
         const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
+        
         if (groupStartLimitMs > groupEndLimitMs) return;
 
         for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
@@ -205,13 +221,16 @@ export default function ReportsModule({ user, selectedProject }) {
         [...slots, ...overstaffSlots].forEach(slot => {
             const finalTimeline = [];
             let currentTime = groupStartLimitMs;
+            
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             
             sortedOccs.forEach(occ => {
                 if (occ.startMs > currentTime) {
                     const vStart = currentTime;
                     const vEnd = occ.startMs - 86400000;
-                    if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] });
+                    if (vStart <= vEnd) {
+                        finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] });
+                    }
                 }
                 finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr });
                 currentTime = occ.endMs + 86400000;
@@ -225,9 +244,10 @@ export default function ReportsModule({ user, selectedProject }) {
 
         expandedSlots.push(...slots, ...overstaffSlots);
 
-        // 空缺天數精算
+        // 3. 空缺天數精算
         let currentVacancy = null; const vacancyPeriods = [];
         let totalPenaltyDays = 0; let totalGraceDays = 0;
+
         for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
             let dailyReq = 0; let dailyPenaltyReq = 0;
             group.reqs.forEach(r => {
@@ -272,11 +292,11 @@ export default function ReportsModule({ user, selectedProject }) {
             currentRoleGroup = null; 
         }
         if (!currentRoleGroup || currentRoleGroup.role !== slot.role) {
-            currentRoleGroup = { role: slot.role, posIndex: posIndexCounter++, slots: [], rowSpan: 0 };
+            currentRoleGroup = { role: slot.role, slots: [], rowSpan: 0 };
             currentUnitGroup.roles.push(currentRoleGroup);
         }
         const slotRowSpan = Math.max(1, slot.timeline.length);
-        currentRoleGroup.slots.push({ ...slot, rowSpan: slotRowSpan });
+        currentRoleGroup.slots.push({ ...slot, rowSpan: slotRowSpan, posIndex: posIndexCounter++ });
         currentRoleGroup.rowSpan += slotRowSpan;
         currentUnitGroup.rowSpan += slotRowSpan;
     });
@@ -306,15 +326,22 @@ export default function ReportsModule({ user, selectedProject }) {
                 const timeline = slot.timeline.length > 0 ? slot.timeline : [{ isEmpty: true }];
                 timeline.forEach((event, eIdx) => {
                     const rowClasses = [];
+                    // 不同單位產生粗體橫線分隔
                     if (isUnitStart && rIdx === 0 && sIdx === 0 && eIdx === 0) rowClasses.push('unit-top-border');
                     
                     table2Html += `<tr class="${rowClasses.join(' ')}">`;
                     
-                    if (sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${rGroup.rowSpan}" class="text-center font-bold">${rGroup.posIndex}</td>`;
+                    // 序號跟著 Slot 獨立，不再跨職務合併
+                    if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center font-bold">${slot.posIndex}</td>`;
+                    
+                    // 單位與職位仍需合併顯示
                     if (rIdx === 0 && sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
                     if (sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${rGroup.rowSpan}">${rGroup.role}</td>`;
+                    
+                    // 員額編號與 Slot 合併
                     if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center">${slot.label}</td>`;
                     
+                    // 右側三欄不合併，依事件列出
                     if (event.isEmpty) {
                         table2Html += `<td colspan="3" style="color:#94a3b8; text-align:center;">(此員額於期間內全段空缺)</td>`;
                     } else if (event.isVacancy) {
