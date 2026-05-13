@@ -66,7 +66,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubTasks(); };
   }, [user, selectedProject]);
 
-  // ================= 報表匯出邏輯 =================
+  // ================= 報表核心邏輯：日期定錨演算法 =================
 
   const exportVacancyReportPDF = () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
@@ -85,53 +85,52 @@ export default function ReportsModule({ user, selectedProject }) {
     const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
     const getRoleWeight = (role) => roleWeights[role] || 99;
 
-    // 1. 人事異動軌跡
+    // 1. 人事異動軌跡 (核心修正：嚴格過濾並定錨日期)
     const activePersonnelChanges = [];
     personnel.forEach(p => {
-      let pEndMs = Infinity;
-      let exitDateStr = '';
+      const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
       
-      if (p.contractEnd) {
-         const d = new Date(p.contractEnd);
-         d.setDate(d.getDate() + 1); 
-         pEndMs = d.getTime();
-         exitDateStr = d.toISOString().split('T')[0];
-      }
-
-      // 嚴格過濾出與報表區間有交集的歷程，避免過去的無效歷程被抓出
+      // 過濾並定錨該員在此計畫中的有效歷程
       const validHistory = (p.history || []).filter(h => {
           if (!h.unit || !h.role || !h.startDate) return false;
           const hStartMs = new Date(h.startDate).getTime();
-          const hEndMs = h.endDate ? new Date(h.endDate).getTime() : Infinity;
-          return hStartMs <= endMs && hEndMs >= startMs;
+          // 計算該段歷程的實際有效終點：若歷程無終點，取人員離職日；若人員沒離職，無限大
+          const hEndMs = h.endDate ? new Date(h.endDate).getTime() : (p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity);
+          // 歷程必須與計畫區間有交集，且不能完全發生在計畫起始日之前
+          return hEndMs >= projStartMs && hStartMs <= endMs;
       }).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
 
       if (validHistory.length > 0) {
          const events = [];
-         const initialUnit = validHistory[0].unit;
-         const initialRole = validHistory[0].role;
          
          validHistory.forEach((h, idx) => {
              const hStartMs = new Date(h.startDate).getTime();
+             // 第一筆異動顯示邏輯
              if (idx === 0) {
-                 // 第一筆：取「該職位起日」與「計畫起日」較晚者
-                 const displayMs = Math.max(hStartMs, projStartMs);
-                 const displayStr = new Date(displayMs).toISOString().split('T')[0];
+                 // 關鍵定錨：參與計畫開始日 = Max(職務就任日, 個人到職日, 計畫起始日)
+                 const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
+                 const displayStr = new Date(effectiveStartMs).toISOString().split('T')[0];
                  events.push(`${displayStr} 擔任 (${h.unit}) (${h.role})`);
              } else {
-                 // 後續轉任紀錄，直接顯示實際發生日
+                 // 後續轉任：直接顯示實際轉任日
                  events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
              }
          });
 
-         if (p.contractEnd && pEndMs >= startMs && pEndMs <= endMs) {
-             events.push(`${exitDateStr} 離職`);
+         // 離職事件 (退出計畫日為最後工作日之隔日)
+         if (p.contractEnd) {
+             const exitD = new Date(p.contractEnd);
+             exitD.setDate(exitD.getDate() + 1);
+             const exitMs = exitD.getTime();
+             if (exitMs >= startMs && exitMs <= endMs) {
+                 events.push(`${exitD.toISOString().split('T')[0]} 離職`);
+             }
          }
 
          activePersonnelChanges.push({
              name: p.name,
-             unit: initialUnit, 
-             role: initialRole, 
+             unit: validHistory[0].unit, 
+             role: validHistory[0].role, 
              events: events
          });
       }
@@ -143,7 +142,7 @@ export default function ReportsModule({ user, selectedProject }) {
         return getRoleWeight(a.role) - getRoleWeight(b.role);
     });
 
-    // 2. 彙整合併職缺群組 (解決重複計算問題，並預先準備違約計算)
+    // 2. 彙整合併職缺群組與 Slot 分配 (核心修正：定錨參與日期)
     const roleGroups = {};
     requirements.forEach(req => {
         const key = `${req.unit}::${req.position}`;
@@ -154,13 +153,12 @@ export default function ReportsModule({ user, selectedProject }) {
             count: parseInt(req.count, 10) || 1,
             sMs: req.startDate ? new Date(req.startDate).getTime() : 0,
             eMs: req.endDate ? new Date(req.endDate).getTime() : Infinity,
-            // 讀取未來將建立的計罰起始日，若無則預設與起始日相同
             pMs: req.penaltyStartDate ? new Date(req.penaltyStartDate).getTime() : (req.startDate ? new Date(req.startDate).getTime() : 0)
         });
     });
 
-    // 蒐集各群組的人員歷程區段
     personnel.forEach(p => {
+        const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
         const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
         (p.history || []).forEach(h => {
             if (!h.unit || !h.role) return;
@@ -168,12 +166,16 @@ export default function ReportsModule({ user, selectedProject }) {
             if (roleGroups[key]) {
                 const hStartMs = new Date(h.startDate).getTime();
                 const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
-                if (hStartMs <= endMs && hEndMs >= startMs) {
+                
+                // 定錨參與日：該員在此職務上對計畫有效的起始日
+                const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
+                
+                if (effectiveStartMs <= hEndMs && effectiveStartMs <= endMs) {
                     roleGroups[key].segments.push({
                         name: p.name,
-                        startMs: hStartMs,
+                        startMs: effectiveStartMs,
                         endMs: hEndMs,
-                        startStr: h.startDate,
+                        startStr: new Date(effectiveStartMs).toISOString().split('T')[0],
                         endStr: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今')
                     });
                 }
@@ -184,7 +186,6 @@ export default function ReportsModule({ user, selectedProject }) {
     const expandedSlots = [];
     const vacancyTables = [];
 
-    // 處理每個職位群組 (Slot 分配與空窗精算)
     Object.values(roleGroups)
       .sort((a, b) => {
           const uDiff = getUnitWeight(a.unit) - getUnitWeight(b.unit);
@@ -192,20 +193,17 @@ export default function ReportsModule({ user, selectedProject }) {
           return getRoleWeight(a.role) - getRoleWeight(b.role);
       })
       .forEach(group => {
-        // 算出該區間最大需求量 (Slots 總數)
         let maxReqCount = 0;
-        const checkStartMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs)));
-        const checkEndMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
+        const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs)));
+        const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
         
-        if (checkStartMs > checkEndMs) return;
+        if (groupStartLimitMs > groupEndLimitMs) return;
 
-        for (let t = checkStartMs; t <= checkEndMs; t += 86400000) {
-            let dReq = 0;
-            group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) dReq += r.count; });
+        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+            let dReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) dReq += r.count; });
             maxReqCount = Math.max(maxReqCount, dReq);
         }
 
-        // 建立 Slots 並將人員塞入
         const slots = Array.from({length: maxReqCount}, (_, i) => ({
             unit: group.unit, role: group.role, slotIndex: i + 1, label: `員額 ${i + 1}`, occupants: []
         }));
@@ -216,79 +214,82 @@ export default function ReportsModule({ user, selectedProject }) {
             for (let slot of slots) {
                 const last = slot.occupants[slot.occupants.length - 1];
                 if (!last || last.endMs < seg.startMs) {
-                    slot.occupants.push(seg);
-                    assigned = true; break;
+                    slot.occupants.push(seg); assigned = true; break;
                 }
             }
             if (!assigned) {
                 for (let slot of overstaffSlots) {
                     const last = slot.occupants[slot.occupants.length - 1];
                     if (!last || last.endMs < seg.startMs) {
-                        slot.occupants.push(seg);
-                        assigned = true; break;
+                        slot.occupants.push(seg); assigned = true; break;
                     }
                 }
-                if (!assigned) {
-                    overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
-                }
+                if (!assigned) overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
             }
+        });
+
+        // 為每個 Slot 注入空缺(紅字)標記
+        [...slots, ...overstaffSlots].forEach(slot => {
+            const finalTimeline = [];
+            let currentTime = groupStartLimitMs;
+            
+            // 排序該員額的佔用者
+            const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
+            
+            sortedOccs.forEach(occ => {
+                // 如果目前時間點到下一個人員到職之間有空隙，且該 Slot 此時是有需求的
+                if (occ.startMs > currentTime) {
+                    const vStart = currentTime;
+                    const vEnd = occ.startMs - 86400000;
+                    if (vStart <= vEnd) {
+                        finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] });
+                    }
+                }
+                finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr });
+                currentTime = occ.endMs + 86400000;
+            });
+
+            // 處理最後一段空缺 (到報表或編制結束)
+            if (currentTime <= groupEndLimitMs && slot.slotIndex !== 99) {
+                finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(groupEndLimitMs).toISOString().split('T')[0] });
+            }
+            slot.timeline = finalTimeline;
         });
 
         expandedSlots.push(...slots, ...overstaffSlots);
 
-        // ================= 3. 空缺精算 (區分違約與免罰) =================
-        let currentVacancy = null; 
-        const vacancyPeriods = [];
-        let totalPenaltyDays = 0;
-        let totalGraceDays = 0;
+        // ================= 3. 空缺天數精算 (彙整報表) =================
+        let currentVacancy = null; const vacancyPeriods = [];
+        let totalPenaltyDays = 0; let totalGraceDays = 0;
 
-        for (let t = checkStartMs; t <= checkEndMs; t += 86400000) {
-            let dailyReq = 0;
-            let dailyPenaltyReq = 0;
+        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+            let dailyReq = 0; let dailyPenaltyReq = 0;
             group.reqs.forEach(r => {
                 if (t >= r.sMs && t <= r.eMs) {
                     dailyReq += r.count;
                     if (t >= r.pMs) dailyPenaltyReq += r.count;
                 }
             });
-            
             if (dailyReq === 0) {
                 if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; }
                 continue;
             }
-
-            let activeCount = 0;
-            group.segments.forEach(seg => { if (t >= seg.startMs && t <= seg.endMs) activeCount++; });
-
+            let activeCount = 0; group.segments.forEach(seg => { if (t >= seg.startMs && t <= seg.endMs) activeCount++; });
             const missing = Math.max(0, dailyReq - activeCount);
             const penaltyMissing = Math.max(0, dailyPenaltyReq - activeCount);
             const graceMissing = missing - penaltyMissing;
 
             if (missing > 0) {
-                totalPenaltyDays += penaltyMissing;
-                totalGraceDays += graceMissing;
-                
+                totalPenaltyDays += penaltyMissing; totalGraceDays += graceMissing;
                 const dStr = new Date(t).toISOString().split('T')[0];
-                if (!currentVacancy) {
-                    currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 };
-                } else if (currentVacancy.missing === missing && currentVacancy.penaltyMissing === penaltyMissing) {
-                    currentVacancy.end = dStr;
-                    currentVacancy.days++;
-                } else {
-                    vacancyPeriods.push(currentVacancy);
-                    currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 };
-                }
-            } else {
-                if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; }
-            }
+                if (!currentVacancy) currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 };
+                else if (currentVacancy.missing === missing && currentVacancy.penaltyMissing === penaltyMissing) { currentVacancy.end = dStr; currentVacancy.days++; }
+                else { vacancyPeriods.push(currentVacancy); currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 }; }
+            } else { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } }
         }
         if (currentVacancy) vacancyPeriods.push(currentVacancy);
-
         if (vacancyPeriods.length > 0) {
-            vacancyTables.push({
-                unit: group.unit, role: group.role, maxReq: maxReqCount,
-                periods: vacancyPeriods, totalPenaltyDays, totalGraceDays
-            });
+            vacancyTables.push({ unit: group.unit, role: group.role, maxReq: maxReqCount, periods: vacancyPeriods, totalPenaltyDays, totalGraceDays });
         }
     });
 
@@ -320,9 +321,10 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
 
         <h1>【${projectName}】人事異動與空缺紀錄表</h1>
-        <div class="meta">報表區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
+        <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
 
         <h2>一、 期間內人事異動軌跡</h2>
+        <p style="font-size: 11px; color: #64748b;">說明：參與計畫起始日取「實際就任日」與「計畫起日 (${projectStartDate})」之較晚者。退出日為最後工作日之隔日。</p>
         <table>
           <colgroup><col style="width: 120px;"><col></colgroup>
           <tr><th>姓名</th><th>計劃期間異動軌跡</th></tr>
@@ -335,26 +337,27 @@ export default function ReportsModule({ user, selectedProject }) {
         </table>
 
         <h2>二、 期間內各職位人員在職狀況 (按員額 Slot 拆分)</h2>
-        <p style="font-size: 11px; color: #64748b;">說明：依據職務編制與人員歷程最佳化分配。起始日抓取該員實際就任此職位之日期，並排除重疊計算。</p>
         <table>
           <colgroup><col style="width:110px;"><col style="width:120px;"><col style="width:90px;"><col></colgroup>
-          <tr><th>單位</th><th>職位</th><th>員額編號</th><th>在職人員與期間</th></tr>
+          <tr><th>單位</th><th>職位</th><th>員額編號</th><th>在職人員與期間 (含空缺標記)</th></tr>
           ${expandedSlots.map(slot => `
             <tr>
               <td>${slot.unit}</td>
               <td>${slot.role}</td>
               <td class="text-center">${slot.label}</td>
               <td>
-                ${slot.occupants.length > 0 
-                  ? slot.occupants.map(occ => `<div><strong>${occ.name}</strong> (${occ.startStr} ~ ${occ.endStr})</div>`).join('')
-                  : '<span style="color:#94a3b8;">(此員額於期間內全段空缺)</span>'}
+                ${slot.timeline.map(item => 
+                  item.isVacancy 
+                  ? `<div class="highlight">空缺 (${item.startStr} ~ ${item.endStr})</div>`
+                  : `<div><strong>${item.name}</strong> (${item.startStr} ~ ${item.endStr})</div>`
+                ).join('')}
+                ${slot.timeline.length === 0 ? '<span style="color:#94a3b8;">(此員額於期間內全段空缺)</span>' : ''}
               </td>
             </tr>
           `).join('')}
         </table>
 
         <h2>三、 職位空缺天數精算 (合併精算與違約判定)</h2>
-        <p style="font-size: 11px; color: #64748b;">說明：以「單位＋職位」合併精算空缺。當發生空缺時，若日期位於招募寬限期內，則計入「免罰寬限」，反之計入「違約空窗」。</p>
         <table>
           <colgroup><col style="width:110px;"><col style="width:110px;"><col style="width:70px;"><col><col style="width:80px;"><col style="width:80px;"></colgroup>
           <tr><th>單位</th><th>職位</th><th class="text-center">編制</th><th>確切空缺日期區間 (合併計算)</th><th class="text-right">違約空窗<br/>(人天)</th><th class="text-right">免罰寬限<br/>(人天)</th></tr>
