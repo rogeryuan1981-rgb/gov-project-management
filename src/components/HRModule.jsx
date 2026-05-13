@@ -93,8 +93,9 @@ export default function HRModule({ user, selectedProject }) {
     contractStart: defaultStartDate, contractEnd: '', files: []
   });
   
+  // 新增：加入 penaltyStartDate (計罰起始日)
   const [newReq, setNewReq] = useState({
-    unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
+    unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
   });
 
   const tokenClientRef = useRef(null);
@@ -237,7 +238,7 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const handleOpenReqModal = () => {
-    setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
+    setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
     setIsReqModalOpen(true);
   };
 
@@ -324,17 +325,21 @@ export default function HRModule({ user, selectedProject }) {
     // 過濾掉空白的條列項目
     const filteredNoteItems = (newReq.noteItems || []).filter(n => n.trim() !== '');
 
+    // 防呆：若沒填計罰起始日，預設等同於需求起始日
+    const finalPenaltyDate = newReq.penaltyStartDate || newReq.startDate;
+
     try {
       const reqRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs');
       await addDoc(reqRef, {
         ...newReq, 
         count: parseInt(newReq.count, 10) || 1, 
         isResident: String(newReq.isResident) === 'true',
+        penaltyStartDate: finalPenaltyDate,
         noteItems: filteredNoteItems,
         projectId: selectedProject, 
         createdAt: new Date().getTime()
       });
-      setNewReq({ unit: '', position: '', startDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
+      setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
     } catch (error) { console.error("新增人力需求失敗:", error); }
   };
 
@@ -344,7 +349,8 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const exportReqCSVTemplate = () => {
-    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明(多項請用分號;隔開)\n範例單位,專員,2,${defaultStartDate},${defaultEndDate},是,需具備相關證照;需三年專案經驗`;
+    // 更新 CSV 範本，加入計罰起始日
+    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),計罰起始日/寬限期(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明(多項請用分號;隔開)\n範例單位,專員,2,${defaultStartDate},${defaultStartDate},${defaultEndDate},是,需具備相關證照;需三年專案經驗`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -367,13 +373,18 @@ export default function HRModule({ user, selectedProject }) {
       let importCount = 0;
       for (let i = startIndex; i < rows.length; i++) {
         const cols = rows[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-        if (cols.length >= 2) {
-          const importedNotes = cols[6] ? cols[6].split(';').map(n => n.trim()).filter(Boolean) : [];
+        if (cols.length >= 3) {
+          // CSV 欄位位移解析
+          const startDateStr = formatImportDate(cols[3]) || defaultStartDate;
+          const penaltyDateStr = formatImportDate(cols[4]) || startDateStr; // 若未填，預設同起日
+          const endDateStr = formatImportDate(cols[5]) || defaultEndDate;
+          const isResidentBool = cols[6] === '是' || cols[6] === 'true';
+          const importedNotes = cols[7] ? cols[7].split(';').map(n => n.trim()).filter(Boolean) : [];
           
           await addDoc(reqRef, {
             unit: cols[0], position: cols[1], count: parseInt(cols[2], 10) || 1,
-            startDate: formatImportDate(cols[3]) || defaultStartDate, endDate: formatImportDate(cols[4]) || defaultEndDate,
-            isResident: cols[5] === '是' || cols[5] === 'true', 
+            startDate: startDateStr, penaltyStartDate: penaltyDateStr, endDate: endDateStr,
+            isResident: isResidentBool, 
             noteItems: importedNotes,
             projectId: selectedProject, createdAt: new Date().getTime()
           });
@@ -1072,12 +1083,23 @@ export default function HRModule({ user, selectedProject }) {
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1">需求人數</label><input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">是否為駐點職缺</label><select required value={newReq.isResident} onChange={e=>setNewReq({...newReq, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500"><option value="true">是 (駐點人員)</option><option value="false">否 (非駐點人員)</option></select></div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 items-start mb-4">
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label><input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-orange-600 dark:text-orange-400">
+                        計罰起始日 (免罰寬限期)
+                      </label>
+                      <input 
+                        type="date" 
+                        value={newReq.penaltyStartDate || newReq.startDate} 
+                        onChange={e=>setNewReq({...newReq, penaltyStartDate: e.target.value})} 
+                        className="w-full px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-500/30 rounded-lg text-sm outline-none focus:border-orange-500 text-orange-800 dark:text-orange-200" 
+                      />
+                    </div>
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     
-                    {/* 更新：條列式額外需求說明 */}
-                    <div className="md:col-span-4 mt-2">
+                    {/* 條列式額外需求說明 */}
+                    <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
                       <div className="space-y-2">
                         {(newReq.noteItems || []).map((item, idx) => (
@@ -1125,16 +1147,24 @@ export default function HRModule({ user, selectedProject }) {
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                     <tr>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">駐點屬性</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[200px]">額外需求說明</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th><th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">操作</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">駐點屬性</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[200px]">額外需求說明</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間 (起~迄)</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-orange-500 uppercase bg-orange-50/50 dark:bg-orange-500/5">計罰起日</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {requirements.length === 0 ? (
-                      <tr><td colSpan="7" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
+                      <tr><td colSpan="8" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
                     ) : (
                       requirements.sort((a,b) => new Date(a.startDate) - new Date(b.startDate)).map(req => {
                         const isActiveToday = req.startDate <= today && req.endDate >= today;
                         const displayNotes = req.noteItems && req.noteItems.length > 0 ? req.noteItems : (req.note ? [req.note] : []);
+                        const penaltyDate = req.penaltyStartDate || req.startDate;
                         
                         return (
                           <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
@@ -1149,6 +1179,7 @@ export default function HRModule({ user, selectedProject }) {
                                ) : '-'}
                             </td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400">{req.startDate} ~ {req.endDate}</td>
+                            <td className="py-3 px-4 text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50/30 dark:bg-orange-900/10">{penaltyDate}</td>
                             <td className="py-3 px-4 text-center">{isActiveToday ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold rounded">現正要求中</span> : <span className="px-2 py-0.5 bg-slate-100 text-slate-500 dark:bg-slate-700 text-[10px] font-bold rounded">非現行區間</span>}</td>
                             <td className="py-3 px-4 text-right"><button onClick={() => handleDeleteReq(req.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={16} /></button></td>
                           </tr>
