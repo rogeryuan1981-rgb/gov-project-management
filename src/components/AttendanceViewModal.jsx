@@ -47,7 +47,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // 先抓出本月份有任職紀錄的所有不重複同仁名單
+      // 抓取計畫編制人員名冊作為基礎矩陣基準
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
@@ -63,20 +63,16 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       // 步驟 D：橫向建立 員工 × 1~31天 矩陣，並融入動態歷史編制演算法
       if (uniqueEmployeeNames.length > 0) {
         uniqueEmployeeNames.forEach(empName => {
-          
-          // 找出這位同仁在 personnel 名冊中的原始資料與可能的動態調動歷史歷史清單
-          // 備註：相容未來擴充的 p.assignmentHistory = [{ unit: '企劃組', start: '2026-05-01', end: '2026-05-17' }, { unit: '專案辦公室', start: '2026-05-18', end: '' }]
           const personInfo = personnel.find(p => p.name === empName);
 
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 【重大核心功能優化：逐日動態單位判定演算法】
+            // 逐日動態單位判定
             let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
 
             if (personInfo && personInfo.assignmentHistory && Array.isArray(personInfo.assignmentHistory)) {
-              // 如果該同仁擁有明確的異動歷史調動線，則依據當前日期 dateStr 進行精準過濾判定
               const matchedHistory = personInfo.assignmentHistory.find(h => {
                 const startValid = !h.start || dateStr >= h.start;
                 const endValid = !h.end || dateStr <= h.end;
@@ -86,8 +82,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 currentDayUnit = matchedHistory.unit;
               }
             } else if (personInfo) {
-              // 降級相容硬體舊欄位：如果有名冊但沒有 assignmentHistory，則暫行比對你指定的示範規格
-              // 如果是 A (于家源範例邏輯)，在此為你做動態示範防呆：
+              // 降級相容硬體舊欄位測試規則
               if (empName === '于家源' || personInfo.name === 'A') {
                 if (dateStr <= '2026-05-17') {
                   currentDayUnit = '企劃組';
@@ -97,7 +92,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               }
             }
 
-            // 跨表數據互補關聯追蹤
             const sameDayRecords = importedRecords.filter(r => r.name === empName && r.date === dateStr);
             let mergedRecord = null;
 
@@ -112,7 +106,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 projectId: selectedProject,
                 month: viewMonth,
                 name: empName,
-                unit: currentDayUnit, // 精準鎖定當天的動態計畫單位編制
+                unit: currentDayUnit, 
                 date: dateStr,
                 checkIn: validClockInRecord ? validClockInRecord.checkIn : (sameDayRecords[0].checkIn || ""),
                 checkOut: validClockOutRecord ? validClockOutRecord.checkOut : (sameDayRecords[0].checkOut || ""),
@@ -132,7 +126,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 projectId: selectedProject,
                 month: viewMonth,
                 name: empName,
-                unit: currentDayUnit, // 精準鎖定當天的動態計畫單位編制
+                unit: currentDayUnit, 
                 date: dateStr,
                 checkIn: '',
                 checkOut: '',
@@ -186,15 +180,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // ================= 核心判定與多維度即時過濾（實現動態單位的精準隱存） =================
+  // 多維度條件篩選
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
-    
-    // 這裡實踐核心Command：過濾單位時，直接比對這一天該同仁的「當日動態單位」。如果不符，這天的資料列就會被完美剔除！
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
     return matchesName && matchesUnit;
   });
 
+  // 動態即時排序
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || '';
@@ -297,6 +290,32 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     }
   };
 
+  // ================= 💡 終極優化：動態索引配色比照辦理演算法 =================
+  const getUnitBadgeStyle = (unitName) => {
+    // 透過在專案現有單位清單 (allExistingUnits) 中的相對索引位置，動態綁定對應的人事色票樣式
+    const unitIndex = allExistingUnits.indexOf(unitName);
+    
+    // 依序定義人事建檔所分配的標準視覺色票集
+    const colorSpecs = [
+      'bg-indigo-50 text-indigo-600 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20',  // 專案辦公室 (位置0)
+      'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20', // 企劃組 (位置1)
+      'bg-purple-50 text-purple-600 border-purple-100 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20'  // 行政組 (位置2)
+    ];
+
+    // 如果在現有單位名冊中找到了對應索引，且該索引在我們定義的色票規格內，則 100% 比照辦理對齊輸出
+    if (unitIndex !== -1 && unitIndex < colorSpecs.length) {
+      return colorSpecs[unitIndex];
+    }
+
+    // 降級防呆相容：如果未來新增了第四個、第五個新單位，或是字串不吻合，則動態採用模組循環分配，保證色彩語彙不破裂
+    if (unitIndex !== -1) {
+      return colorSpecs[unitIndex % colorSpecs.length];
+    }
+
+    // 預設兜底
+    return 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600';
+  };
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
       <div className="bg-white dark:bg-slate-800 w-full max-w-6xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-[85vh]">
@@ -307,7 +326,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">授權管理者手動維護、補登刷卡與請假假別。系統已全面實裝動態歷史編制演算追蹤功能。</p>
+              <p className="text-xs text-slate-400 mt-0.5">授權管理者手動維護、補登刷卡與請假假別。單位標籤配色已動態對齊「人事建檔與編制」。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -323,7 +342,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               type="month" 
               value={viewMonth} 
               onChange={(e) => setViewMonth(e.target.value)} 
-              className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500 dark:invert" 
+              className="text-xs font-bold p-2 rounded-xl border border-slate-200 bg-white text-slate-800 outline-none focus:border-indigo-500 dark:bg-slate-800 dark:border-slate-700 dark:text-white dark:[&::-webkit-calendar-picker-indicator]:invert" 
             />
           </div>
           <div className="flex items-center space-x-2">
@@ -397,13 +416,16 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                         <td className="py-3.5 px-4">
                           <div className="flex flex-col">
                             <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
-                            <span className="text-[10px] font-bold text-indigo-500 dark:text-indigo-400 mt-0.5 tracking-wide bg-indigo-50 dark:bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-100 w-fit">{r.unit}</span>
+                            {/* 單位標籤套用 getUnitBadgeStyle 函式，動態跟隨人事建檔清單的分配順序辦理 */}
+                            <span className={`text-[10px] font-bold mt-0.5 tracking-wide px-1.5 py-0.5 rounded border w-fit shadow-2xs transition-all ${getUnitBadgeStyle(r.unit)}`}>
+                              {r.unit}
+                            </span>
                           </div>
                         </td>
 
                         <td className="py-3.5 px-4">
                           {isRowEditing ? (
-                            <input type="text" placeholder="ex. 08:30" value={editFormData.checkIn} onChange={e => setEditFormData({...editFormData, checkIn: e.target.value})} className="px-2 py-1 w-20 bg-white dark:bg-slate-900 border rounded outline-none text-xs font-mono border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
+                            <input type="text" placeholder="ex. 08:30" value={editFormData.checkIn} onChange={e => setEditFormData({...editFormData, checkIn: e.target.value})} className="px-2 py-1 w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded outline-none text-xs font-mono border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
                           ) : (
                             <span className="font-mono">{r.checkIn || '--'}</span>
                           )}
@@ -411,7 +433,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
                         <td className="py-3.5 px-4">
                           {isRowEditing ? (
-                            <input type="text" placeholder="ex. 17:30" value={editFormData.checkOut} onChange={e => setEditFormData({...editFormData, checkOut: e.target.value})} className="px-2 py-1 w-20 bg-white dark:bg-slate-900 border rounded outline-none text-xs font-mono border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
+                            <input type="text" placeholder="ex. 17:30" value={editFormData.checkOut} onChange={e => setEditFormData({...editFormData, checkOut: e.target.value})} className="px-2 py-1 w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded outline-none text-xs font-mono border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
                           ) : (
                             <span className="font-mono">{r.checkOut || '--'}</span>
                           )}
@@ -419,7 +441,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
                         <td className="py-3.5 px-4">
                           {isRowEditing ? (
-                            <input type="text" placeholder="ex. 16:38~17:38" value={editFormData.leaveRangeInfo} onChange={e => setEditFormData({...editFormData, leaveRangeInfo: e.target.value})} className="px-2 py-1 w-36 bg-white dark:bg-slate-900 border rounded outline-none text-xs border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
+                            <input type="text" placeholder="ex. 16:38~17:38" value={editFormData.leaveRangeInfo} onChange={e => setEditFormData({...editFormData, leaveRangeInfo: e.target.value})} className="px-2 py-1 w-36 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded outline-none text-xs border-indigo-300 focus:ring-1 focus:ring-indigo-500 text-slate-800 dark:text-white" />
                           ) : (
                             <span className="text-slate-500 dark:text-slate-400 truncate block max-w-[150px]" title={r.leaveRangeInfo}>{r.leaveRangeInfo || '--'}</span>
                           )}
@@ -427,7 +449,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
                         <td className="py-3.5 px-4">
                           {isRowEditing ? (
-                            <select value={editFormData.leaveType} onChange={e => setEditFormData({...editFormData, leaveType: e.target.value})} className="px-2 py-1 bg-white dark:bg-slate-900 border rounded outline-none text-xs border-indigo-300 text-slate-800 dark:text-white">
+                            <select value={editFormData.leaveType} onChange={e => setEditFormData({...editFormData, leaveType: e.target.value})} className="px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded outline-none text-xs border-indigo-300 text-slate-800 dark:text-white">
                               <option value="">-- 無假別 --</option>
                               <option value="特休">特休</option>
                               <option value="事假">事假</option>
