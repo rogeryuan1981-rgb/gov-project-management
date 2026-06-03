@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText, Loader2, CheckCircle2 } from 'lucide-react';
+import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText, Loader2, CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { collection, query, where, getDocs, getFirestore, doc, getDoc } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
 
@@ -11,6 +11,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   const [records, setRecords] = useState([]);
   const [offDays, setOffDays] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'asc' });
 
   // 核心讀取與交叉互補演算引擎
   const fetchData = async () => {
@@ -26,7 +27,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         setOffDays(currentOffDays);
       }
 
-      // 步驟 B：讀取該月份已匯入的所有考勤紀錄 (包含所有 recordType 來源)
+      // 步驟 B：讀取該月份已匯入的所有考勤紀錄
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(
         attendanceRef, 
@@ -51,7 +52,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         })
         .map(p => p.name);
 
-      // 若名冊全空，則降級相容使用已匯入資料內的人名
       const finalEmployeeList = projectEmployees.length > 0 
         ? projectEmployees 
         : [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
@@ -65,20 +65,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 【重大修正：跨表數據互補演算法】
-            // 因為整月匯入時，某員工在當天可能在 A 表沒有打卡(留空)，但卻存在於 C 表的紀錄中。
-            // 系統在此進行同一人、同一天的「全來源篩選」
             const sameDayRecords = importedRecords.filter(r => r.name === empName && r.date === dateStr);
-            
             let mergedRecord = null;
 
             if (sameDayRecords.length > 0) {
-              // 如果撈到不只一筆，優先抓取「有真實刷卡打卡時間」的紀錄，避免無打卡的舊紀錄覆蓋或造成誤判
               const validClockInRecord = sameDayRecords.find(r => r.checkIn && r.checkIn !== '');
               const validClockOutRecord = sameDayRecords.find(r => r.checkOut && r.checkOut !== '');
               const validLeaveRecord = sameDayRecords.find(r => r.leaveType && r.leaveType !== '');
 
-              // 採用互補原則：將各表的有效欄位抽出來融合成一筆標準資料
               mergedRecord = {
                 id: `merged_${empName}_${dateStr}`,
                 projectId: selectedProject,
@@ -95,10 +89,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             }
 
             if (mergedRecord) {
-              // 狀況 1：當天存在有效考勤或互補資料
               finalMeshRecords.push(mergedRecord);
             } else {
-              // 狀況 2：兩邊考勤表皆完全查無此人在此日期的任何紀錄，系統自動補底判定
               finalMeshRecords.push({
                 id: `generated_${empName}_${dateStr}`,
                 projectId: selectedProject,
@@ -117,12 +109,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         });
       }
       
-      // 依日期小到大 -> 姓名排序
-      finalMeshRecords.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return a.name.localeCompare(b.name);
-      });
-      
       setRecords(finalMeshRecords);
     } catch (error) {
       console.error("日曆與跨表互補交叉演算失敗:", error);
@@ -139,12 +125,48 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
   if (!isOpen) return null;
 
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }) => {
+    if (sortConfig.key !== columnKey) {
+      return <ArrowUpDown size={14} className="inline ml-1 text-slate-300 dark:text-slate-600" />;
+    }
+    return sortConfig.direction === 'asc' 
+      ? <ArrowUp size={14} className="inline ml-1 text-indigo-500" /> 
+      : <ArrowDown size={14} className="inline ml-1 text-indigo-500" />;
+  };
+
   const filteredRecords = records.filter(r => 
     r.name.toLowerCase().includes(searchName.trim().toLowerCase())
   );
 
-  // 交叉判定 Badges 視覺化輸出
+  const sortedRecords = [...filteredRecords].sort((a, b) => {
+    if (!sortConfig.key) return 0;
+    let aValue = a[sortConfig.key] || '';
+    let bValue = b[sortConfig.key] || '';
+    if (aValue === bValue) {
+      if (sortConfig.key === 'date') return a.name.localeCompare(b.name);
+      return a.date.localeCompare(b.date);
+    }
+    return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+  });
+
+  // ================= 輔助演算法：將 "HH:MM" 轉為當天分鐘數 =================
+  const timeToMinutes = (timeStr) => {
+    if (!timeStr || !timeStr.includes(':')) return null;
+    const parts = timeStr.split(':');
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+  };
+
+  // ================= 核心升級：精準彈性工時與遞延異常判定引擎 =================
   const renderStatusBadge = (r) => {
+    // 狀況一：非工作日 (國定假日 / 例假日)
     if (r.isOffDay) {
       if (r.checkIn || r.checkOut) {
         return (
@@ -154,12 +176,13 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         );
       }
       return (
-        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-600">
+        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700">
           例假日/放假
         </span>
       );
     }
 
+    // 狀況二：應上班日，若有表定請假紀錄 (沖銷成功優先判定)
     if (r.leaveType) {
       return (
         <span className="px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 text-xs font-bold rounded-lg border border-blue-200 dark:border-blue-500/30 flex items-center w-fit">
@@ -168,6 +191,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
+    // 狀況三：應上班日，完全查無任何刷卡打卡足跡 (曠職)
     if (!r.checkIn && !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30 flex items-center w-fit animate-pulse">
@@ -176,6 +200,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
+    // 狀況四：應上班日，只有單邊打卡紀錄 (缺卡異常)
     if (!r.checkIn || !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">
@@ -184,6 +209,72 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
+    // 狀況五：應上班日，兩邊皆有打卡數據 $\rightarrow$ 執行「彈性工時遞延演算法」
+    const inMins = timeToMinutes(r.checkIn);
+    const outMins = timeToMinutes(r.checkOut);
+
+    if (inMins !== null && outMins !== null) {
+      const minStartMins = 8 * 60;      // 08:00
+      const maxStartMins = 9 * 60;      // 09:00
+      const noonStartMins = 12 * 60 + 30; // 12:30
+      const noonEndMins = 13 * 60 + 30;   // 13:30
+
+      let isLate = false;
+      let lateMinutes = 0;
+      let isEarlyLeave = false;
+      let earlyLeaveMinutes = 0;
+
+      // A. 判定是否遲到 (晚於 09:00 算遲到)
+      if (inMins > maxStartMins) {
+        isLate = true;
+        lateMinutes = inMins - maxStartMins;
+      }
+
+      // B. 計算合法的最早下班時間基準點
+      let requiredWorkMins = 8 * 60 + 60; // 8小時工時 + 1小時午休 = 9小時 = 540分鐘
+      let legalMinOutMins = 0;
+
+      if (isLate) {
+        // 如果遲到，工時最晚遞延上限只卡死在 09:00，因此下班底線一律是 18:00 (1080分鐘)
+        legalMinOutMins = 18 * 60; 
+      } else {
+        // 彈性區間內 (08:00 ~ 09:00)：上班時間直接遞延 9 小時即為合法下班點
+        // 若低於 08:00 來 (如07:50)，最早下班底線依然卡死在 17:00 (08:00 + 9小時)
+        const effectiveInMins = Math.max(inMins, minStartMins);
+        legalMinOutMins = effectiveInMins + requiredWorkMins;
+      }
+
+      // C. 判定是否早退
+      if (outMins < legalMinOutMins) {
+        isEarlyLeave = true;
+        earlyLeaveMinutes = legalMinOutMins - outMins;
+      }
+
+      // D. 綜合異常警示輸出
+      if (isLate && isEarlyLeave) {
+        return (
+          <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30">
+            遲到 {lateMinutes} 分 / 早退 {earlyLeaveMinutes} 分
+          </span>
+        );
+      }
+      if (isLate) {
+        return (
+          <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">
+            遲到 {lateMinutes} 分鐘
+          </span>
+        );
+      }
+      if (isEarlyLeave) {
+        return (
+          <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">
+            早退 {earlyLeaveMinutes} 分鐘
+          </span>
+        );
+      }
+    }
+
+    // 通過以上所有考驗，判定正常出勤
     return (
       <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 text-xs font-bold rounded-lg border border-emerald-200 dark:border-emerald-500/30">
         正常出勤
@@ -201,7 +292,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">系統已自動啟用跨表互補機制，當日無 A 表數據時將自動追蹤並對消其餘考勤來源。</p>
+              <p className="text-xs text-slate-400 mt-0.5">目前已全面導入：彈性遞延工時常態比對機制（彈性區間 08:00~09:00、扣除 12:30~13:30 午休時間）。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -249,9 +340,9 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
               <Loader2 size={36} className="text-indigo-500 animate-spin" />
-              <span className="text-xs text-slate-400">正在執行跨表整合交集演算，排查全月出勤異常狀態...</span>
+              <span className="text-xs text-slate-400">正在執行彈性遞延與跨表整合交集演算...</span>
             </div>
-          ) : filteredRecords.length === 0 ? (
+          ) : sortedRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <FileText size={48} className="text-slate-300 dark:text-slate-600 mb-3" />
               <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前計畫尚未建立任何人員建檔</p>
@@ -262,16 +353,26 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                   <tr>
-                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">打卡日期</th>
-                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">姓名</th>
+                    <th 
+                      className="py-3 px-4 text-xs font-bold text-slate-500 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none"
+                      onClick={() => handleSort('date')}
+                    >
+                      打卡日期 <SortIcon columnKey="date" />
+                    </th>
+                    <th 
+                      className="py-3 px-4 text-xs font-bold text-slate-500 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none"
+                      onClick={() => handleSort('name')}
+                    >
+                      姓名 <SortIcon columnKey="name" />
+                    </th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">上班時間 (M)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">下班時間 (O)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">表定請假區間 (Z)</th>
-                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆與跨表交叉結果</th>
+                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆與工時交叉結果</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 text-xs font-medium text-slate-700 dark:text-slate-300">
-                  {filteredRecords.map((r) => {
+                  {sortedRecords.map((r) => {
                     let rowBg = "hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors";
                     if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut) {
                       rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 transition-colors text-red-950 dark:text-red-300";
