@@ -2,10 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart, ExternalLink, Check, ListChecks } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import AttendanceImportModal from './AttendanceImportModal';
+import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
+const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
+const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -854,11 +858,42 @@ export default function HRModule({ user, selectedProject }) {
               <div className={`p-3.5 rounded-xl ${proxyAlertCount > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}><AlertCircle size={28} /></div>
               <div><p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理異常待補件</p><p className={`text-3xl font-black ${proxyAlertCount > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>{proxyAlertCount} <span className={`text-sm font-medium ${proxyAlertCount > 0 ? 'text-orange-500' : 'text-slate-500'}`}>件</span></p></div>
             </div>
+            
+            {/* 新增：快速前往工作日曆設定的小卡片/按鈕 */}
+            <div 
+              onClick={() => setIsCalendarSettingsOpen(true)}
+              className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group"
+            >
+              <div className="flex items-center space-x-5">
+                <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <CalendarDays size={24} />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與假別</p>
+                  <p className="text-sm font-black text-slate-800 dark:text-white">設定應上班日與假期</p>
+                </div>
+              </div>
+              <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                <ChevronRight size={16} />
+              </div>
+            </div>
           </div>
+
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div><h3 className="font-bold text-slate-800 dark:text-white mb-1">匯入出勤紀錄</h3><p className="text-sm text-slate-500 dark:text-slate-400">上傳每月考勤 Excel 報表，系統將自動比對請假天數與規政代理合規性。</p></div>
-            <button className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-sm font-bold flex-shrink-0"><Upload size={18} /><span>匯入考勤 Excel</span></button>
+            <div>
+              <h3 className="font-bold text-slate-800 dark:text-white mb-1">匯入出勤紀錄</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">上傳每月考勤 Excel 報表，系統將自動比對請假天數與規政代理合規性。</p>
+            </div>
+            {/* 修改：將按鈕綁定 onClick 事件，觸發彈窗 */}
+            <button 
+              onClick={() => setIsAttendanceImportOpen(true)}
+              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-sm font-bold flex-shrink-0"
+            >
+              <Upload size={18} />
+              <span>匯入考勤 Excel</span>
+            </button>
           </div>
+
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/80"><h3 className="font-bold text-slate-800 dark:text-white">規政代理異常名單</h3></div>
             <div className="overflow-x-auto">
@@ -1301,6 +1336,18 @@ export default function HRModule({ user, selectedProject }) {
           </div>
         </div>
       )}
+      <AttendanceImportModal 
+        isOpen={isAttendanceImportOpen}
+        onClose={() => setIsAttendanceImportOpen(false)}
+        selectedProject={selectedProject}
+        projectName={projectName || selectedProject}
+      />
+
+      <WorkCalendarSettingsModal 
+        isOpen={isCalendarSettingsOpen}
+        onClose={() => setIsCalendarSettingsOpen(false)}
+        selectedProject={selectedProject}
+      />
     </div>
   );
 }
