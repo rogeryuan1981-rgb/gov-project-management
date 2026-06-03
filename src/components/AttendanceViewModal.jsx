@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText } from 'lucide-react';
+import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText, Loader2 } from 'lucide-react';
 import { collection, query, where, getDocs, getFirestore } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
 
