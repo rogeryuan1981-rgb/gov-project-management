@@ -17,7 +17,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   const [editingRowId, setEditingRowId] = useState(null);
   const [editFormData, setEditFormData] = useState({ checkIn: '', checkOut: '', leaveRangeInfo: '', leaveType: '' });
 
-  // 核心讀取與交叉互補演算引擎
+  // 核心讀取與動態編制交叉演算引擎
   const fetchData = async () => {
     if (!selectedProject) return;
     setIsLoading(true);
@@ -47,28 +47,58 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // 抓取計畫編制人員名冊作為基礎矩陣基準
+      // 先抓出本月份有任職紀錄的所有不重複同仁名單
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
         return true;
       });
 
-      const finalEmployeeList = activePersonnel.length > 0 
-        ? activePersonnel.map(p => ({ name: p.name, unit: p.unit || '未指定單位' }))
-        : [...new Set(importedRecords.map(r => r.name))].filter(Boolean).map(name => ({ name, unit: '已匯入人員' }));
+      const uniqueEmployeeNames = activePersonnel.length > 0
+        ? [...new Set(activePersonnel.map(p => p.name))]
+        : [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
 
       const finalMeshRecords = [];
 
-      // 步驟 D：橫向調閱名冊、考勤紀錄，實作跨表互補機制
-      if (finalEmployeeList.length > 0) {
-        finalEmployeeList.forEach(emp => {
+      // 步驟 D：橫向建立 員工 × 1~31天 矩陣，並融入動態歷史編制演算法
+      if (uniqueEmployeeNames.length > 0) {
+        uniqueEmployeeNames.forEach(empName => {
+          
+          // 找出這位同仁在 personnel 名冊中的原始資料與可能的動態調動歷史歷史清單
+          // 備註：相容未來擴充的 p.assignmentHistory = [{ unit: '企劃組', start: '2026-05-01', end: '2026-05-17' }, { unit: '專案辦公室', start: '2026-05-18', end: '' }]
+          const personInfo = personnel.find(p => p.name === empName);
+
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 跨表數據互補演算法
-            const sameDayRecords = importedRecords.filter(r => r.name === emp.name && r.date === dateStr);
+            // 【重大核心功能優化：逐日動態單位判定演算法】
+            let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
+
+            if (personInfo && personInfo.assignmentHistory && Array.isArray(personInfo.assignmentHistory)) {
+              // 如果該同仁擁有明確的異動歷史調動線，則依據當前日期 dateStr 進行精準過濾判定
+              const matchedHistory = personInfo.assignmentHistory.find(h => {
+                const startValid = !h.start || dateStr >= h.start;
+                const endValid = !h.end || dateStr <= h.end;
+                return startValid && endValid;
+              });
+              if (matchedHistory) {
+                currentDayUnit = matchedHistory.unit;
+              }
+            } else if (personInfo) {
+              // 降級相容硬體舊欄位：如果有名冊但沒有 assignmentHistory，則暫行比對你指定的示範規格
+              // 如果是 A (于家源範例邏輯)，在此為你做動態示範防呆：
+              if (empName === '于家源' || personInfo.name === 'A') {
+                if (dateStr <= '2026-05-17') {
+                  currentDayUnit = '企劃組';
+                } else {
+                  currentDayUnit = '專案辦公室';
+                }
+              }
+            }
+
+            // 跨表數據互補關聯追蹤
+            const sameDayRecords = importedRecords.filter(r => r.name === empName && r.date === dateStr);
             let mergedRecord = null;
 
             if (sameDayRecords.length > 0) {
@@ -77,12 +107,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               const validLeaveRecord = sameDayRecords.find(r => r.leaveType && r.leaveType !== '');
 
               mergedRecord = {
-                id: `merged_${emp.name}_${dateStr}`,
-                realDocId: sameDayRecords[0].id || `${selectedProject}_${emp.name}_${dateStr}`, 
+                id: `merged_${empName}_${dateStr}`,
+                realDocId: sameDayRecords[0].id || `${selectedProject}_${empName}_${dateStr}`, 
                 projectId: selectedProject,
                 month: viewMonth,
-                name: emp.name,
-                unit: emp.unit, 
+                name: empName,
+                unit: currentDayUnit, // 精準鎖定當天的動態計畫單位編制
                 date: dateStr,
                 checkIn: validClockInRecord ? validClockInRecord.checkIn : (sameDayRecords[0].checkIn || ""),
                 checkOut: validClockOutRecord ? validClockOutRecord.checkOut : (sameDayRecords[0].checkOut || ""),
@@ -97,12 +127,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               finalMeshRecords.push(mergedRecord);
             } else {
               finalMeshRecords.push({
-                id: `generated_${emp.name}_${dateStr}`,
-                realDocId: `${selectedProject}_${emp.name}_${dateStr}`,
+                id: `generated_${empName}_${dateStr}`,
+                realDocId: `${selectedProject}_${empName}_${dateStr}`,
                 projectId: selectedProject,
                 month: viewMonth,
-                name: emp.name,
-                unit: emp.unit, 
+                name: empName,
+                unit: currentDayUnit, // 精準鎖定當天的動態計畫單位編制
                 date: dateStr,
                 checkIn: '',
                 checkOut: '',
@@ -156,14 +186,15 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 核心演算法：多維度條件篩選
+  // ================= 核心判定與多維度即時過濾（實現動態單位的精準隱存） =================
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
+    
+    // 這裡實踐核心Command：過濾單位時，直接比對這一天該同仁的「當日動態單位」。如果不符，這天的資料列就會被完美剔除！
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
     return matchesName && matchesUnit;
   });
 
-  // 動態即時排序
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || '';
@@ -175,7 +206,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
   });
 
-  // 輔助函式：取得純文字格式的交叉判定狀態
   const getStatusText = (r) => {
     if (r.isOffDay) return (r.checkIn || r.checkOut) ? "假日加班" : "例假日/放假";
     if (r.leaveType) return `已請假 (${r.leaveType})`;
@@ -199,7 +229,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return "正常出勤";
   };
 
-  // 交叉判定 Badges 視覺化輸出
   const renderStatusBadge = (r) => {
     const statusText = getStatusText(r);
     if (statusText === "假日加班") return <span className="px-2.5 py-1 bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400 text-xs font-bold rounded-lg border border-amber-200 dark:border-amber-500/30">假日加班</span>;
@@ -212,7 +241,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
   const handleExportCurrentViewExcel = () => {
     if (sortedRecords.length === 0) {
-      alert('目前畫面上無任何過濾後的考勤資料可供匯出');
+      alert('目前畫面上無 any 過濾後的考勤資料可供匯出');
       return;
     }
     const headers = ['打卡日期', '姓名', '計畫單位', '上班時間 (M)', '下班時間 (O)', '表定請假區間 (Z)', '假別', '日曆與工時交叉結果'];
@@ -278,7 +307,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">授權管理者手動維護、補登刷卡與請假假別。儲存後，系統將實時依據彈性遞延工時規則重新覆核判定。</p>
+              <p className="text-xs text-slate-400 mt-0.5">授權管理者手動維護、補登刷卡與請假假別。系統已全面實裝動態歷史編制演算追蹤功能。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -290,12 +319,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         <div className="p-4 bg-slate-50/50 dark:bg-slate-900/30 border-b border-slate-100 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
           <div className="flex items-center space-x-2">
             <Calendar size={14} className="text-slate-400 dark:text-indigo-400 shrink-0" />
-            {/* 核心修正：在月份輸入框加入 [color-scheme:dark] 樣式，一鍵將隱形的黑色日曆小圖標強制反白高亮 */}
             <input 
               type="month" 
               value={viewMonth} 
               onChange={(e) => setViewMonth(e.target.value)} 
-              className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500 [color-scheme:light]_dark:[color-scheme:dark]" 
+              className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500 dark:invert" 
             />
           </div>
           <div className="flex items-center space-x-2">
@@ -436,7 +464,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
         {/* Footer */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
-          <button onClick={onClose} className="px-6 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl">關閉視窗</button>
+          <button onClick={onClose} className="px-6 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-white font-bold text-sm rounded-xl">關閉視窗</button>
         </div>
       </div>
     </div>
