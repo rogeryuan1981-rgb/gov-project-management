@@ -1366,7 +1366,8 @@ export default function HRModule({ user, selectedProject }) {
         isOpen={isAttendanceViewOpen}
         onClose={() => setIsAttendanceViewOpen(false)}
         selectedProject={selectedProject}
-        personnel={personnel} /* 補上這一行，把計畫人員名冊丟給檢視視窗 */
+        personnel={personnel} 
+        allExistingUnits={allExistingUnits}/* 補上這一行，把計畫人員名冊丟給檢視視窗 */
       />
     </div>
   );
