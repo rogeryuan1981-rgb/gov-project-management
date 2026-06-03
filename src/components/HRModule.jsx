@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
+import AttendanceViewModal from './AttendanceViewModal';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -68,6 +69,7 @@ export default function HRModule({ user, selectedProject }) {
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
+  const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
   
   const [editingPerson, setEditingPerson] = useState(null);
 
@@ -892,6 +894,13 @@ export default function HRModule({ user, selectedProject }) {
               <Upload size={18} />
               <span>匯入考勤 Excel</span>
             </button>
+            <button 
+              onClick={() => setIsAttendanceViewOpen(true)}
+              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:shadow-sm transition-all text-sm font-bold flex-shrink-0"
+            >
+              <Clock size={18} className="text-indigo-500" />
+              <span>檢視已匯入紀錄</span>
+            </button>
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden">
@@ -1346,6 +1355,11 @@ export default function HRModule({ user, selectedProject }) {
       <WorkCalendarSettingsModal 
         isOpen={isCalendarSettingsOpen}
         onClose={() => setIsCalendarSettingsOpen(false)}
+        selectedProject={selectedProject}
+      />
+      <AttendanceViewModal 
+        isOpen={isAttendanceViewOpen}
+        onClose={() => setIsAttendanceViewOpen(false)}
         selectedProject={selectedProject}
       />
     </div>
