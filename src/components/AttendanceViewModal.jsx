@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText, Loader2, CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { X, Calendar, User, Search, RefreshCw, AlertCircle, Clock, FileText, Loader2, CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { collection, query, where, getDocs, getFirestore, doc, getDoc } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
 
 const db = getFirestore(getApp());
 
-export default function AttendanceViewModal({ isOpen, onClose, selectedProject, personnel = [] }) {
+export default function AttendanceViewModal({ isOpen, onClose, selectedProject, personnel = [], allExistingUnits = [] }) {
   const [viewMonth, setViewMonth] = useState(new Date().toISOString().substring(0, 7));
   const [searchName, setSearchName] = useState('');
+  
+  // 新增：所選的單位過濾狀態，預設為 'ALL' (全部單位)
+  const [selectedUnit, setSelectedUnit] = useState('ALL');
+  
   const [records, setRecords] = useState([]);
   const [offDays, setOffDays] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
@@ -43,29 +47,29 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // 抓取計畫編制人員名冊作為基礎矩陣基準
-      const projectEmployees = personnel
-        .filter(p => {
-          if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
-          if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
-          return true;
-        })
-        .map(p => p.name);
+      // 抓取計畫編制人員名冊作為基礎矩陣基準 (保留單位欄位 p.unit 以供後續比對篩選)
+      const activePersonnel = personnel.filter(p => {
+        if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
+        if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
+        return true;
+      });
 
-      const finalEmployeeList = projectEmployees.length > 0 
-        ? projectEmployees 
-        : [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
+      const finalEmployeeList = activePersonnel.length > 0 
+        ? activePersonnel.map(p => ({ name: p.name, unit: p.unit || '未指定單位' }))
+        : [...new Set(importedRecords.map(r => r.name))].filter(Boolean).map(name => ({ name, unit: '已匯入人員' }));
 
       const finalMeshRecords = [];
 
       // 步驟 D：橫向調閱名冊、考勤紀錄，實作跨表互補機制
       if (finalEmployeeList.length > 0) {
-        finalEmployeeList.forEach(empName => {
+        finalEmployeeList.forEach(emp => {
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            const sameDayRecords = importedRecords.filter(r => r.name === empName && r.date === dateStr);
+            // 跨表數據互補演算法
+            const sameDayRecords = importedRecords.filter(r => r.name === emp.name && r.date === dateStr);
+            
             let mergedRecord = null;
 
             if (sameDayRecords.length > 0) {
@@ -74,10 +78,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               const validLeaveRecord = sameDayRecords.find(r => r.leaveType && r.leaveType !== '');
 
               mergedRecord = {
-                id: `merged_${empName}_${dateStr}`,
+                id: `merged_${emp.name}_${dateStr}`,
                 projectId: selectedProject,
                 month: viewMonth,
-                name: empName,
+                name: emp.name,
+                unit: emp.unit, // 保留人員所屬計畫單位
                 date: dateStr,
                 checkIn: validClockInRecord ? validClockInRecord.checkIn : (sameDayRecords[0].checkIn || ""),
                 checkOut: validClockOutRecord ? validClockOutRecord.checkOut : (sameDayRecords[0].checkOut || ""),
@@ -92,10 +97,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               finalMeshRecords.push(mergedRecord);
             } else {
               finalMeshRecords.push({
-                id: `generated_${empName}_${dateStr}`,
+                id: `generated_${emp.name}_${dateStr}`,
                 projectId: selectedProject,
                 month: viewMonth,
-                name: empName,
+                name: emp.name,
+                unit: emp.unit, // 保留人員所屬計畫單位
                 date: dateStr,
                 checkIn: '',
                 checkOut: '',
@@ -142,10 +148,20 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       : <ArrowDown size={14} className="inline ml-1 text-indigo-500" />;
   };
 
-  const filteredRecords = records.filter(r => 
-    r.name.toLowerCase().includes(searchName.trim().toLowerCase())
-  );
+  const timeToMinutes = (timeStr) => {
+    if (!timeStr || !timeStr.includes(':')) return null;
+    const parts = timeStr.split(':');
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+  };
 
+  // 核心演算法：過濾機制 (結合姓名搜尋與新加入的單位過濾)
+  const filteredRecords = records.filter(r => {
+    const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
+    const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
+    return matchesName && matchesUnit;
+  });
+
+  // 動態排序
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || '';
@@ -157,16 +173,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
   });
 
-  // ================= 輔助演算法：將 "HH:MM" 轉為當天分鐘數 =================
-  const timeToMinutes = (timeStr) => {
-    if (!timeStr || !timeStr.includes(':')) return null;
-    const parts = timeStr.split(':');
-    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
-  };
-
-  // ================= 核心升級：精準彈性工時與遞延異常判定引擎 =================
+  // 精準彈性工時與遞延異常判定引擎
   const renderStatusBadge = (r) => {
-    // 狀況一：非工作日 (國定假日 / 例假日)
     if (r.isOffDay) {
       if (r.checkIn || r.checkOut) {
         return (
@@ -182,7 +190,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
-    // 狀況二：應上班日，若有表定請假紀錄 (沖銷成功優先判定)
     if (r.leaveType) {
       return (
         <span className="px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 text-xs font-bold rounded-lg border border-blue-200 dark:border-blue-500/30 flex items-center w-fit">
@@ -191,7 +198,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
-    // 狀況三：應上班日，完全查無任何刷卡打卡足跡 (曠職)
     if (!r.checkIn && !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30 flex items-center w-fit animate-pulse">
@@ -200,7 +206,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
-    // 狀況四：應上班日，只有單邊打卡紀錄 (缺卡異常)
     if (!r.checkIn || !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">
@@ -209,48 +214,38 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       );
     }
 
-    // 狀況五：應上班日，兩邊皆有打卡數據 $\rightarrow$ 執行「彈性工時遞延演算法」
     const inMins = timeToMinutes(r.checkIn);
     const outMins = timeToMinutes(r.checkOut);
 
     if (inMins !== null && outMins !== null) {
-      const minStartMins = 8 * 60;      // 08:00
-      const maxStartMins = 9 * 60;      // 09:00
-      const noonStartMins = 12 * 60 + 30; // 12:30
-      const noonEndMins = 13 * 60 + 30;   // 13:30
+      const minStartMins = 8 * 60;      
+      const maxStartMins = 9 * 60;      
 
       let isLate = false;
       let lateMinutes = 0;
       let isEarlyLeave = false;
       let earlyLeaveMinutes = 0;
 
-      // A. 判定是否遲到 (晚於 09:00 算遲到)
       if (inMins > maxStartMins) {
         isLate = true;
         lateMinutes = inMins - maxStartMins;
       }
 
-      // B. 計算合法的最早下班時間基準點
-      let requiredWorkMins = 8 * 60 + 60; // 8小時工時 + 1小時午休 = 9小時 = 540分鐘
+      let requiredWorkMins = 8 * 60 + 60; 
       let legalMinOutMins = 0;
 
       if (isLate) {
-        // 如果遲到，工時最晚遞延上限只卡死在 09:00，因此下班底線一律是 18:00 (1080分鐘)
         legalMinOutMins = 18 * 60; 
       } else {
-        // 彈性區間內 (08:00 ~ 09:00)：上班時間直接遞延 9 小時即為合法下班點
-        // 若低於 08:00 來 (如07:50)，最早下班底線依然卡死在 17:00 (08:00 + 9小時)
         const effectiveInMins = Math.max(inMins, minStartMins);
         legalMinOutMins = effectiveInMins + requiredWorkMins;
       }
 
-      // C. 判定是否早退
       if (outMins < legalMinOutMins) {
         isEarlyLeave = true;
         earlyLeaveMinutes = legalMinOutMins - outMins;
       }
 
-      // D. 綜合異常警示輸出
       if (isLate && isEarlyLeave) {
         return (
           <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30">
@@ -274,7 +269,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       }
     }
 
-    // 通過以上所有考驗，判定正常出勤
     return (
       <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 text-xs font-bold rounded-lg border border-emerald-200 dark:border-emerald-500/30">
         正常出勤
@@ -292,7 +286,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">目前已全面導入：彈性遞延工時常態比對機制（彈性區間 08:00~09:00、扣除 12:30~13:30 午休時間）。</p>
+              <p className="text-xs text-slate-400 mt-0.5">可透過「結算月份」、「姓名搜尋」與新增的「計畫單位過濾」進行多維度考勤排查。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -300,8 +294,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           </button>
         </div>
 
-        {/* Filter Bar */}
-        <div className="p-4 bg-slate-50/50 dark:bg-slate-900/30 border-b border-slate-100 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+        {/* 升級：過濾工具列（現在支援 月份、姓名、單位過濾） */}
+        <div className="p-4 bg-slate-50/50 dark:bg-slate-900/30 border-b border-slate-100 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
           <div className="flex items-center space-x-2">
             <Calendar size={14} className="text-slate-400 shrink-0" />
             <input 
@@ -310,6 +304,21 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               onChange={(e) => setViewMonth(e.target.value)}
               className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 w-full outline-none focus:border-indigo-500"
             />
+          </div>
+
+          {/* 新增：計畫單位過濾下拉選單 */}
+          <div className="flex items-center space-x-2">
+            <Filter size={14} className="text-slate-400 shrink-0" />
+            <select
+              value={selectedUnit}
+              onChange={(e) => setSelectedUnit(e.target.value)}
+              className="text-xs font-bold p-2 rounded-xl border bg-white dark:bg-slate-800 dark:border-slate-700 w-full outline-none focus:border-indigo-500"
+            >
+              <option value="ALL">全部計畫單位 (ALL)</option>
+              {allExistingUnits.map(unit => (
+                <option key={unit} value={unit}>{unit}</option>
+              ))}
+            </select>
           </div>
           
           <div className="relative">
@@ -340,13 +349,13 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
               <Loader2 size={36} className="text-indigo-500 animate-spin" />
-              <span className="text-xs text-slate-400">正在執行彈性遞延與跨表整合交集演算...</span>
+              <span className="text-xs text-slate-400">正在橫向切分單位並進行遞延演算校對中...</span>
             </div>
           ) : sortedRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <FileText size={48} className="text-slate-300 dark:text-slate-600 mb-3" />
-              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前計畫尚未建立任何人員建檔</p>
-              <p className="text-xs text-slate-400 mt-1">請先關閉此視窗，在「人事建檔與編制」頁籤中新增計畫人員。</p>
+              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前查無符合該單位或條件的人員紀錄</p>
+              <p className="text-xs text-slate-400 mt-1">請確認上方過濾條件，或嘗試在「人事建檔」中確認同仁的編制單位。</p>
             </div>
           ) : (
             <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800">
@@ -363,12 +372,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                       className="py-3 px-4 text-xs font-bold text-slate-500 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none"
                       onClick={() => handleSort('name')}
                     >
-                      姓名 <SortIcon columnKey="name" />
+                      姓名/計畫單位 <SortIcon columnKey="name" />
                     </th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">上班時間 (M)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">下班時間 (O)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">表定請假區間 (Z)</th>
-                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆與工時交叉結果</th>
+                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆與彈性工時交叉結果</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -383,10 +392,18 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                     return (
                       <tr key={r.id} className={rowBg}>
                         <td className="py-3.5 px-4 font-mono font-bold">{r.date}</td>
-                        <td className="py-3.5 px-4 font-bold">{r.name}</td>
+                        {/* 視覺優化：在姓名格子中，同時把人員所屬單位以小字精緻呈現出來 */}
+                        <td className="py-3.5 px-4">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
+                            <span className="text-[10px] font-bold text-indigo-500 dark:text-indigo-400 mt-0.5 tracking-wide bg-indigo-50 dark:bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-100 dark:border-indigo-500/20 w-fit">
+                              {r.unit}
+                            </span>
+                          </div>
+                        </td>
                         <td className="py-3.5 px-4 font-mono">{r.checkIn || '--'}</td>
                         <td className="py-3.5 px-4 font-mono">{r.checkOut || '--'}</td>
-                        <td className="py-3.5 px-4 max-w-[200px] truncate" title={r.leaveRangeInfo}>
+                        <td className="py-3.5 px-4 max-w-[200px] truncate border-slate-100" title={r.leaveRangeInfo}>
                           {r.leaveRangeInfo || '--'}
                         </td>
                         <td className="py-3.5 px-4">{renderStatusBadge(r)}</td>
