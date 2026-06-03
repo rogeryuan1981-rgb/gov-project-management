@@ -5,14 +5,14 @@ import { getApp } from 'firebase/app';
 
 const db = getFirestore(getApp());
 
-export default function AttendanceViewModal({ isOpen, onClose, selectedProject }) {
+export default function AttendanceViewModal({ isOpen, onClose, selectedProject, personnel = [] }) {
   const [viewMonth, setViewMonth] = useState(new Date().toISOString().substring(0, 7));
   const [searchName, setSearchName] = useState('');
   const [records, setRecords] = useState([]);
-  const [offDays, setOffDays] = useState({}); // 儲存來自日曆設定的放假日期數據 { "2026-05-03": true }
+  const [offDays, setOffDays] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
 
-  // 1. 核心讀取函數：同時抓取日曆設定與考勤紀錄
+  // 核心讀取與交叉演算引擎
   const fetchData = async () => {
     if (!selectedProject) return;
     setIsLoading(true);
@@ -26,7 +26,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
         setOffDays(currentOffDays);
       }
 
-      // 步驟 B：讀取該月份的考勤紀錄
+      // 步驟 B：讀取該月份已匯入的考勤紀錄
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(
         attendanceRef, 
@@ -37,36 +37,47 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 步驟 C：動態補全比對邏輯
-      // 實務上，如果某天是「應上班日」但同仁完全沒打卡，匯入的 Excel 裡可能根本沒有那天的列
-      // 為了能抓出隱藏的「曠職」，我們必須依據該月份的天數，動態產生完整的日期足跡來比對
+      // 步驟 C：動態計算當月天數
       const year = parseInt(viewMonth.split('-')[0], 10);
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // 找出這份考勤表裡有哪些員工
-      const uniqueEmployeeNames = [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
+      // 核心修正：將比對基準改為「專案建檔的在職人員名冊」，確保沒匯入資料時名字與日期也絕對不漏掉
+      // 僅篩選出該月份屬於「在職或曾任職」的員工名字
+      const projectEmployees = personnel
+        .filter(p => {
+          // 防呆過濾：排除尚未到職的人員
+          if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
+          // 排除已離職且離職日早於當月月初的人員
+          if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
+          return true;
+        })
+        .map(p => p.name);
+
+      // 如果連計畫人員名冊都沒建檔，則為了防呆，才去抓匯入紀錄裡的人名
+      const finalEmployeeList = projectEmployees.length > 0 
+        ? projectEmployees 
+        : [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
 
       const finalMeshRecords = [];
 
-      // 如果有匯入資料，建立完整的員工×日期矩陣
-      if (uniqueEmployeeNames.length > 0) {
-        uniqueEmployeeNames.forEach(empName => {
+      // 開始建立 員工 × 1~31天 完整矩陣
+      if (finalEmployeeList.length > 0) {
+        finalEmployeeList.forEach(empName => {
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             
-            // 尋找有沒有這名員工在這一天的現成匯入紀錄
+            // 交叉比對：看這一天有沒有這名員工的匯入打卡/請假紀錄
             const existingRecord = importedRecords.find(r => r.name === empName && r.date === dateStr);
             const isOffDay = !!currentOffDays[dateStr];
 
             if (existingRecord) {
-              // 已經有匯入資料，直接納入
               finalMeshRecords.push({
                 ...existingRecord,
                 isOffDay
               });
             } else {
-              // 資料庫查無紀錄，表示當天完全沒有打卡跟請假足跡，由系統依日曆定義動態判定
+              // 重大修正：就算無匯入資料，也建立完整的日期與姓名節點，以便呈現「曠職異常」
               finalMeshRecords.push({
                 id: `generated_${empName}_${dateStr}`,
                 projectId: selectedProject,
@@ -78,19 +89,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
                 leaveRangeInfo: '',
                 leaveType: '',
                 isOffDay,
-                isGeneratedMissing: true // 標記為系統比對出的足跡
+                isGeneratedMissing: true 
               });
             }
           }
         });
-      } else {
-        // 如果連一筆資料都還沒匯入，就直接呈現原本讀取的空陣列
-        setRecords([]);
-        setIsLoading(false);
-        return;
       }
-
-      // 依據日期與姓名進行精準排序
+      
+      // 排序：日期由小到大 -> 姓名排序
       finalMeshRecords.sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         return a.name.localeCompare(b.name);
@@ -98,7 +104,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
       
       setRecords(finalMeshRecords);
     } catch (error) {
-      console.error("聯合作業讀取失敗:", error);
+      console.error("日曆聯合作業演算失敗:", error);
     } finally {
       setIsLoading(false);
     }
@@ -108,18 +114,17 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
     if (isOpen) {
       fetchData();
     }
-  }, [isOpen, viewMonth, selectedProject]);
+  }, [isOpen, viewMonth, selectedProject, personnel]);
 
   if (!isOpen) return null;
 
-  // 姓名過濾
+  // 搜尋過濾
   const filteredRecords = records.filter(r => 
     r.name.toLowerCase().includes(searchName.trim().toLowerCase())
   );
 
-  // ================= 2. 結合日曆的交叉異常判定引擎 =================
+  // 狀態判定引擎
   const renderStatusBadge = (r) => {
-    // 狀況一：日曆設定這天是放假日/非上班日
     if (r.isOffDay) {
       if (r.checkIn || r.checkOut) {
         return (
@@ -129,13 +134,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
         );
       }
       return (
-        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-600">
+        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700">
           例假日/放假
         </span>
       );
     }
 
-    // 狀況二：應上班日，有請假紀錄
     if (r.leaveType) {
       return (
         <span className="px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 text-xs font-bold rounded-lg border border-blue-200 dark:border-blue-500/30 flex items-center w-fit">
@@ -144,7 +148,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
       );
     }
 
-    // 狀況三：應上班日，完全沒有刷卡時間且沒有請假 (判定為曠職)
     if (!r.checkIn && !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30 flex items-center w-fit animate-pulse">
@@ -153,7 +156,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
       );
     }
 
-    // 狀況四：應上班日，有刷卡但缺其中一邊
     if (!r.checkIn || !r.checkOut) {
       return (
         <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">
@@ -162,7 +164,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
       );
     }
 
-    // 狀況五：應上班日，打卡皆正常
     return (
       <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 text-xs font-bold rounded-lg border border-emerald-200 dark:border-emerald-500/30">
         正常出勤
@@ -179,8 +180,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
           <div className="flex items-center space-x-2">
             <Clock size={22} className="text-indigo-500" />
             <div>
-              <h3 className="font-bold text-lg text-slate-800 dark:text-white">日曆連動 • 考勤異常明細覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">系統已自動比對「設定應上班日與假期」，即時校對出勤異常與曠職狀態。</p>
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
+              <p className="text-xs text-slate-400 mt-0.5">以計畫編制人員為基準，全面預演及排查全月應上班日之出勤與曠職紀錄。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -204,7 +205,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
             <Search size={14} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
             <input 
               type="text"
-              placeholder="搜尋人員姓名 (ex. 于家源)"
+              placeholder="搜尋人員姓名..."
               value={searchName}
               onChange={(e) => setSearchName(e.target.value)}
               className="pl-9 pr-4 py-2 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs outline-none focus:border-indigo-500"
@@ -228,16 +229,16 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
               <Loader2 size={36} className="text-indigo-500 animate-spin" />
-              <span className="text-xs text-slate-400">正在與計畫工作日曆進行交叉比對演算中...</span>
+              <span className="text-xs text-slate-400">正在橫向調閱名冊與工作日曆，計算曠職數據中...</span>
             </div>
           ) : filteredRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <FileText size={48} className="text-slate-300 dark:text-slate-600 mb-3" />
-              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">本月目前查無任何匯入的人員名單</p>
-              <p className="text-xs text-slate-400 mt-1">請先前往匯入考勤 Excel 建立名冊數據。</p>
+              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前計畫尚未建立任何人員建檔</p>
+              <p className="text-xs text-slate-400 mt-1">請先關閉此視窗，在「人事建檔與編制」頁籤中新增計畫人員。</p>
             </div>
           ) : (
-            <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800 animate-in fade-in duration-200">
+            <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                   <tr>
@@ -251,10 +252,9 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 text-xs font-medium text-slate-700 dark:text-slate-300">
                   {filteredRecords.map((r) => {
-                    // 根據是否為曠職或異常給予整行輕微的背景色醒目提示
                     let rowBg = "hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors";
                     if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut) {
-                      rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-slate-800 transition-colors";
+                      rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 transition-colors text-red-950 dark:text-red-300";
                     } else if (r.isOffDay) {
                       rowBg = "bg-slate-50/40 text-slate-400 dark:bg-slate-900/10 transition-colors";
                     }
@@ -265,7 +265,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject }
                         <td className="py-3.5 px-4 font-bold">{r.name}</td>
                         <td className="py-3.5 px-4 font-mono">{r.checkIn || '--'}</td>
                         <td className="py-3.5 px-4 font-mono">{r.checkOut || '--'}</td>
-                        <td className="py-3.5 px-4 text-slate-500 dark:text-slate-400 max-w-[200px] truncate" title={r.leaveRangeInfo}>
+                        <td className="py-3.5 px-4 max-w-[200px] truncate" title={r.leaveRangeInfo}>
                           {r.leaveRangeInfo || '--'}
                         </td>
                         <td className="py-3.5 px-4">{renderStatusBadge(r)}</td>
