@@ -8,8 +8,6 @@ import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
-const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
-const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
@@ -68,6 +66,8 @@ export default function HRModule({ user, selectedProject }) {
   const [isReqModalOpen, setIsReqModalOpen] = useState(false);
   const [isVacancyModalOpen, setIsVacancyModalOpen] = useState(false); 
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
+  const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
+  const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   
   const [editingPerson, setEditingPerson] = useState(null);
 
