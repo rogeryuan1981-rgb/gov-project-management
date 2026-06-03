@@ -12,7 +12,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   const [offDays, setOffDays] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
 
-  // 核心讀取與交叉演算引擎
+  // 核心讀取與交叉互補演算引擎
   const fetchData = async () => {
     if (!selectedProject) return;
     setIsLoading(true);
@@ -26,7 +26,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         setOffDays(currentOffDays);
       }
 
-      // 步驟 B：讀取該月份已匯入的考勤紀錄
+      // 步驟 B：讀取該月份已匯入的所有考勤紀錄 (包含所有 recordType 來源)
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(
         attendanceRef, 
@@ -37,47 +37,68 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 步驟 C：動態計算當月天數
+      // 步驟 C：動態計算當月天數足跡
       const year = parseInt(viewMonth.split('-')[0], 10);
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // 核心修正：將比對基準改為「專案建檔的在職人員名冊」，確保沒匯入資料時名字與日期也絕對不漏掉
-      // 僅篩選出該月份屬於「在職或曾任職」的員工名字
+      // 抓取計畫編制人員名冊作為基礎矩陣基準
       const projectEmployees = personnel
         .filter(p => {
-          // 防呆過濾：排除尚未到職的人員
           if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
-          // 排除已離職且離職日早於當月月初的人員
           if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
           return true;
         })
         .map(p => p.name);
 
-      // 如果連計畫人員名冊都沒建檔，則為了防呆，才去抓匯入紀錄裡的人名
+      // 若名冊全空，則降級相容使用已匯入資料內的人名
       const finalEmployeeList = projectEmployees.length > 0 
         ? projectEmployees 
         : [...new Set(importedRecords.map(r => r.name))].filter(Boolean);
 
       const finalMeshRecords = [];
 
-      // 開始建立 員工 × 1~31天 完整矩陣
+      // 步驟 D：橫向調閱名冊、考勤紀錄，實作跨表互補機制
       if (finalEmployeeList.length > 0) {
         finalEmployeeList.forEach(empName => {
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-            
-            // 交叉比對：看這一天有沒有這名員工的匯入打卡/請假紀錄
-            const existingRecord = importedRecords.find(r => r.name === empName && r.date === dateStr);
             const isOffDay = !!currentOffDays[dateStr];
 
-            if (existingRecord) {
-              finalMeshRecords.push({
-                ...existingRecord,
+            // 【重大修正：跨表數據互補演算法】
+            // 因為整月匯入時，某員工在當天可能在 A 表沒有打卡(留空)，但卻存在於 C 表的紀錄中。
+            // 系統在此進行同一人、同一天的「全來源篩選」
+            const sameDayRecords = importedRecords.filter(r => r.name === empName && r.date === dateStr);
+            
+            let mergedRecord = null;
+
+            if (sameDayRecords.length > 0) {
+              // 如果撈到不只一筆，優先抓取「有真實刷卡打卡時間」的紀錄，避免無打卡的舊紀錄覆蓋或造成誤判
+              const validClockInRecord = sameDayRecords.find(r => r.checkIn && r.checkIn !== '');
+              const validClockOutRecord = sameDayRecords.find(r => r.checkOut && r.checkOut !== '');
+              const validLeaveRecord = sameDayRecords.find(r => r.leaveType && r.leaveType !== '');
+
+              // 採用互補原則：將各表的有效欄位抽出來融合成一筆標準資料
+              mergedRecord = {
+                id: `merged_${empName}_${dateStr}`,
+                projectId: selectedProject,
+                month: viewMonth,
+                name: empName,
+                date: dateStr,
+                checkIn: validClockInRecord ? validClockInRecord.checkIn : (sameDayRecords[0].checkIn || ""),
+                checkOut: validClockOutRecord ? validClockOutRecord.checkOut : (sameDayRecords[0].checkOut || ""),
+                leaveRangeInfo: validLeaveRecord ? validLeaveRecord.leaveRangeInfo : (sameDayRecords[0].leaveRangeInfo || ""),
+                leaveType: validLeaveRecord ? validLeaveRecord.leaveType : (sameDayRecords[0].leaveType || ""),
+                recordType: 'MUTUAL_COMPLEMENT',
                 isOffDay
-              });
+              };
+            }
+
+            if (mergedRecord) {
+              // 狀況 1：當天存在有效考勤或互補資料
+              finalMeshRecords.push(mergedRecord);
             } else {
-              // 重大修正：就算無匯入資料，也建立完整的日期與姓名節點，以便呈現「曠職異常」
+              // 狀況 2：兩邊考勤表皆完全查無此人在此日期的任何紀錄，系統自動補底判定
               finalMeshRecords.push({
                 id: `generated_${empName}_${dateStr}`,
                 projectId: selectedProject,
@@ -96,7 +117,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         });
       }
       
-      // 排序：日期由小到大 -> 姓名排序
+      // 依日期小到大 -> 姓名排序
       finalMeshRecords.sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         return a.name.localeCompare(b.name);
@@ -104,7 +125,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       
       setRecords(finalMeshRecords);
     } catch (error) {
-      console.error("日曆聯合作業演算失敗:", error);
+      console.error("日曆與跨表互補交叉演算失敗:", error);
     } finally {
       setIsLoading(false);
     }
@@ -118,12 +139,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
   if (!isOpen) return null;
 
-  // 搜尋過濾
   const filteredRecords = records.filter(r => 
     r.name.toLowerCase().includes(searchName.trim().toLowerCase())
   );
 
-  // 狀態判定引擎
+  // 交叉判定 Badges 視覺化輸出
   const renderStatusBadge = (r) => {
     if (r.isOffDay) {
       if (r.checkIn || r.checkOut) {
@@ -134,7 +154,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         );
       }
       return (
-        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700">
+        <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-600">
           例假日/放假
         </span>
       );
@@ -181,7 +201,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">以計畫編制人員為基準，全面預演及排查全月應上班日之出勤與曠職紀錄。</p>
+              <p className="text-xs text-slate-400 mt-0.5">系統已自動啟用跨表互補機制，當日無 A 表數據時將自動追蹤並對消其餘考勤來源。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -229,7 +249,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
               <Loader2 size={36} className="text-indigo-500 animate-spin" />
-              <span className="text-xs text-slate-400">正在橫向調閱名冊與工作日曆，計算曠職數據中...</span>
+              <span className="text-xs text-slate-400">正在執行跨表整合交集演算，排查全月出勤異常狀態...</span>
             </div>
           ) : filteredRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
@@ -247,7 +267,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">上班時間 (M)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">下班時間 (O)</th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">表定請假區間 (Z)</th>
-                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆交叉判定結果</th>
+                    <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase">日曆與跨表交叉結果</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50 text-xs font-medium text-slate-700 dark:text-slate-300">
