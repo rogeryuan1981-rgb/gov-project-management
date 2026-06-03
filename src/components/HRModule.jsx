@@ -1362,6 +1362,12 @@ export default function HRModule({ user, selectedProject }) {
         onClose={() => setIsAttendanceViewOpen(false)}
         selectedProject={selectedProject}
       />
+      <AttendanceViewModal 
+        isOpen={isAttendanceViewOpen}
+        onClose={() => setIsAttendanceViewOpen(false)}
+        selectedProject={selectedProject}
+        personnel={personnel} /* 補上這一行，把計畫人員名冊丟給檢視視窗 */
+      />
     </div>
   );
 }
