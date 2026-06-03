@@ -22,6 +22,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     if (!selectedProject) return;
     setIsLoading(true);
     try {
+      // 步驟 A：讀取工作日曆放假設定
       const calendarDocRef = doc(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'calendars', selectedProject);
       const calendarSnap = await getDoc(calendarDocRef);
       let currentOffDays = {};
@@ -30,6 +31,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         setOffDays(currentOffDays);
       }
 
+      // 步驟 B：讀取該月份已匯入的所有考勤紀錄
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(
         attendanceRef, 
@@ -40,10 +42,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+      // 步驟 C：動態計算當月天數足跡
       const year = parseInt(viewMonth.split('-')[0], 10);
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
+      // 抓取計畫編制人員名冊作為基礎矩陣基準
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
@@ -56,12 +60,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
       const finalMeshRecords = [];
 
+      // 步驟 D：橫向調閱名冊、考勤紀錄，實作跨表互補機制
       if (finalEmployeeList.length > 0) {
         finalEmployeeList.forEach(emp => {
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
+            // 跨表數據互補演算法
             const sameDayRecords = importedRecords.filter(r => r.name === emp.name && r.date === dateStr);
             let mergedRecord = null;
 
@@ -150,12 +156,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
+  // 核心演算法：多維度條件篩選
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
     return matchesName && matchesUnit;
   });
 
+  // 動態即時排序
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || '';
@@ -167,6 +175,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
   });
 
+  // 輔助函式：取得純文字格式的交叉判定狀態
   const getStatusText = (r) => {
     if (r.isOffDay) return (r.checkIn || r.checkOut) ? "假日加班" : "例假日/放假";
     if (r.leaveType) return `已請假 (${r.leaveType})`;
@@ -190,6 +199,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return "正常出勤";
   };
 
+  // 交叉判定 Badges 視覺化輸出
   const renderStatusBadge = (r) => {
     const statusText = getStatusText(r);
     if (statusText === "假日加班") return <span className="px-2.5 py-1 bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400 text-xs font-bold rounded-lg border border-amber-200 dark:border-amber-500/30">假日加班</span>;
@@ -276,15 +286,19 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           </button>
         </div>
 
-        {/* Filter Bar —— 已完美補齊 dark: 深色模式配色優化 */}
+        {/* Filter Bar */}
         <div className="p-4 bg-slate-50/50 dark:bg-slate-900/30 border-b border-slate-100 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
           <div className="flex items-center space-x-2">
-            {/* 補上 dark:text-indigo-400 點亮日曆符號 */}
             <Calendar size={14} className="text-slate-400 dark:text-indigo-400 shrink-0" />
-            <input type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500" />
+            {/* 核心修正：在月份輸入框加入 [color-scheme:dark] 樣式，一鍵將隱形的黑色日曆小圖標強制反白高亮 */}
+            <input 
+              type="month" 
+              value={viewMonth} 
+              onChange={(e) => setViewMonth(e.target.value)} 
+              className="text-xs font-bold p-2 rounded-xl border dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500 [color-scheme:light]_dark:[color-scheme:dark]" 
+            />
           </div>
           <div className="flex items-center space-x-2">
-            {/* 補上 dark:text-indigo-400 點亮過濾符號 */}
             <Filter size={14} className="text-slate-400 dark:text-indigo-400 shrink-0" />
             <select value={selectedUnit} onChange={(e) => setSelectedUnit(e.target.value)} className="text-xs font-bold p-2 rounded-xl border bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-white w-full outline-none focus:border-indigo-500" >
               <option value="ALL">全部計畫單位 (ALL)</option>
@@ -292,12 +306,10 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             </select>
           </div>
           <div className="relative">
-            {/* 補上 dark:text-slate-300 點亮放大鏡搜尋符號 */}
             <Search size={14} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 dark:text-slate-300" />
             <input type="text" placeholder="搜尋人員姓名..." value={searchName} onChange={(e) => setSearchName(e.target.value)} className="pl-9 pr-4 py-2 w-full bg-white border border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-white rounded-xl text-xs outline-none focus:border-indigo-500" />
           </div>
           
-          {/* 優化：比對按鈕整合 dark: 屬性，杜絕深色模式下隱形 */}
           <div className="flex items-center justify-end space-x-2">
             <button 
               onClick={fetchData} 
@@ -424,7 +436,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
         {/* Footer */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
-          <button onClick={onClose} className="px-6 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:text-white font-bold text-slate-700 text-sm rounded-xl">關閉視窗</button>
+          <button onClick={onClose} className="px-6 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm rounded-xl">關閉視窗</button>
         </div>
       </div>
     </div>
