@@ -49,7 +49,7 @@ export default function HRModule({ user, selectedProject }) {
   const [requirements, setRequirements] = useState([]);
   const [dbError, setDbError] = useState(null); 
   const [projectData, setProjectData] = useState({});
-  const [projectName, setProjectName] = useState(''); // 💡 補齊宣告，防止 undefined 崩潰
+  const [projectName, setProjectName] = useState('');
   
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isSidebarOpen, setIsReqModalOpen] = useState(false); 
@@ -928,7 +928,7 @@ export default function HRModule({ user, selectedProject }) {
                         : (matchedRequirement?.note ? [matchedRequirement.note] : []);
 
                     if (extraRequirements.length === 0) {
-                      return <p className="text-xs text-slate-500 dark:text-slate-400 p-2">目前職位 ({activeUnit} - {activeRole}) 尚無設定任何額外需求說明。</p>;
+                      return <p className="text-xs text-slate-500 dark:text-slate-400 p-2">目前職位 ({activeUnit} - {activeRole}) 尚無設定 any 額外需求說明。</p>;
                     }
 
                     return (
@@ -1007,7 +1007,7 @@ export default function HRModule({ user, selectedProject }) {
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
               <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-indigo-100 dark:border-indigo-500/20 mb-6 shadow-sm">
-                <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-400 mb-3 flex items-center"><Plus size={16} className="mr-1" /> 新增需求區間</h4>
+                <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-400 mb-3 flex items-center"><Plus size={16} className="mr-1" /> 新增人力需求職缺</h4>
                 <form onSubmit={handleAddReq}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1">計畫單位</label><input required type="text" value={newReq.unit} onChange={e=>setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
@@ -1043,7 +1043,7 @@ export default function HRModule({ user, selectedProject }) {
                                 newItems[idx] = e.target.value;
                                 setNewReq({...newReq, noteItems: newItems});
                               }}
-                              placeholder="請輸入需求項目..." 
+                              placeholder="請輸入要求項目 (如：需具備三年專案經驗、需取得 PMP 證照)..." 
                               className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" 
                             />
                             <button 
@@ -1058,12 +1058,13 @@ export default function HRModule({ user, selectedProject }) {
                             </button>
                           </div>
                         ))}
+                        {/* 💡 已導正：修復原本 mr-1 後方誤植的大括號字元，回歸乾淨標準 JSX 語法 */}
                         <button 
                           type="button" 
                           onClick={() => setNewReq({...newReq, noteItems: [...(newReq.noteItems || []), '']})}
                           className="flex items-center text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors mt-2 px-1"
                         >
-                          <Plus size={14} className="mr-1} /> 新增一項條列說明
+                          <Plus size={14} className="mr-1" /> 新增一項條列說明
                         </button>
                       </div>
                     </div>
