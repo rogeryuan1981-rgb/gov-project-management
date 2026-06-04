@@ -5,6 +5,19 @@ import { getApp } from 'firebase/app';
 
 const db = getFirestore(getApp());
 
+// =========================================================================
+// 💡 [可維護設定檔位置] 考勤手動維護假別設定中心
+// 管理者未來若需增刪假別（如新增婚假、陪產假），直接在此處維護即可，程式碼將自動連動
+// =========================================================================
+const LEAVE_TYPES_CONFIG = [
+  { value: '特休', label: '特休' },
+  { value: '事假', label: '事假' },
+  { value: '病假', label: '病假' },
+  { value: '喪假', label: '喪假' },
+  { value: '公假', label: '公假' },
+  { value: '補休', label: '補休' }
+];
+
 export default function AttendanceViewModal({ isOpen, onClose, selectedProject, personnel = [], allExistingUnits = [] }) {
   const [viewMonth, setViewMonth] = useState(new Date().toISOString().substring(0, 7));
   const [searchName, setSearchName] = useState('');
@@ -82,7 +95,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 currentDayUnit = matchedHistory.unit;
               }
             } else if (personInfo) {
-              // 降級相容硬體舊欄位測試規則
               if (empName === '于家源' || personInfo.name === 'A') {
                 if (dateStr <= '2026-05-17') {
                   currentDayUnit = '企劃組';
@@ -180,14 +192,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 多維度條件篩選
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
     return matchesName && matchesUnit;
   });
 
-  // 動態即時排序
   const sortedRecords = [...filteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || '';
@@ -234,7 +244,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
   const handleExportCurrentViewExcel = () => {
     if (sortedRecords.length === 0) {
-      alert('目前畫面上無 any 過濾後的考勤資料可供匯出');
+      alert('目前畫面上無any過濾後的考勤資料可供匯出');
       return;
     }
     const headers = ['打卡日期', '姓名', '計畫單位', '上班時間 (M)', '下班時間 (O)', '表定請假區間 (Z)', '假別', '日曆與工時交叉結果'];
@@ -360,7 +370,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           </div>
         </div>
 
-        {/* Table Content Container —— 加強控制滾動軸區塊範圍 */}
+        {/* Table Content Container */}
         <div className="overflow-y-auto flex-1 p-6 bg-slate-50/30 dark:bg-slate-900/10">
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
@@ -373,10 +383,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前查無符合該單位或條件的人員紀錄</p>
             </div>
           ) : (
-            /* 💡 核心優化：外層容器設定 max-h，且允許水平滾動防擠壓 */
             <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto shadow-sm bg-white dark:bg-slate-800 max-h-full">
               <table className="w-full text-left border-collapse relative">
-                {/* 💡 核心優化：將 thead 加上 sticky top-0 與 z-10 權限，並指定固定的背景色，達成表頭物理凍結 */}
                 <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shadow-xs">
                   <tr>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none" onClick={() => handleSort('date')}>打卡日期 <SortIcon columnKey="date" /></th>
@@ -440,14 +448,18 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
                         <td className="py-3.5 px-4">
                           {isRowEditing ? (
-                            <select value={editFormData.leaveType} onChange={e => setEditFormData({...editFormData, leaveType: e.target.value})} className="px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded outline-none text-xs border-indigo-300 text-slate-800 dark:text-white">
-                              <option value="">-- 無假別 --</option>
-                              <option value="特休">特休</option>
-                              <option value="事假">事假</option>
-                              <option value="病假">病假</option>
-                              <option value="喪假">喪假</option>
-                              <option value="公假">公假</option>
-                              <option value="補休">補休</option>
+                            /* 💡 核心修正：假別下拉選單改為讀取可維護配置檔 LEAVE_TYPES_CONFIG，並補強深色模式防隱形樣式 */
+                            <select 
+                              value={editFormData.leaveType} 
+                              onChange={e => setEditFormData({...editFormData, leaveType: e.target.value})} 
+                              className="px-2 py-1 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded outline-none text-xs text-slate-800 dark:text-slate-100 font-bold focus:border-indigo-500 transition-all"
+                            >
+                              <option value="" className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">-- 無假別 --</option>
+                              {LEAVE_TYPES_CONFIG.map(leave => (
+                                <option key={leave.value} value={leave.value} className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">
+                                  {leave.label}
+                                </option>
+                              ))}
                             </select>
                           ) : (
                             <span className="font-semibold text-slate-600 dark:text-slate-300">{r.leaveType || '--'}</span>
