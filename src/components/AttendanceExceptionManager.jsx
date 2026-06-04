@@ -10,7 +10,7 @@ const LEAVE_TYPES_CONFIG = [
   { value: '事假', label: '事假' },
   { value: '病假', label: '病假' },
   { value: '喪假', label: '喪假' },
-  { value: '公假', label: '公假' },
+  { value: '公出', label: '公出' },
   { value: '補休', label: '補休' }
 ];
 
@@ -32,7 +32,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
   const fetchExceptions = async () => {
     if (!selectedProject) return;
-    setIsLoading(false);
     setIsLoading(true);
     try {
       // A. 讀取工作日曆設定
@@ -40,7 +39,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const calendarSnap = await getDoc(calendarDocRef);
       const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
 
-      // B. 讀取打卡流水號
+      // B. 讀取打卡流水號 (💡 這裡會精準隨 targetMonth 動態向 Firebase 重新索取特定月份資料)
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', targetMonth));
       const querySnapshot = await getDocs(q);
@@ -67,15 +66,15 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-          if (currentOffDays[dateStr]) continue; // 💡 放假日排除，只抓應上班日
+          if (currentOffDays[dateStr]) continue; // 放假日排除，只抓應上班日
 
           const dayRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName) && r.date === dateStr);
           let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
           let isManualMaintained = false;
 
           if (dayRecords.length > 0) {
-            checkIn = dayRecords.find(r => r.checkIn)? r.checkIn : (dayRecords[0].checkIn || "");
-            checkOut = dayRecords.find(r => r.checkOut)? r.checkOut : (dayRecords[0].checkOut || "");
+            checkIn = dayRecords.find(r => r.checkIn)? dayRecords.find(r => r.checkIn).checkIn : (dayRecords[0].checkIn || "");
+            checkOut = dayRecords.find(r => r.checkOut)? dayRecords.find(r => r.checkOut).checkOut : (dayRecords[0].checkOut || "");
             leaveRangeInfo = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveRangeInfo : "";
             leaveType = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveType : "";
             isManualMaintained = !!dayRecords[0].isManualMaintained;
@@ -105,7 +104,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
             }
           }
 
-          // 💡 僅收錄異常件 (過濾掉正常上班與常態請假)
+          // 僅收錄異常件 (過濾掉正常上班與常態請假)
           if (statusType === 'ABSENT' || statusType === 'MISSING_CLOCK' || statusType === 'LATE_EARLY') {
             exceptionMesh.push({
               id: `exc_${empName}_${dateStr}`,
@@ -156,7 +155,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
         leaveRangeInfo: editForm.leaveRangeInfo,
         leaveType: editForm.leaveType,
         recordType: 'MANUAL_MAINTAINED',
-        isManualMaintained: true, // 💡 同步注入特赦金鑰，永久鎖定不可被覆蓋！
+        isManualMaintained: true, // 同步注入特赦金鑰，永久鎖定不可被覆蓋！
         updatedAt: new Date().getTime()
       };
 
@@ -192,7 +191,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           <button onClick={() => setExceptionFilter('ALL_EXCEPTIONS')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:border-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>全部異常 ({records.length})</button>
           <button onClick={() => setExceptionFilter('ABSENT')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>曠職 ({records.filter(r=>r.statusType==='ABSENT').length})</button>
           <button onClick={() => setExceptionFilter('MISSING_CLOCK')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>缺打卡 ({records.filter(r=>r.statusType==='MISSING_CLOCK').length})</button>
-          <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
+          <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-50 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
         </div>
         
         <div className="relative w-full sm:w-64">
