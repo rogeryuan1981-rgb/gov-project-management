@@ -66,6 +66,9 @@ export default function HRModule({ user, selectedProject }) {
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
   
   const [editingPerson, setEditingPerson] = useState(null);
+  // 新增：人力需求維護編輯狀態
+  const [editingReqId, setEditingReqId] = useState(null);
+  const [editReqForm, setEditReqForm] = useState({ unit: '', position: '', startDate: '', penaltyStartDate: '', endDate: '', count: 1, isResident: true, approvedSalary: '', noteItems: [''] });
 
   const reqFileInputRef = useRef(null);
   const personFileInputRef = useRef(null);
@@ -93,8 +96,9 @@ export default function HRModule({ user, selectedProject }) {
     contractStart: defaultStartDate, contractEnd: '', files: []
   });
   
+  // 新增：加入 approvedSalary (核定薪資) 欄位
   const [newReq, setNewReq] = useState({
-    unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
+    unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, approvedSalary: '', noteItems: ['']
   });
 
   const tokenClientRef = useRef(null);
@@ -210,7 +214,7 @@ export default function HRModule({ user, selectedProject }) {
       case 'role': aValue = a.role || ''; bValue = b.role || ''; break;
       case 'roleDate': aValue = a.roleStartDate || a.hireDate || ''; bValue = b.roleStartDate || b.hireDate || ''; break;
       case 'date': aValue = a.contractStart || a.hireDate || ''; bValue = b.contractStart || b.hireDate || ''; break;
-      default: break;
+default: break;
     }
     if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
     if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
@@ -237,7 +241,8 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const handleOpenReqModal = () => {
-    setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
+    setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, approvedSalary: '', noteItems: [''] });
+    setEditingReqId(null); // 開啟需求視窗時重設編輯狀態
     setIsReqModalOpen(true);
   };
 
@@ -331,28 +336,58 @@ export default function HRModule({ user, selectedProject }) {
         count: parseInt(newReq.count, 10) || 1, 
         isResident: String(newReq.isResident) === 'true',
         penaltyStartDate: finalPenaltyDate,
+        approvedSalary: newReq.approvedSalary ? parseInt(newReq.approvedSalary, 10) : '', // 儲存核定薪資數字
         noteItems: filteredNoteItems,
         projectId: selectedProject, 
         createdAt: new Date().getTime()
       });
-      setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: [''] });
+      setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, approvedSalary: '', noteItems: [''] });
     } catch (error) { console.error("新增人力需求失敗:", error); }
   };
 
+  // 新增：人力需求區間「更新/修復維護」處理函數
+  const handleUpdateReq = async (e) => {
+    e.preventDefault();
+    if (!editingReqId || !editReqForm.unit || !editReqForm.position || !editReqForm.startDate || !editReqForm.endDate) return;
+    
+    const filteredNoteItems = (editReqForm.noteItems || []).filter(n => n.trim() !== '');
+    const finalPenaltyDate = editReqForm.penaltyStartDate || editReqForm.startDate;
+
+    try {
+      const reqDocRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs', editingReqId);
+      await updateDoc(reqDocRef, {
+        unit: editReqForm.unit,
+        position: editReqForm.position,
+        startDate: editReqForm.startDate,
+        penaltyStartDate: finalPenaltyDate,
+        endDate: editReqForm.endDate,
+        count: parseInt(editReqForm.count, 10) || 1,
+        isResident: String(editReqForm.isResident) === 'true',
+        approvedSalary: editReqForm.approvedSalary ? parseInt(editReqForm.approvedSalary, 10) : '', // 更新核定薪資數字
+        noteItems: filteredNoteItems
+      });
+      setEditingReqId(null); // 關閉編輯狀態
+      alert("✅ 成功更新計畫人力需求編制！");
+    } catch (error) { console.error("更新人力需求失敗:", error); }
+  };
+
   const handleDeleteReq = async (reqId) => {
+    if (!confirm("確定要刪除此項人力需求設定嗎？這將影響系統的合規天數計算。")) return;
     try { await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs', reqId)); } 
     catch (error) { console.error("刪除需求失敗:", error); }
   };
 
+  // 升級：匯入 CSV 範例格式，新增核定薪資欄位說明
   const exportReqCSVTemplate = () => {
-    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),計罰起始日/寬限期(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明(多項請用分號;隔開)\n範例單位,專員,2,${defaultStartDate},${defaultStartDate},${defaultEndDate},是,需具備相關證照;需三年專案經驗`;
+    const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),計罰起始日/寬限期(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),核定薪資(月薪數字),額外需求說明(多項請用分號;隔開)\n專案辦公室,專員,2,${defaultStartDate},${defaultStartDate},${defaultEndDate},是,45000,需具備相關證照;需三年專案經驗`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "人力需求設定_匯入範例.csv";
+    link.download = "人力需求設定_匯入範例(含薪資).csv";
     link.click();
   };
 
+  // 升級：批次匯入需求解析處理核定薪資
   const handleReqFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !user || !selectedProject) return;
@@ -373,12 +408,14 @@ export default function HRModule({ user, selectedProject }) {
           const penaltyDateStr = formatImportDate(cols[4]) || startDateStr; 
           const endDateStr = formatImportDate(cols[5]) || defaultEndDate;
           const isResidentBool = cols[6] === '是' || cols[6] === 'true';
-          const importedNotes = cols[7] ? cols[7].split(';').map(n => n.trim()).filter(Boolean) : [];
+          const approvedSalaryVal = cols[7] ? parseInt(cols[7], 10) : ''; // 第 8 欄為核定薪資
+          const importedNotes = cols[8] ? cols[8].split(';').map(n => n.trim()).filter(Boolean) : [];
           
           await addDoc(reqRef, {
             unit: cols[0], position: cols[1], count: parseInt(cols[2], 10) || 1,
             startDate: startDateStr, penaltyStartDate: penaltyDateStr, endDate: endDateStr,
             isResident: isResidentBool, 
+            approvedSalary: approvedSalaryVal,
             noteItems: importedNotes,
             projectId: selectedProject, createdAt: new Date().getTime()
           });
@@ -390,55 +427,39 @@ export default function HRModule({ user, selectedProject }) {
     finally { setIsImportingReq(false); e.target.value = ''; }
   };
 
-  const handlePersonnelFileUpload = async (e, personId) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleSaveEditPerson = async (e) => {
+    e.preventDefault();
+    if (!editingPerson.name || !editingPerson.hireDate) return;
 
-    const currentToken = localStorage.getItem('google_drive_access_token');
-    if (!currentToken) {
-      alert("尚未取得 Google Drive 授權，將為您開啟驗證視窗！");
-      tokenClientRef.current?.requestAccessToken();
-      return;
+    const validHistory = (editingPerson.history || []).filter(h => h.unit && h.role && h.startDate);
+    const sortedHistory = [...validHistory].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+    for (let i = 0; i < sortedHistory.length; i++) {
+      const current = sortedHistory[i]; const next = sortedHistory[i + 1];
+      if (current.endDate && new Date(current.startDate).getTime() > new Date(current.endDate).getTime()) { alert(`歷程日期錯誤`); return; }
+      if (next) {
+        if (!current.endDate) { alert(`歷程日期錯誤：因後續有轉任，先前職務必須填寫結束日！`); return; }
+        if (new Date(current.endDate).getTime() >= new Date(next.startDate).getTime()) { alert(`歷程重疊錯誤`); return; }
+      }
     }
 
-    setUploadingPersonnelId(personId);
+    const latestRecord = sortedHistory[sortedHistory.length - 1];
+    const matchedReq = requirements.find(r => r.unit === latestRecord.unit && r.position === latestRecord.role);
+    const newIsResident = matchedReq ? matchedReq.isResident : false;
+
     try {
-      const pathArray = ['專案管理系統', projectName || '未命名專案', '人事合規與代理紀錄'];
-      const todayStr = new Date().toISOString().split('T')[0];
-      const autoNamedFile = `[人事文件]_${todayStr.replace(/-/g, '')}_${file.name}`;
-      
-      const driveRes = await uploadToGoogleDrive(file, autoNamedFile, pathArray, currentToken);
-      
-      const person = personnel.find(p => p.id === personId);
-      const currentFiles = person.files || [];
-      const newFile = { 
-        id: driveRes.id || Date.now(), 
-        name: autoNamedFile, 
-        uploadDate: todayStr, 
-        url: driveRes.webViewLink || '#' 
-      };
-      
-      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', personId);
-      await updateDoc(personRef, { files: [...currentFiles, newFile] });
-
-      if (editingPerson && editingPerson.id === personId) {
-        setEditingPerson(prev => ({ ...prev, files: [...currentFiles, newFile] }));
-      }
-    } catch (error) {
-      console.error("檔案上傳失敗:", error);
-      if (error.message === 'UNAUTHORIZED') {
-        localStorage.removeItem('google_drive_access_token');
-        alert("授權已過期，請重新上傳以觸發授權！");
-      }
-    } finally {
-      setUploadingPersonnelId(null);
-      e.target.value = '';
-    }
+      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', editingPerson.id);
+      await updateDoc(personRef, {
+        name: editingPerson.name, email: editingPerson.email || '', hireDate: editingPerson.hireDate,
+        contractStart: editingPerson.contractStart || '', contractEnd: editingPerson.contractEnd || '',
+        history: sortedHistory, unit: latestRecord.unit, role: latestRecord.role,
+        roleStartDate: latestRecord.startDate, isResident: newIsResident,
+        fulfilledReqs: editingPerson.fulfilledReqs || [] 
+      });
+      setEditingPerson(null);
+    } catch (error) { console.error("更新人員失敗:", error); }
   };
 
-  // =========================================================================
-  // 人力編制與職缺空窗、未來事件分析引擎
-  // =========================================================================
   const reqGroups = {};
   requirements.forEach(req => {
     const key = `${req.unit}::${req.position}`;
@@ -970,13 +991,13 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 人力需求設定 */}
+      {/* Modal: 人力需求設定 (已擴充「就地直接維護」與「核定薪資」欄位) */}
       {isReqModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
               <div className="flex items-center space-x-4">
-                <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><Settings size={20} className="mr-2 text-indigo-500" />設定計畫人力需求 ({projectName || '載入中...'})</h3>
+                <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><Settings size={20} className="mr-2 text-indigo-500" />設定計畫人力需求編制 ({projectName || '載入中...'})</h3>
                 <input type="file" ref={reqFileInputRef} accept=".csv" className="hidden" onChange={handleReqFileUpload} />
                 <div className="flex space-x-2">
                   <button onClick={exportReqCSVTemplate} className="flex items-center px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-700 dark:text-slate-300 rounded-lg hover:shadow-sm transition-all"><Download size={14} className="mr-1.5 text-indigo-500 dark:text-indigo-400" />下載 CSV 範例</button>
@@ -986,42 +1007,77 @@ export default function HRModule({ user, selectedProject }) {
               <button onClick={() => setIsReqModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
-              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-indigo-100 dark:border-indigo-500/20 mb-6 shadow-sm">
-                <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-400 mb-3 flex items-center"><Plus size={16} className="mr-1" /> 新增需求區間</h4>
-                <form onSubmit={handleAddReq}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-start mb-4">
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1">計畫單位</label><input required type="text" value={newReq.unit} onChange={e=>setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1">要求職位</label><input required type="text" value={newReq.position} onChange={e=>setNewReq({...newReq, position: e.target.value})} placeholder="ex. 專員" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1">需求人數</label><input required type="number" min="1" value={newReq.count} onChange={e=>setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">是否為駐點職缺</label><select required value={newReq.isResident} onChange={e=>setNewReq({...newReq, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500"><option value="true">是 (駐點人員)</option><option value="false">否 (非駐點人員)</option></select></div>
+              
+              {/* 💡 升級：表單區域會根據是否點選「維護修訂」，動態切換為「新增模式」或「編輯模式」 */}
+              <div className={`p-5 rounded-2xl border mb-6 shadow-sm bg-white dark:bg-slate-800 ${editingReqId ? 'border-amber-300 dark:border-amber-500/40 bg-amber-50/5' : 'border-indigo-100 dark:border-indigo-500/20'}`}>
+                <div className="flex items-center justify-between mb-3 border-b border-slate-100 dark:border-slate-700 pb-2">
+                  <h4 className="font-bold text-sm flex items-center">
+                    <Plus size={16} className="mr-1 text-indigo-500" /> 
+                    {editingReqId ? <span className="text-amber-600 font-extrabold">⚠️ 正在維護修訂特定需求區間</span> : <span className="text-indigo-700">建立新人力需求區間</span>}
+                  </h4>
+                  {editingReqId && (
+                    <button type="button" onClick={() => setEditingReqId(null)} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-md font-bold text-slate-600">取消修訂，切回新增</button>
+                  )}
+                </div>
+
+                <form onSubmit={editingReqId ? handleUpdateReq : handleAddReq}>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-start mb-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">計畫單位</label>
+                      <input required type="text" value={editingReqId ? editReqForm.unit : newReq.unit} onChange={e => editingReqId ? setEditReqForm({...editReqForm, unit: e.target.value}) : setNewReq({...newReq, unit: e.target.value})} placeholder="ex. 專案辦公室" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">要求職位</label>
+                      <input required type="text" value={editingReqId ? editReqForm.position : newReq.position} onChange={e => editingReqId ? setEditReqForm({...editReqForm, position: e.target.value}) : setNewReq({...newReq, position: e.target.value})} placeholder="ex. 專員" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">需求人數</label>
+                      <input required type="number" min="1" value={editingReqId ? editReqForm.count : newReq.count} onChange={e => editingReqId ? setEditReqForm({...editReqForm, count: e.target.value}) : setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 mb-1">核定薪資 (月薪) 🪙</label>
+                      <input type="number" min="0" value={editingReqId ? editReqForm.approvedSalary : newReq.approvedSalary} onChange={e => editingReqId ? setEditReqForm({...editReqForm, approvedSalary: e.target.value}) : setNewReq({...newReq, approvedSalary: e.target.value})} placeholder="請輸入核定薪資數字" className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 font-bold font-mono text-indigo-600" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">是否為駐點職缺</label>
+                      <select required value={editingReqId ? String(editReqForm.isResident) : String(newReq.isResident)} onChange={e => editingReqId ? setEditReqForm({...editReqForm, isResident: e.target.value === 'true'}) : setNewReq({...newReq, isResident: e.target.value === 'true'})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500">
+                        <option value="true">是 (駐點人員)</option>
+                        <option value="false">否 (非駐點人員)</option>
+                      </select>
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 items-start mb-4">
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label><input required type="date" value={newReq.startDate} onChange={e=>setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-orange-600 dark:text-orange-400">
-                        計罰起始日 (免罰寬限期)
-                      </label>
-                      <input 
-                        type="date" 
-                        value={newReq.penaltyStartDate || newReq.startDate} 
-                        onChange={e=>setNewReq({...newReq, penaltyStartDate: e.target.value})} 
-                        className="w-full px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-500/30 rounded-lg text-sm outline-none focus:border-orange-500 text-orange-800 dark:text-orange-200" 
-                      />
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求開始日</label>
+                      <input required type="date" value={editingReqId ? editReqForm.startDate : newReq.startDate} onChange={e => editingReqId ? setEditReqForm({...editReqForm, startDate: e.target.value}) : setNewReq({...newReq, startDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-orange-600 dark:text-orange-400">計罰起始日 (免罰寬限期)</label>
+                      <input type="date" value={editingReqId ? (editReqForm.penaltyStartDate || editReqForm.startDate) : (newReq.penaltyStartDate || newReq.startDate)} onChange={e => editingReqId ? setEditReqForm({...editReqForm, penaltyStartDate: e.target.value}) : setNewReq({...newReq, penaltyStartDate: e.target.value})} className="w-full px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-500/30 rounded-lg text-sm outline-none focus:border-orange-500 text-orange-800 dark:text-orange-200" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label>
+                      <input required type="date" value={editingReqId ? editReqForm.endDate : newReq.endDate} onChange={e => editingReqId ? setEditReqForm({...editReqForm, endDate: e.target.value}) : setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" />
+                    </div>
                     
                     <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
                       <div className="space-y-2">
-                        {(newReq.noteItems || []).map((item, idx) => (
+                        {(editingReqId ? (editReqForm.noteItems || []) : (newReq.noteItems || [])).map((item, idx) => (
                           <div key={idx} className="flex items-center space-x-2">
                             <input 
                               type="text" 
                               value={item} 
                               onChange={(e) => {
-                                const newItems = [...(newReq.noteItems || [])];
-                                newItems[idx] = e.target.value;
-                                setNewReq({...newReq, noteItems: newItems});
+                                if (editingReqId) {
+                                  const newItems = [...(editReqForm.noteItems || [])];
+                                  newItems[idx] = e.target.value;
+                                  setEditReqForm({...editReqForm, noteItems: newItems});
+                                } else {
+                                  const newItems = [...(newReq.noteItems || [])];
+                                  newItems[idx] = e.target.value;
+                                  setNewReq({...newReq, noteItems: newItems});
+                                }
                               }}
                               placeholder="請輸入需求項目 (例如：需具備相關證照;需三年專案經驗)..." 
                               className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" 
@@ -1029,8 +1085,13 @@ export default function HRModule({ user, selectedProject }) {
                             <button 
                               type="button" 
                               onClick={() => {
-                                const newItems = (newReq.noteItems || []).filter((_, i) => i !== idx);
-                                setNewReq({...newReq, noteItems: newItems});
+                                if (editingReqId) {
+                                  const newItems = (editReqForm.noteItems || []).filter((_, i) => i !== idx);
+                                  setEditReqForm({...editReqForm, noteItems: newItems});
+                                } else {
+                                  const newItems = (newReq.noteItems || []).filter((_, i) => i !== idx);
+                                  setNewReq({...newReq, noteItems: newItems});
+                                }
                               }}
                               className="p-2 text-slate-400 hover:text-red-500 bg-slate-100 hover:bg-red-50 dark:bg-slate-800 dark:hover:bg-red-500/10 rounded-lg transition-colors"
                             >
@@ -1040,7 +1101,13 @@ export default function HRModule({ user, selectedProject }) {
                         ))}
                         <button 
                           type="button" 
-                          onClick={() => setNewReq({...newReq, noteItems: [...(newReq.noteItems || []), '']})}
+                          onClick={() => {
+                            if (editingReqId) {
+                              setEditReqForm({...editReqForm, noteItems: [...(editReqForm.noteItems || []), '']});
+                            } else {
+                              setNewReq({...newReq, noteItems: [...(newReq.noteItems || []), '']});
+                            }
+                          }}
                           className="flex items-center text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors mt-2 px-1"
                         >
                           <Plus size={14} className="mr-1" /> 新增一項條列說明
@@ -1048,11 +1115,15 @@ export default function HRModule({ user, selectedProject }) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex justify-end mt-2"><button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">加入設定</button></div>
+                  <div className="flex justify-end mt-2">
+                    <button type="submit" className={`px-6 py-2 text-white text-sm font-bold rounded-lg transition-colors shadow-sm ${editingReqId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                      {editingReqId ? "儲存更新維護" : "加入需求設定"}
+                    </button>
+                  </div>
                 </form>
               </div>
 
-              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求編制區間</h4>
+              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求編制清單與核定配置</h4>
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
@@ -1060,16 +1131,17 @@ export default function HRModule({ user, selectedProject }) {
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">駐點屬性</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[200px]">額外需求說明</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase bg-indigo-50/20">核定薪資 🪙</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[180px]">額外需求說明</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間 (起~迄)</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-orange-500 uppercase bg-orange-50/50 dark:bg-orange-500/5">計罰起日</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-orange-500 uppercase bg-orange-50/50">計罰起日</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">操作</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">核心操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {requirements.length === 0 ? (
-                      <tr><td colSpan="8" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
+                      <tr><td colSpan="9" className="py-8 text-center text-xs text-slate-500">尚無任何人力需求設定</td></tr>
                     ) : (
                       requirements.sort((a,b) => new Date(a.startDate) - new Date(b.startDate)).map(req => {
                         const isActiveToday = req.startDate <= today && req.endDate >= today;
@@ -1077,21 +1149,60 @@ export default function HRModule({ user, selectedProject }) {
                         const penaltyDate = req.penaltyStartDate || req.startDate;
                         
                         return (
-                          <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td className="py-3 px-4"><div className="font-bold text-sm text-slate-800 dark:text-slate-200">{req.position}</div><div className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(req.unit)}`}>{req.unit}</div></td>
+                          <tr key={req.id} className={`hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors ${editingReqId === req.id ? 'bg-amber-50/40 dark:bg-amber-950/20' : ''}`}>
+                            <td className="py-3 px-4">
+                              <div className="font-bold text-sm text-slate-800 dark:text-slate-200">{req.position}</div>
+                              <div className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(req.unit)}`}>{req.unit}</div>
+                            </td>
                             <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
                             <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">{req.isResident ? <span className="text-indigo-600 dark:text-indigo-400">是</span> : <span className="text-slate-400">否</span>}</td>
-                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 max-w-[200px]">
+                            
+                            {/* 💡 擴充展示：顯示核定薪資欄位數據，若無則顯示未填寫 */}
+                            <td className="py-3 px-4 text-sm font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50/10 font-mono">
+                              {req.approvedSalary ? `$${req.approvedSalary.toLocaleString()}` : <span className="text-[10px] font-normal text-slate-400">未填寫</span>}
+                            </td>
+
+                            <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400 max-w-[180px]">
                                {displayNotes.length > 0 ? (
                                    <ul className="list-disc pl-4 space-y-0.5">
                                       {displayNotes.map((n, i) => <li key={i} className="break-words">{n}</li>)}
                                    </ul>
                                ) : '-'}
                             </td>
-                            <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400">{req.startDate} ~ {req.endDate}</td>
-                            <td className="py-3 px-4 text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50/30 dark:bg-orange-900/10">{penaltyDate}</td>
+                            <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400 font-mono">{req.startDate} ~ {req.endDate}</td>
+                            <td className="py-3 px-4 text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50/30 dark:bg-orange-900/10 font-mono">{penaltyDate}</td>
                             <td className="py-3 px-4 text-center">{isActiveToday ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold rounded">現正要求中</span> : <span className="px-2 py-0.5 bg-slate-100 text-slate-500 dark:bg-slate-700 text-[10px] font-bold rounded">非現行區間</span>}</td>
-                            <td className="py-3 px-4 text-right"><button onClick={() => handleDeleteReq(req.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={16} /></button></td>
+                            <td className="py-3 px-4 text-right">
+                              <div className="flex items-center justify-end space-x-1">
+                                
+                                {/* 💡 新增：點選後將該資料同步推入頂端維護表單區塊，啟動就地更新機制 */}
+                                <button 
+                                  type="button"
+                                  title="修復維護此人力需求設定"
+                                  onClick={() => {
+                                    setEditingReqId(req.id);
+                                    setEditReqForm({
+                                      unit: req.unit || '',
+                                      position: req.position || '',
+                                      startDate: req.startDate || '',
+                                      penaltyStartDate: req.penaltyStartDate || req.startDate || '',
+                                      endDate: req.endDate || '',
+                                      count: req.count || 1,
+                                      isResident: req.isResident !== false,
+                                      approvedSalary: req.approvedSalary || '',
+                                      noteItems: req.noteItems && req.noteItems.length > 0 ? [...req.noteItems] : ['']
+                                    });
+                                    // 滾動回到頂部表單，方便同仁編輯
+                                    document.getElementById("addPersonForm")?.scrollIntoView({ behavior: 'smooth' });
+                                  }}
+                                  className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                
+                                <button type="button" onClick={() => handleDeleteReq(req.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={14} /></button>
+                              </div>
+                            </td>
                           </tr>
                         );
                       })
@@ -1100,6 +1211,7 @@ export default function HRModule({ user, selectedProject }) {
                 </table>
               </div>
             </div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsReqModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 text-sm font-bold rounded-xl hover:bg-slate-300">關閉設定</button></div>
           </div>
         </div>
       )}
@@ -1142,7 +1254,7 @@ export default function HRModule({ user, selectedProject }) {
                 <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2"><AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警</h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：<br/><span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-bold mt-1 inline-block">💡 提示：若某人員離職，但下方未出現空缺警示，表示該職位「已有其他人員重疊交接中，滿足總量需求」或「該需求區間已到期」。</span></p>
                 {futureVacancies.length === 0 ? (
-                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p><p className="text-xs text-slate-500 mt-1">目前已知的離職與轉任皆已有替補人員銜接。</p></div>
+                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p></div>
                 ) : (
                   <div className="space-y-3">
                     {futureVacancies.map((fv, idx) => (
@@ -1160,7 +1272,7 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 今日職位空缺明細 (詳細卡片版) */}
+      {/* Modal: 今日職位空缺明細 */}
       {isVacancyModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
@@ -1170,7 +1282,7 @@ export default function HRModule({ user, selectedProject }) {
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-6">
               {vacancyBreakdown.length === 0 ? (
-                <div className="py-12 text-center text-slate-500"><CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400 opacity-50" /><p className="font-bold text-lg">目前無職位空缺異常</p><p className="text-sm mt-2">各項計畫人力需求皆已補齊。</p></div>
+                <div className="py-12 text-center text-slate-500"><CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400 opacity-50" /><p className="font-bold text-lg">目前無職位空缺異常</p></div>
               ) : (
                 vacancyBreakdown.map((item, idx) => (
                   <div key={idx} className="bg-white dark:bg-slate-800 rounded-2xl border border-orange-200 dark:border-orange-500/30 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
@@ -1207,7 +1319,7 @@ export default function HRModule({ user, selectedProject }) {
                 ))
               )}
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white text-slate-700 text-sm font-bold rounded-xl transition-colors">關閉明細</button></div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 text-sm font-bold rounded-xl">關閉明細</button></div>
           </div>
         </div>
       )}
