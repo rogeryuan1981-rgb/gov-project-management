@@ -9,6 +9,7 @@ import Header from './components/Header.jsx';
 import Dashboard from './components/Dashboard.jsx';
 import TaskBoard from './components/TaskBoard.jsx';
 import HRModule from './components/HRModule.jsx';
+import AttendanceModule from './components/AttendanceModule.jsx'; // 💥 核心重構：引入全新拆分出來的獨立考勤主模組檔案
 import ArchiveModule from './components/ArchiveModule.jsx';
 import ReportsModule from './components/ReportsModule.jsx';
 import SettingsModule from './components/SettingsModule.jsx';
@@ -165,6 +166,11 @@ export default function App() {
                 
                 {activeTab === 'hr' && (
                   <HRModule user={user} selectedProject={selectedProject} />
+                )}
+
+                {/* 💥 核心重構：接軌考勤模組。當點選側邊欄的 'attendance' 時，渲染全新獨立的考勤主模組 */}
+                {activeTab === 'attendance' && (
+                  <AttendanceModule user={user} selectedProject={selectedProject} />
                 )}
                 
                 {activeTab === 'archive' && (
