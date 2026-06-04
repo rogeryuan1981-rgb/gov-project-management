@@ -68,13 +68,15 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       let successCount = 0;
 
+      // 💡 核心優化：建立全域去隱形空白與去空格之精密字串清洗工具，從根本上確保數據 100% 乾淨
+      const sanitizeName = (str) => str ? str.toString().replace(/\s+/g, '').trim() : '';
+
       // ----------------------------------------------------
       // 【分流 A】新版考勤表 A：單列一體化（打卡＋請假）
       // ----------------------------------------------------
       if (importType === 'A') {
         const header = rawRows[0];
         
-        // 為了極致防呆，優先使用名稱定位，查無則直接依約定索引對齊
         // A=0, B=1, D=3, M=12, O=14, Z=25, AB=27 (程式索引從 0 開始算)
         const nameIdx = header.indexOf('姓名') !== -1 ? header.indexOf('姓名') : 1;
         const dateIdx = header.indexOf('打卡日期') !== -1 ? header.indexOf('打卡日期') : 3;
@@ -87,8 +89,9 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const cols = rawRows[i];
           if (cols.length <= Math.max(nameIdx, dateIdx)) continue;
 
-          const name = cols[nameIdx];
-          const rawDate = cols[dateIdx]; // 格式如: 2026/05/20
+          // 💡 核心優化點：源頭端立即針對讀取的人名執行強制去隱形空白處理
+          const name = sanitizeName(cols[nameIdx]);
+          const rawDate = cols[dateIdx]; 
 
           // 唯有屬於當前選擇月份的才匯入
           if (!name || !rawDate || !rawDate.replace(/\//g, '-').startsWith(selectedMonth)) continue;
@@ -99,13 +102,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const leaveTime = cols[leaveTimeIdx] || "";
           const leaveType = cols[leaveTypeIdx] || "";
 
-          // 固定 Document ID 確保重複匯入時精準覆蓋舊資料 (Upsert)
+          // 由於名字已經被徹底清洗，產出的 Document ID 將會具有絕對唯一的精準覆蓋實效
           const docId = `${selectedProject}_${name}_${dateStr}`;
 
           await setDoc(doc(attendanceRef, docId), {
             projectId: selectedProject,
             month: selectedMonth,
-            name,
+            name: name, // 存入清洗完畢的乾淨人名
             date: dateStr,
             checkIn: checkIn === '--' ? '' : checkIn,
             checkOut: checkOut === '--' ? '' : checkOut,
@@ -116,7 +119,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           successCount++;
         }
-        setStatusMessage(`[新版考勤表A] 匯入成功！共解析並覆蓋 ${successCount} 筆一體化出勤與請假明細。`);
+        setStatusMessage(`[新版考勤表A] 匯入成功！共解析並精準覆蓋 ${successCount} 筆乾淨的出勤與請假明細。`);
       }
 
       // ----------------------------------------------------
@@ -131,7 +134,8 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           const nameField = cols[1] || "";
           if (nameField.includes('名：')) {
-            currentEmployeeName = nameField.split('名：')[1]?.trim() || "";
+            // 💡 核心優化點：針對考勤表 C 切割出來的主管/同仁人名，同樣在源頭立刻進行字串去空白除錯
+            currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
             continue; 
           }
 
@@ -154,7 +158,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             await setDoc(doc(attendanceRef, docId), {
               projectId: selectedProject,
               month: dateStr.substring(0, 7), 
-              name: currentEmployeeName,
+              name: currentEmployeeName, // 存入清洗完畢的乾淨人名
               date: dateStr,
               checkIn,
               checkOut,
@@ -166,12 +170,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             successCount++;
           }
         }
-        setStatusMessage(`[考勤表C] 民國曆解析完成！成功一體化匯入 ${successCount} 筆出勤與請假明細。`);
+        setStatusMessage(`[考勤表C] 民國曆解析完成！成功一體化匯入 ${successCount} 筆乾淨的出勤與請假明細。`);
       }
 
       setUploadStatus('success');
     } catch (error) {
       console.error("考勤匯入發生錯誤:", error);
+      setUploadStatus('error');
       setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
     } finally {
