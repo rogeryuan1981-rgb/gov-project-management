@@ -93,7 +93,6 @@ export default function HRModule({ user, selectedProject }) {
     contractStart: defaultStartDate, contractEnd: '', files: []
   });
   
-  // 新增：加入 penaltyStartDate (計罰起始日)
   const [newReq, setNewReq] = useState({
     unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
   });
@@ -391,39 +390,6 @@ export default function HRModule({ user, selectedProject }) {
     finally { setIsImportingReq(false); e.target.value = ''; }
   };
 
-  const handleSaveEditPerson = async (e) => {
-    e.preventDefault();
-    if (!editingPerson.name || !editingPerson.hireDate) return;
-
-    const validHistory = (editingPerson.history || []).filter(h => h.unit && h.role && h.startDate);
-    const sortedHistory = [...validHistory].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-
-    for (let i = 0; i < sortedHistory.length; i++) {
-      const current = sortedHistory[i]; const next = sortedHistory[i + 1];
-      if (current.endDate && new Date(current.startDate).getTime() > new Date(current.endDate).getTime()) { alert(`歷程日期錯誤`); return; }
-      if (next) {
-        if (!current.endDate) { alert(`歷程日期錯誤：因後續有轉任，先前職務必須填寫結束日！`); return; }
-        if (new Date(current.endDate).getTime() >= new Date(next.startDate).getTime()) { alert(`歷程重疊錯誤`); return; }
-      }
-    }
-
-    const latestRecord = sortedHistory[sortedHistory.length - 1];
-    const matchedReq = requirements.find(r => r.unit === latestRecord.unit && r.position === latestRecord.role);
-    const newIsResident = matchedReq ? matchedReq.isResident : false;
-
-    try {
-      const personRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', editingPerson.id);
-      await updateDoc(personRef, {
-        name: editingPerson.name, email: editingPerson.email || '', hireDate: editingPerson.hireDate,
-        contractStart: editingPerson.contractStart || '', contractEnd: editingPerson.contractEnd || '',
-        history: sortedHistory, unit: latestRecord.unit, role: latestRecord.role,
-        roleStartDate: latestRecord.startDate, isResident: newIsResident,
-        fulfilledReqs: editingPerson.fulfilledReqs || [] 
-      });
-      setEditingPerson(null);
-    } catch (error) { console.error("更新人員失敗:", error); }
-  };
-
   const handlePersonnelFileUpload = async (e, personId) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -466,7 +432,11 @@ export default function HRModule({ user, selectedProject }) {
       }
     } finally {
       setUploadingPersonnelId(null);
-      // =========================================================================
+      e.target.value = '';
+    }
+  };
+
+  // =========================================================================
   // 人力編制與職缺空窗、未來事件分析引擎
   // =========================================================================
   const reqGroups = {};
@@ -675,9 +645,6 @@ export default function HRModule({ user, selectedProject }) {
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
-  // =========================================================================
-  // 主畫面 JSX 渲染區塊
-  // =========================================================================
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-6xl mx-auto">
       
@@ -1041,7 +1008,7 @@ export default function HRModule({ user, selectedProject }) {
                         className="w-full px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-500/30 rounded-lg text-sm outline-none focus:border-orange-500 text-orange-800 dark:text-orange-200" 
                       />
                     </div>
-                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
+                    <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     
                     <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
@@ -1085,7 +1052,7 @@ export default function HRModule({ user, selectedProject }) {
                 </form>
               </div>
 
-              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求區間</h4>
+              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求編制區間</h4>
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
@@ -1247,6 +1214,3 @@ export default function HRModule({ user, selectedProject }) {
     </div>
   );
 }
-      e.target.value = '';
-    }
-  };
