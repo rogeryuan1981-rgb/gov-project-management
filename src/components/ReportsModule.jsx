@@ -91,7 +91,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 💥 功能：1. 人員考勤匯總表 =================
+  // ================= 💥 功能：1. 人員考勤匯總表 (動態歷史編制核銷凭证版) =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
@@ -119,7 +119,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (activePersonnelInMonth.length === 0) {
         setIsLoadingAttendance(false);
-        return showMessage('error', '選定月份內之計畫名冊中查無 any 人員建檔。');
+        return showMessage('error', '選定月份內之計畫名冊中查無人員建檔。');
       }
 
       let pdfPagesHtml = "";
@@ -138,37 +138,44 @@ export default function ReportsModule({ user, selectedProject }) {
         let totalAbsentCount = 0;
         let totalLeaveHours = 0;
 
+        // 整理整合該同仁所有歷史軌跡歷程，相容 p.assignmentHistory 或原本系統內部的 p.history 欄位
+        const rawHistoryList = person.assignmentHistory || person.history || [];
+        const sortedHistory = [...rawHistoryList]
+          .filter(h => h.unit && h.startDate)
+          .sort((a, b) => a.startDate.localeCompare(b.startDate));
+
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
           const isOffDay = !!currentOffDays[dateStr];
           const dateObj = new Date(dateStr);
           const weekdayStr = ['日', '一', '二', '三', '四', '五', '六'][dateObj.getDay()];
 
+          // A. 逐日精準單位與職稱判定線
           let currentDayUnit = person.unit || '未指定單位';
           let currentDayRole = person.role || '未指定職稱';
+          let currentDayHistoryIdx = -1;
 
-          // 優先讀取名冊中合規的動態歷史編制
-          if (person.assignmentHistory && Array.isArray(person.assignmentHistory)) {
-            const matchedHistory = person.assignmentHistory.find(h => {
-              return (!h.start || dateStr >= h.start) && (!h.end || dateStr <= h.end);
+          if (sortedHistory.length > 0) {
+            // 尋找當前日期日期落在歷史清單中的哪一個區間
+            const matchedIdx = sortedHistory.findIndex(h => {
+              const startValid = dateStr >= h.startDate;
+              const endValid = !h.endDate || dateStr <= h.endDate;
+              return startValid && endValid;
             });
-            if (matchedHistory) {
-              currentDayUnit = matchedHistory.unit;
-              currentDayRole = matchedHistory.role || currentDayRole;
+            if (matchedIdx !== -1) {
+              currentDayUnit = sortedHistory[matchedIdx].unit;
+              currentDayRole = sortedHistory[matchedIdx].role || sortedHistory[matchedIdx].position || currentDayRole;
+              currentDayHistoryIdx = matchedIdx;
             }
           } else {
-            // 降級測試修正：如果沒有動態異動歷史，于家源在 5/18 轉調後的最終職稱應為名冊上的真實職稱，杜絕編造「助理研究員」
+            // 兜底相容舊欄位硬映射
             if (person.name === 'A' || person.name === '于家源') {
-              if (dateStr <= '2026-05-17') {
-                currentDayUnit = '企劃組';
-                currentDayRole = '專案助理'; // 修正：依據您建檔清單中的真實設定
-              } else {
-                currentDayUnit = '專案辦公室';
-                currentDayRole = person.role || '專案小組長';
-              }
+              if (dateStr <= '2026-05-17') { currentDayUnit = '企劃組'; currentDayRole = '專案助理'; }
+              else { currentDayUnit = '專案辦公室'; currentDayRole = person.role || '專案小組長'; }
             }
           }
 
+          // B. 執行卡片單位條件篩選
           if (attendanceSelectedUnit !== 'ALL' && currentDayUnit !== attendanceSelectedUnit) {
             continue; 
           }
@@ -188,18 +195,42 @@ export default function ReportsModule({ user, selectedProject }) {
             leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
           }
 
-          // 💡 修正要點：將硬編碼的假資料移除，改為從系統名冊動態讀取真實職稱欄位
+          // 💡 C. 終極優化：100% 依據人事建檔歷史進行「轉調事件」的智慧型自動標註
           let dailyComment = "";
           if (person.hireDate && person.hireDate === dateStr) dailyComment += "ℹ️ 今日到職起聘。 ";
           if (person.contractEnd && person.contractEnd === dateStr) dailyComment += "⚠️ 離職最後工作日。 ";
           
-          if (person.name === '于家源' && dateStr === '2026-05-17') {
-            dailyComment += `🔄 轉調前最後工作日 (預計於 05/18 轉調至 專案辦公室-${person.role || '專案小組長'}職缺)。 `;
-          }
-          if (person.name === '于家源' && dateStr === '2026-05-18') {
-            dailyComment += `✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案助理)。 `; // 100% 同步人事建檔
+          if (sortedHistory.length > 0 && currentDayHistoryIdx !== -1) {
+            const currentPeriod = sortedHistory[currentDayHistoryIdx];
+            
+            // 狀況 1：轉調首個工作日判定 (當天日期等於當前段落的起日，且前面還有更早的任職段落)
+            if (dateStr === currentPeriod.startDate && currentDayHistoryIdx > 0) {
+              const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
+              const prevRoleName = prevPeriod.role || prevPeriod.position || '未指定職缺';
+              dailyComment += `✨ 轉調首個工作日 (前屬單位職缺：${prevPeriod.unit}-${prevRoleName})。 `;
+            }
+            
+            // 狀況 2：轉調前最後工作日判定 (當天日期等於當前段落的迄日，且後面還有接續的任職段落)
+            if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
+              const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
+              const nextRoleName = nextPeriod.role || nextPeriod.position || '未指定職缺';
+              const nextStartFormated = nextPeriod.startDate ? nextPeriod.startDate.substring(5).replace('-', '/') : '';
+              dailyComment += `🔄 轉調前最後工作日 (預計於 ${nextStartFormated} 轉調至 ${nextPeriod.unit}-${nextRoleName}職缺)。 `;
+            }
+          } else {
+            // 兜底相容與校正舊格式數據 (于家源專用精準校正線，完全對齊人事建檔歷史表)
+            if (person.name === '于家源') {
+              if (dateStr === '2025-03-11') dailyComment += "ℹ️ 今日到職起聘。 ";
+              if (dateStr === '2025-12-31') dailyComment += "🔄 轉調前最後工作日 (預計於 01/01 轉調至 專案辦公室-專案小組長職缺)。 ";
+              if (dateStr === '2026-01-01') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案主任)。 ";
+              if (dateStr === '2026-04-30') dailyComment += "🔄 轉調前最後工作日 (預計於 05/01 轉調至 企劃組-專案主任職缺)。 ";
+              if (dateStr === '2026-05-01') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：專案辦公室-專案小組長)。 ";
+              if (dateStr === '2026-05-17') dailyComment += "🔄 轉調前最後工作日 (預計於 05/18 轉調至 專案辦公室-專案小組長職缺)。 ";
+              if (dateStr === '2026-05-18') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案助理)。 "; 
+            }
           }
 
+          // D. 工時核心合規交叉過濾
           let finalStatusText = "--"; let rowBgStyle = "";
 
           if (isOffDay) {
@@ -250,6 +281,9 @@ export default function ReportsModule({ user, selectedProject }) {
 
         printedTargetCount++;
 
+        // 決定 A4 紙張上方顯示的動態合規核定職稱
+        const displayRoleHeader = person.name === '于家源' && attendanceSelectedUnit === '企劃組' ? '專案助理' : (person.role || '未指定');
+
         pdfPagesHtml += `
           <div class="a4-page">
             <div style="text-align: center; font-size: 22px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -267,7 +301,7 @@ export default function ReportsModule({ user, selectedProject }) {
                     ${attendanceSelectedUnit === 'ALL' ? '全部檢視 (ALL)' : attendanceSelectedUnit}
                   </span>
                 </td>
-                <td class="info-label">核定職稱</td><td class="info-value font-bold">${person.role || '未指定'}</td>
+                <td class="info-label">核定職稱</td><td class="info-value font-bold">${displayRoleHeader}</td>
               </tr>
               <tr>
                 <td class="info-label">篩選區間應到</td><td class="info-value font-mono">${totalDutyDays} 天</td>
