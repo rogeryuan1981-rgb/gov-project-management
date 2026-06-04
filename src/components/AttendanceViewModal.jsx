@@ -14,7 +14,7 @@ const LEAVE_TYPES_CONFIG = [
   { value: '事假', label: '事假' },
   { value: '病假', label: '病假' },
   { value: '喪假', label: '喪假' },
-  { value: '公假', label: '公假' },
+  { value: '公出', label: '公出' },
   { value: '補休', label: '補休' }
 ];
 
