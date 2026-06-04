@@ -290,29 +290,19 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     }
   };
 
-  // ================= 💡 終極優化：動態索引配色比照辦理演算法 =================
   const getUnitBadgeStyle = (unitName) => {
-    // 透過在專案現有單位清單 (allExistingUnits) 中的相對索引位置，動態綁定對應的人事色票樣式
     const unitIndex = allExistingUnits.indexOf(unitName);
-    
-    // 依序定義人事建檔所分配的標準視覺色票集
     const colorSpecs = [
-      'bg-indigo-50 text-indigo-600 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20',  // 專案辦公室 (位置0)
-      'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20', // 企劃組 (位置1)
-      'bg-purple-50 text-purple-600 border-purple-100 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20'  // 行政組 (位置2)
+      'bg-indigo-50 text-indigo-600 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20',  
+      'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20', 
+      'bg-purple-50 text-purple-600 border-purple-100 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20'  
     ];
-
-    // 如果在現有單位名冊中找到了對應索引，且該索引在我們定義的色票規格內，則 100% 比照辦理對齊輸出
     if (unitIndex !== -1 && unitIndex < colorSpecs.length) {
       return colorSpecs[unitIndex];
     }
-
-    // 降級防呆相容：如果未來新增了第四個、第五個新單位，或是字串不吻合，則動態採用模組循環分配，保證色彩語彙不破裂
     if (unitIndex !== -1) {
       return colorSpecs[unitIndex % colorSpecs.length];
     }
-
-    // 預設兜底
     return 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600';
   };
 
@@ -326,7 +316,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <Clock size={22} className="text-indigo-500" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 dark:text-white">計畫人員月考勤與日曆覆核</h3>
-              <p className="text-xs text-slate-400 mt-0.5">授權管理者手動維護、補登刷卡與請假假別。單位標籤配色已動態對齊「人事建檔與編制」。</p>
+              <p className="text-xs text-slate-400 mt-0.5">已完美鎖定頂部凍結表頭，滾動檢視數據時欄位對齊不易混亂。</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors">
@@ -370,7 +360,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           </div>
         </div>
 
-        {/* Table Content */}
+        {/* Table Content Container —— 加強控制滾動軸區塊範圍 */}
         <div className="overflow-y-auto flex-1 p-6 bg-slate-50/30 dark:bg-slate-900/10">
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-2">
@@ -383,9 +373,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               <p className="text-sm font-bold text-slate-700 dark:text-slate-300">目前查無符合該單位或條件的人員紀錄</p>
             </div>
           ) : (
-            <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
+            /* 💡 核心優化：外層容器設定 max-h，且允許水平滾動防擠壓 */
+            <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto shadow-sm bg-white dark:bg-slate-800 max-h-full">
+              <table className="w-full text-left border-collapse relative">
+                {/* 💡 核心優化：將 thead 加上 sticky top-0 與 z-10 權限，並指定固定的背景色，達成表頭物理凍結 */}
+                <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shadow-xs">
                   <tr>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none" onClick={() => handleSort('date')}>打卡日期 <SortIcon columnKey="date" /></th>
                     <th className="py-3 px-4 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 select-none" onClick={() => handleSort('name')}>姓名/計畫單位 <SortIcon columnKey="name" /></th>
@@ -416,7 +408,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                         <td className="py-3.5 px-4">
                           <div className="flex flex-col">
                             <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
-                            {/* 單位標籤套用 getUnitBadgeStyle 函式，動態跟隨人事建檔清單的分配順序辦理 */}
                             <span className={`text-[10px] font-bold mt-0.5 tracking-wide px-1.5 py-0.5 rounded border w-fit shadow-2xs transition-all ${getUnitBadgeStyle(r.unit)}`}>
                               {r.unit}
                             </span>
