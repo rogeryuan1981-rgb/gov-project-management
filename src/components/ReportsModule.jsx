@@ -136,7 +136,11 @@ export default function ReportsModule({ user, selectedProject }) {
         let totalEarlyLeaveCount = 0;
         let totalEarlyLeaveMinutes = 0;
         let totalAbsentCount = 0;
-        let totalLeaveHours = 0;
+
+        // 💡 假別時數統計桶
+        let leaveHoursSummary = { '特休': 0, '事假': 0, '病假': 0, '喪假': 0, '公出': 0, '補休': 0, '其他': 0 };
+        // 💡 累計請假扣款總額
+        let totalLeaveDeduction = 0;
 
         // 整理整合該同仁所有歷史軌跡歷程，相容 p.assignmentHistory 或原本系統內部的 p.history 欄位
         const rawHistoryList = person.assignmentHistory || person.history || [];
@@ -203,14 +207,14 @@ export default function ReportsModule({ user, selectedProject }) {
           if (sortedHistory.length > 0 && currentDayHistoryIdx !== -1) {
             const currentPeriod = sortedHistory[currentDayHistoryIdx];
             
-            // 狀況 1：轉調首個工作日判定 (當天日期等於當前段落的起日，且前面還有更早的任職段落)
+            // 狀況 1：轉調首個工作日判定
             if (dateStr === currentPeriod.startDate && currentDayHistoryIdx > 0) {
               const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
               const prevRoleName = prevPeriod.role || prevPeriod.position || '未指定職缺';
               dailyComment += `✨ 轉調首個工作日 (前屬單位職缺：${prevPeriod.unit}-${prevRoleName})。 `;
             }
             
-            // 狀況 2：轉調前最後工作日判定 (當天日期等於當前段落的迄日，且後面還有接續的任職段落)
+            // 狀況 2：轉調前最後工作日判定
             if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
               const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
               const nextRoleName = nextPeriod.role || nextPeriod.position || '未指定職缺';
@@ -218,7 +222,7 @@ export default function ReportsModule({ user, selectedProject }) {
               dailyComment += `🔄 轉調前最後工作日 (預計於 ${nextStartFormated} 轉調至 ${nextPeriod.unit}-${nextRoleName}職缺)。 `;
             }
           } else {
-            // 兜底相容與校正舊格式數據 (于家源專用精準校正線，完全對齊人事建檔歷史表)
+            // 兜底相容與校正舊格式數據
             if (person.name === '于家源') {
               if (dateStr === '2025-03-11') dailyComment += "ℹ️ 今日到職起聘。 ";
               if (dateStr === '2025-12-31') dailyComment += "🔄 轉調前最後工作日 (預計於 01/01 轉調至 專案辦公室-專案小組長職缺)。 ";
@@ -239,7 +243,42 @@ export default function ReportsModule({ user, selectedProject }) {
           } else {
             totalDutyDays++; 
             if (leaveType) {
-              finalStatusText = `已請假 (${leaveType})`; totalLeaveHours += 8; 
+              finalStatusText = `已請假 (${leaveType})`;
+              
+              // 💡 實時勞基法扣款算力精算線
+              // 1. 抓取當日職缺相對應的核定編制月薪 (approvedSalary)
+              const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
+              const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
+              
+              // 2. 時薪基準計算公式 (核定月薪 / 240小時)
+              const hourlyWage = approvedSalary / 240;
+              let currentDayLeaveHours = 8; // 常態當日請假計為 8 小時
+              
+              // 3. 根據請假範圍字串進行精確時數解析 (如有：4小時 等標記)
+              if (leaveRangeInfo && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
+                currentDayLeaveHours = 4;
+              }
+
+              // 4. 假別時數累加
+              if (leaveHoursSummary.hasOwnProperty(leaveType)) {
+                leaveHoursSummary[leaveType] += currentDayLeaveHours;
+              } else {
+                leaveHoursSummary['其他'] += currentDayLeaveHours;
+              }
+
+              // 5. 依勞基法規定之假別權重扣薪精算
+              let deductionWeight = 0;
+              if (leaveType === '事假') {
+                deductionWeight = 1.0; // 事假扣全薪
+              } else if (leaveType === '病假') {
+                deductionWeight = 0.5; // 病假扣半薪
+              } else {
+                deductionWeight = 0.0; // 特休、喪假、公出、補休依勞基法皆不扣薪
+              }
+
+              const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
+              totalLeaveDeduction += currentDeduction;
+
             } else if (!checkIn && !checkOut) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
             } else if (!checkIn || !checkOut) {
@@ -284,6 +323,12 @@ export default function ReportsModule({ user, selectedProject }) {
         // 決定 A4 紙張上方顯示的動態合規核定職稱
         const displayRoleHeader = person.name === '于家源' && attendanceSelectedUnit === '企劃組' ? '專案助理' : (person.role || '未指定');
 
+        // 💡 將假別統計桶展開為易讀的字串
+        const leaveDetailsText = Object.entries(leaveHoursSummary)
+          .filter(([_, hrs]) => hrs > 0)
+          .map(([type, hrs]) => `${type} ${hrs}H`)
+          .join(', ') || '無請假紀錄';
+
         pdfPagesHtml += `
           <div class="a4-page">
             <div style="text-align: center; font-size: 22px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -304,14 +349,17 @@ export default function ReportsModule({ user, selectedProject }) {
                 <td class="info-label">核定職稱</td><td class="info-value font-bold">${displayRoleHeader}</td>
               </tr>
               <tr>
-                <td class="info-label">篩選區間應到</td><td class="info-value font-mono">${totalDutyDays} 天</td>
-                <td class="info-label">本區間彙總統計</td>
-                <td class="info-value" style="font-size: 11px; line-height: 1.3;">
+                <td class="info-label">篩選區間應到</td><td class="info-value font-mono" style="font-weight: bold; color: #4f46e5;">${totalDutyDays} 天</td>
+                <td class="info-label" style="background: #fdf2f8; color: #be185d;">本區間彙總統計</td>
+                <td class="info-value" style="font-size: 11px; line-height: 1.45; background: #fffdfd;">
                   正常到工：<span class="text-emerald">${totalActualWorkDays} 天</span> | 
-                  累計遲到：<span class="${totalLateCount > 0 ? 'text-danger font-bold' : ''}">${totalLateCount} 次 (${totalLateMinutes} 分)</span> | 
-                  累計早退：<span class="${totalEarlyLeaveCount > 0 ? 'text-danger font-bold' : ''}">${totalEarlyLeaveCount} 次 (${totalEarlyLeaveMinutes} 分)</span><br/>
-                  核准請假：<span>${totalLeaveHours} 小時</span> | 
-                  判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold' : ''}">${totalAbsentCount} 天</span>
+                  判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold' : ''}">${totalAbsentCount} 天</span><br/>
+                  累計遲到：<span>${totalLateCount} 次 (${totalLateMinutes} 分)</span> | 
+                  累計早退：<span>${totalEarlyLeaveCount} 次 (${totalEarlyLeaveMinutes} 分)</span><br/>
+                  <div style="margin-top: 4px; padding-top: 4px; border-top: 1px dashed #e2e8f0;">
+                    <strong>各假別時數統計：</strong> <span style="color: #4f46e5; font-weight: 600;">${leaveDetailsText}</span><br/>
+                    <strong>勞基法請假扣款：</strong> <span class="${totalLeaveDeduction > 0 ? 'text-danger font-black font-mono text-sm' : 'text-emerald font-bold'}" style="font-size: 12px;">$${Math.round(totalLeaveDeduction).toLocaleString()} 元</span>
+                  </div>
                 </td>
               </tr>
             </table>
@@ -334,7 +382,8 @@ export default function ReportsModule({ user, selectedProject }) {
             </table>
             <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 5px;">列印日期：${getLocalTodayStr()} | 專案唯一稽核ID: ${selectedProject}_${person.name}</div>
           </div>
-        `;
+        </div>
+      `;
       });
 
       if (printedTargetCount === 0) {
@@ -360,9 +409,10 @@ export default function ReportsModule({ user, selectedProject }) {
             .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
             .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; word-wrap: break-word; font-size: 10.5px; }
             .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 11px; border-bottom: 2px solid #0f172a; }
-            .text-center { text-align: center; } .text-danger { color: #dc2626; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
+            .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
             .no-print-bar { text-align: center; background: #e0e7ff; padding: 12px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
             .print-btn { padding: 8px 24px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 13px; }
+            font-black { font-weight: 900; }
             @media print { .no-print-bar { display: none !important; } }
           </style>
         </head>
@@ -496,9 +546,9 @@ export default function ReportsModule({ user, selectedProject }) {
         if (vacancyPeriods.length > 0) vacancyTables.push({ unit: group.unit, role: group.role, maxReq: maxReqCount, periods: vacancyPeriods, totalPenaltyDays, totalGraceDays });
     });
 
-    const groupedData = []; let currentUnitGroup = null; let currentRoleGroup = null; let posIndexCounter = 1;
+    const columnGroupedData = []; let currentUnitGroup = null; let currentRoleGroup = null; let posIndexCounter = 1;
     expandedSlots.forEach(slot => {
-        if (!currentUnitGroup || currentUnitGroup.unit !== slot.unit) { currentUnitGroup = { unit: slot.unit, roles: [], rowSpan: 0 }; groupedData.push(currentUnitGroup); currentRoleGroup = null; }
+        if (!currentUnitGroup || currentUnitGroup.unit !== slot.unit) { currentUnitGroup = { unit: slot.unit, roles: [], rowSpan: 0 }; columnGroupedData.push(currentUnitGroup); currentRoleGroup = null; }
         if (!currentRoleGroup || currentRoleGroup.role !== slot.role) { currentRoleGroup = { role: slot.role, slots: [], rowSpan: 0 }; currentUnitGroup.roles.push(currentRoleGroup); }
         const slotRowSpan = Math.max(1, slot.timeline.length); currentRoleGroup.slots.push({ ...slot, rowSpan: slotRowSpan, posIndex: posIndexCounter++ });
         currentRoleGroup.rowSpan += slotRowSpan; currentUnitGroup.rowSpan += slotRowSpan;
@@ -511,7 +561,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <tr style="border-bottom: 2px solid #1e293b;"><th>序號</th><th>單位</th><th>職位</th><th>員額編號</th><th>姓名/狀態</th><th>到職日</th><th>離職日</th></tr>
     `;
 
-    groupedData.forEach((uGroup, uIdx) => {
+    columnGroupedData.forEach((uGroup, uIdx) => {
         const isUnitStart = uIdx > 0;
         uGroup.roles.forEach((rGroup, rIdx) => {
             rGroup.slots.forEach((slot, sIdx) => {
@@ -578,7 +628,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <title>人事異動與空缺紀錄表</title>
         <style>
           body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #333; line-height: 1.4; padding: 20px; }
-          h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
+          1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
           h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
           .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
           table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; table-layout: fixed; border: 1px solid #cbd5e1; }
@@ -701,7 +751,7 @@ export default function ReportsModule({ user, selectedProject }) {
             <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xs">
               <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
               <span className="text-slate-400 font-bold text-[10px]">至</span>
-              <input type="date" value={endDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
             </div>
           </div>
 
