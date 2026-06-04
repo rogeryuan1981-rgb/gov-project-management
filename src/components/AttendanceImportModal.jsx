@@ -14,7 +14,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
   if (!isOpen) return null;
 
-  // ================= 1. 下載範本功能 =================
+  // ================= 1. 下載範本功能 (同步美化範本預期導出檔名) =================
   const handleDownloadTemplate = () => {
     let csvContent = "";
     let fileName = "";
@@ -23,13 +23,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       csvContent = "\uFEFF員工編號,姓名,部門,打卡日期,上班打卡時間,,,,,,,,,下班打卡時間,,,,,,,,,,,請假時間,,,,請假時數,假別\n" +
                    "00,于家源,預防保健專案辦公室,2026/05/20,08:34,,,,,,,,,18:24,,,,,,,,,,,,,,,,,\n" +
                    "00,于家源,預防保健專案辦公室,2026/05/29,08:38,,,,,,,,,16:45,,,,,,,,,,,16:38~17:38,,,,01:00:00,特休";
-      fileName = `新版考勤表A_一體化範本_${selectedMonth}.csv`;
+      fileName = `專案辦公室範本_${selectedMonth}.csv`;
     } else {
       csvContent = "\uFEFFColumn1,Column2,Column3,Column4,Column5,Column6,Column7,Column8,Column9\n" +
                    "出退勤日期,姓名：江婉茜,,到勤時間,退勤時間,差假狀況,,假別,狀況註記\n" +
                    "115/04/01,職　　稱：廠商駐點,,08:01,18:11,,,,,\n" +
                    "115/04/08,,,12:40,18:03,115/04/08 08:30 - 115/04/08 12:30,,喪假(祖父),";
-      fileName = `考勤表C_一體化範本_${selectedMonth}.csv`;
+      fileName = `駐點單位範本_${selectedMonth}.csv`;
     }
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -87,7 +87,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       const sanitizeName = (str) => str ? str.toString().replace(/\s+/g, '').trim() : '';
 
       // ----------------------------------------------------
-      // 【分流 A】新版考勤表 A
+      // 【分流 A】新版考勤表 A (專案辦公室)
       // ----------------------------------------------------
       if (importType === 'A') {
         const header = rawRows[0];
@@ -137,11 +137,11 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           successCount++;
         }
-        setStatusMessage(`[新版A表] 匯入成功！成功覆蓋補進 ${successCount} 筆新流水號，並完美特赦保護了 ${skippedCount} 筆人工手動補登紀錄。`);
+        setStatusMessage(`[新版A表 - 專案辦公室] 匯入成功！成功覆蓋補進 ${successCount} 筆新流水號，並完美特赦保護了 ${skippedCount} 筆人工手動補登紀錄。`);
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C
+      // 【分流 C】考勤表 C (駐點單位)
       // ----------------------------------------------------
       else if (importType === 'C') {
         let currentEmployeeName = "";
@@ -194,7 +194,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             successCount++;
           }
         }
-        setStatusMessage(`[考勤表C] 匯入完成！成功補充 ${successCount} 筆明細，並安全隔離保護了 ${skippedCount} 筆人工維護紀錄。`);
+        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功補充 ${successCount} 筆明細，並安全隔離保護了 ${skippedCount} 筆人工維護紀錄。`);
       }
 
       setUploadStatus('success');
@@ -243,10 +243,11 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               <select 
                 value={importType} 
                 onChange={(e) => setImportType(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-indigo-600 dark:text-indigo-400"
               >
-                <option value="A">新版考勤表 A (一日一列 / 打卡請假合一)</option>
-                <option value="C">考勤表 C (單列民國曆 / 廠商駐點組)</option>
+                {/* 💡 升級：對齊管理情境文字 */}
+                <option value="A">專案辦公室</option>
+                <option value="C">駐點單位</option>
               </select>
             </div>
           </div>
