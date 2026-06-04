@@ -33,7 +33,14 @@ export default function WorkCalendarSettingsModal({ isOpen, onClose, selectedPro
   const handleSaveCalendar = async (updatedOffDays) => {
     try {
       const docRef = doc(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'calendars', selectedProject);
-      await setDoc(docRef, { offDays: updatedOffDays, updatedAt: new Date().getTime() }, { merge: true });
+      
+      // 💡 【核心優化點】拿掉原本具有攔截盲點的 { merge: true }，直接整包覆寫 offDays 欄位
+      // 這樣一來，被 delete 清除掉的日期 Key 才會在 Firestore 雲端資料庫中同步徹底消失釋放！
+      await setDoc(docRef, { 
+        offDays: updatedOffDays, 
+        updatedAt: new Date().getTime() 
+      });
+      
       setOffDays(updatedOffDays);
     } catch (e) {
       console.error("儲存專案日曆失敗:", e);
