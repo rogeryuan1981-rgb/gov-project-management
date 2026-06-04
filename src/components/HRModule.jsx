@@ -50,6 +50,13 @@ export default function HRModule({ user, selectedProject }) {
   const [dbError, setDbError] = useState(null); 
   const [projectData, setProjectData] = useState({});
   const [projectName, setProjectName] = useState(''); 
+  const handleOpenAddPersonModal = () => {
+    setNewPerson({ 
+      name: '', email: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', proxyAlert: false,
+      contractStart: defaultStartDate, contractEnd: '', files: []
+    });
+    setIsAddPersonModalOpen(true);
+  };
   
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
   const [isSidebarOpen, setIsReqModalOpen] = useState(false); 
