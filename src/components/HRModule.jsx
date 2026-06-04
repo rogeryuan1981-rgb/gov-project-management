@@ -66,7 +66,7 @@ export default function HRModule({ user, selectedProject }) {
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
   
   const [editingPerson, setEditingPerson] = useState(null);
-  // 新增：人力需求維護編輯狀態
+  // 人力需求維護編輯狀態
   const [editingReqId, setEditingReqId] = useState(null);
   const [editReqForm, setEditReqForm] = useState({ unit: '', position: '', startDate: '', penaltyStartDate: '', endDate: '', count: 1, isResident: true, approvedSalary: '', noteItems: [''] });
 
@@ -96,7 +96,6 @@ export default function HRModule({ user, selectedProject }) {
     contractStart: defaultStartDate, contractEnd: '', files: []
   });
   
-  // 新增：加入 approvedSalary (核定薪資) 欄位
   const [newReq, setNewReq] = useState({
     unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, approvedSalary: '', noteItems: ['']
   });
@@ -214,7 +213,7 @@ export default function HRModule({ user, selectedProject }) {
       case 'role': aValue = a.role || ''; bValue = b.role || ''; break;
       case 'roleDate': aValue = a.roleStartDate || a.hireDate || ''; bValue = b.roleStartDate || b.hireDate || ''; break;
       case 'date': aValue = a.contractStart || a.hireDate || ''; bValue = b.contractStart || b.hireDate || ''; break;
-default: break;
+      default: break;
     }
     if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
     if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
@@ -242,7 +241,7 @@ default: break;
 
   const handleOpenReqModal = () => {
     setNewReq({ unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, approvedSalary: '', noteItems: [''] });
-    setEditingReqId(null); // 開啟需求視窗時重設編輯狀態
+    setEditingReqId(null);
     setIsReqModalOpen(true);
   };
 
@@ -336,7 +335,7 @@ default: break;
         count: parseInt(newReq.count, 10) || 1, 
         isResident: String(newReq.isResident) === 'true',
         penaltyStartDate: finalPenaltyDate,
-        approvedSalary: newReq.approvedSalary ? parseInt(newReq.approvedSalary, 10) : '', // 儲存核定薪資數字
+        approvedSalary: newReq.approvedSalary ? parseInt(newReq.approvedSalary, 10) : '', 
         noteItems: filteredNoteItems,
         projectId: selectedProject, 
         createdAt: new Date().getTime()
@@ -345,7 +344,6 @@ default: break;
     } catch (error) { console.error("新增人力需求失敗:", error); }
   };
 
-  // 新增：人力需求區間「更新/修復維護」處理函數
   const handleUpdateReq = async (e) => {
     e.preventDefault();
     if (!editingReqId || !editReqForm.unit || !editReqForm.position || !editReqForm.startDate || !editReqForm.endDate) return;
@@ -363,10 +361,10 @@ default: break;
         endDate: editReqForm.endDate,
         count: parseInt(editReqForm.count, 10) || 1,
         isResident: String(editReqForm.isResident) === 'true',
-        approvedSalary: editReqForm.approvedSalary ? parseInt(editReqForm.approvedSalary, 10) : '', // 更新核定薪資數字
+        approvedSalary: editReqForm.approvedSalary ? parseInt(editReqForm.approvedSalary, 10) : '', 
         noteItems: filteredNoteItems
       });
-      setEditingReqId(null); // 關閉編輯狀態
+      setEditingReqId(null); 
       alert("✅ 成功更新計畫人力需求編制！");
     } catch (error) { console.error("更新人力需求失敗:", error); }
   };
@@ -377,7 +375,6 @@ default: break;
     catch (error) { console.error("刪除需求失敗:", error); }
   };
 
-  // 升級：匯入 CSV 範例格式，新增核定薪資欄位說明
   const exportReqCSVTemplate = () => {
     const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),計罰起始日/寬限期(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),核定薪資(月薪數字),額外需求說明(多項請用分號;隔開)\n專案辦公室,專員,2,${defaultStartDate},${defaultStartDate},${defaultEndDate},是,45000,需具備相關證照;需三年專案經驗`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -387,7 +384,6 @@ default: break;
     link.click();
   };
 
-  // 升級：批次匯入需求解析處理核定薪資
   const handleReqFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !user || !selectedProject) return;
@@ -408,7 +404,7 @@ default: break;
           const penaltyDateStr = formatImportDate(cols[4]) || startDateStr; 
           const endDateStr = formatImportDate(cols[5]) || defaultEndDate;
           const isResidentBool = cols[6] === '是' || cols[6] === 'true';
-          const approvedSalaryVal = cols[7] ? parseInt(cols[7], 10) : ''; // 第 8 欄為核定薪資
+          const approvedSalaryVal = cols[7] ? parseInt(cols[7], 10) : ''; 
           const importedNotes = cols[8] ? cols[8].split(';').map(n => n.trim()).filter(Boolean) : [];
           
           await addDoc(reqRef, {
@@ -977,7 +973,7 @@ default: break;
                         </div>
                       ))
                     ) : (
-                      <div className="col-span-1 sm:col-span-2 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 text-center"><p className="text-xs text-slate-500 dark:text-slate-400">目前尚無上傳任何相關檔案 (如：畢業證書、經歷證明)。</p></div>
+                      <div className="col-span-1 sm:col-span-2 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 text-center"><p className="text-xs text-slate-500 dark:text-slate-400">目前尚無上傳 any 相關檔案 (如：畢業證書、經歷證明)。</p></div>
                     )}
                   </div>
                 </div>
@@ -991,7 +987,7 @@ default: break;
         </div>
       )}
 
-      {/* Modal: 人力需求設定 (已擴充「就地直接維護」與「核定薪資」欄位) */}
+      {/* Modal: 人力需求設定 */}
       {isReqModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
@@ -1008,7 +1004,6 @@ default: break;
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
               
-              {/* 💡 升級：表單區域會根據是否點選「維護修訂」，動態切換為「新增模式」或「編輯模式」 */}
               <div className={`p-5 rounded-2xl border mb-6 shadow-sm bg-white dark:bg-slate-800 ${editingReqId ? 'border-amber-300 dark:border-amber-500/40 bg-amber-50/5' : 'border-indigo-100 dark:border-indigo-500/20'}`}>
                 <div className="flex items-center justify-between mb-3 border-b border-slate-100 dark:border-slate-700 pb-2">
                   <h4 className="font-bold text-sm flex items-center">
@@ -1035,8 +1030,9 @@ default: break;
                       <input required type="number" min="1" value={editingReqId ? editReqForm.count : newReq.count} onChange={e => editingReqId ? setEditReqForm({...editReqForm, count: e.target.value}) : setNewReq({...newReq, count: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:border-indigo-500" />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 mb-1">核定薪資 (月薪) 🪙</label>
-                      <input type="number" min="0" value={editingReqId ? editReqForm.approvedSalary : newReq.approvedSalary} onChange={e => editingReqId ? setEditReqForm({...editReqForm, approvedSalary: e.target.value}) : setNewReq({...newReq, approvedSalary: e.target.value})} placeholder="請輸入核定薪資數字" className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500 font-bold font-mono text-indigo-600" />
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">核定薪資 (月薪)</label>
+                      {/* 💡 修正1：移除 text-indigo-600 強制色，改用高對比適應色，深色模式下清晰不衝突 */}
+                      <input type="number" min="0" value={editingReqId ? editReqForm.approvedSalary : newReq.approvedSalary} onChange={e => editingReqId ? setEditReqForm({...editReqForm, approvedSalary: e.target.value}) : setNewReq({...newReq, approvedSalary: e.target.value})} placeholder="請輸入核定薪資數字" className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-lg text-sm outline-none focus:border-indigo-500 font-bold font-mono" />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">是否為駐點職缺</label>
@@ -1063,7 +1059,7 @@ default: break;
                     <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
                       <div className="space-y-2">
-                        {(editingReqId ? (editReqForm.noteItems || []) : (newReq.noteItems || [])).map((item, idx) => (
+                        {(editingReqId ? (editReqForm.noteItems || []) : (newReq.noteItems || []).map((item, idx) => (
                           <div key={idx} className="flex items-center space-x-2">
                             <input 
                               type="text" 
@@ -1098,7 +1094,7 @@ default: break;
                               <X size={16} />
                             </button>
                           </div>
-                        ))}
+                        )))}
                         <button 
                           type="button" 
                           onClick={() => {
@@ -1128,15 +1124,17 @@ default: break;
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
                     <tr>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">單位/職位</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">要求人數</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">駐點屬性</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase bg-indigo-50/20">核定薪資 🪙</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase max-w-[180px]">額外需求說明</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase">有效區間 (起~迄)</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-orange-500 uppercase bg-orange-50/50">計罰起日</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-center">目前狀態</th>
-                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase text-right">核心操作</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">單位/職位</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">要求人數</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">駐點屬性</th>
+                      {/* 💡 修正2：移除薪資欄位表頭多餘的硬幣符號（🪙），底色同步調整為與其他表頭和諧的標準透明度灰底 */}
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">核定薪資</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase max-w-[180px]">額外需求說明</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">有效區間 (起~迄)</th>
+                      {/* 💡 修正3：將計畫起日（計罰起日）表頭底色調整為與其他表頭完全和諧一致的顏色，徹底解決刺眼與衝突問題 */}
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">計罰起日</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase text-center">目前狀態</th>
+                      <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase text-right">核心操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -1154,11 +1152,11 @@ default: break;
                               <div className="font-bold text-sm text-slate-800 dark:text-slate-200">{req.position}</div>
                               <div className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(req.unit)}`}>{req.unit}</div>
                             </td>
-                            <td className="py-3 px-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
-                            <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">{req.isResident ? <span className="text-indigo-600 dark:text-indigo-400">是</span> : <span className="text-slate-400">否</span>}</td>
+                            <td className="py-3 px-4 text-sm font-bold text-slate-800 dark:text-slate-200">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
+                            <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">{req.isResident ? <span className="text-indigo-600 dark:text-indigo-400 font-extrabold">是</span> : <span className="text-slate-400">否</span>}</td>
                             
-                            {/* 💡 擴充展示：顯示核定薪資欄位數據，若無則顯示未填寫 */}
-                            <td className="py-3 px-4 text-sm font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50/10 font-mono">
+                            {/* 💡 修正4：移除核定薪資儲存格原本突兀的強制深藍底色，改用高清晰、高對比且完美融入深淺色模式的藍字，不再吃字 */}
+                            <td className="py-3 px-4 text-sm font-bold text-sky-600 dark:text-sky-400 font-mono">
                               {req.approvedSalary ? `$${req.approvedSalary.toLocaleString()}` : <span className="text-[10px] font-normal text-slate-400">未填寫</span>}
                             </td>
 
@@ -1170,12 +1168,13 @@ default: break;
                                ) : '-'}
                             </td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400 font-mono">{req.startDate} ~ {req.endDate}</td>
-                            <td className="py-3 px-4 text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50/30 dark:bg-orange-900/10 font-mono">{penaltyDate}</td>
+                            
+                            {/* 💡 修正5：將計罰起日儲存格原本極度衝突的偏白背景完全移除，改用乾淨優雅的標準表格背景，文字改為清晰、舒適的暖橙色（text-orange-500），高對比不晃眼 */}
+                            <td className="py-3 px-4 text-xs font-bold text-orange-500 dark:text-orange-400 font-mono">{penaltyDate}</td>
+                            
                             <td className="py-3 px-4 text-center">{isActiveToday ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold rounded">現正要求中</span> : <span className="px-2 py-0.5 bg-slate-100 text-slate-500 dark:bg-slate-700 text-[10px] font-bold rounded">非現行區間</span>}</td>
                             <td className="py-3 px-4 text-right">
                               <div className="flex items-center justify-end space-x-1">
-                                
-                                {/* 💡 新增：點選後將該資料同步推入頂端維護表單區塊，啟動就地更新機制 */}
                                 <button 
                                   type="button"
                                   title="修復維護此人力需求設定"
@@ -1192,14 +1191,12 @@ default: break;
                                       approvedSalary: req.approvedSalary || '',
                                       noteItems: req.noteItems && req.noteItems.length > 0 ? [...req.noteItems] : ['']
                                     });
-                                    // 滾動回到頂部表單，方便同仁編輯
                                     document.getElementById("addPersonForm")?.scrollIntoView({ behavior: 'smooth' });
                                   }}
                                   className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors"
                                 >
                                   <Edit2 size={14} />
                                 </button>
-                                
                                 <button type="button" onClick={() => handleDeleteReq(req.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={14} /></button>
                               </div>
                             </td>
@@ -1254,7 +1251,7 @@ default: break;
                 <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2"><AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警</h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：<br/><span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-bold mt-1 inline-block">💡 提示：若某人員離職，但下方未出現空缺警示，表示該職位「已有其他人員重疊交接中，滿足總量需求」或「該需求區間已到期」。</span></p>
                 {futureVacancies.length === 0 ? (
-                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p></div>
+                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出 any 人力空窗危機。</p></div>
                 ) : (
                   <div className="space-y-3">
                     {futureVacancies.map((fv, idx) => (
