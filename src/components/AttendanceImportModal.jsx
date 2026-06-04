@@ -42,11 +42,33 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     link.click();
   };
 
-  // ================= 2. 核心解析 CSV 引擎 =================
+  // =========================================================================
+  // 💡 【核心優化】智慧型雙引號狀態機 CSV 解析引擎
+  // 能夠精準辨識雙引號範圍。當逗號位於雙引號內部時（如部門欄位），自動跳過拆分，徹底解決欄位集體右移移位 Bug
+  // =========================================================================
   const parseCSVRows = (text) => {
     const lines = text.split(/\r?\n/);
     return lines
-      .map(line => line.split(',').map(cell => cell.trim().replace(/^"|"$/g, '')))
+      .map(line => {
+        const result = [];
+        let currentCell = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            inQuotes = !inQuotes; // 進入或離開雙引號安全區
+          } else if (char === ',' && !inQuotes) {
+            // 唯有不在雙引號內部時，逗號才具有切欄效果
+            result.push(currentCell.trim().replace(/^"|"$/g, ''));
+            currentCell = '';
+          } else {
+            currentCell += char;
+          }
+        }
+        result.push(currentCell.trim().replace(/^"|"$/g, ''));
+        return result;
+      })
       .filter(cols => cols.length > 0 && cols.some(c => c !== ''));
   };
 
@@ -68,7 +90,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       let successCount = 0;
 
-      // 💡 核心優化：建立全域去隱形空白與去空格之精密字串清洗工具，從根本上確保數據 100% 乾淨
+      // 人名源頭去空格清洗工具
       const sanitizeName = (str) => str ? str.toString().replace(/\s+/g, '').trim() : '';
 
       // ----------------------------------------------------
@@ -89,7 +111,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const cols = rawRows[i];
           if (cols.length <= Math.max(nameIdx, dateIdx)) continue;
 
-          // 💡 核心優化點：源頭端立即針對讀取的人名執行強制去隱形空白處理
+          // 源頭端立即針對讀取的人名執行強制去隱形空白處理
           const name = sanitizeName(cols[nameIdx]);
           const rawDate = cols[dateIdx]; 
 
@@ -102,13 +124,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const leaveTime = cols[leaveTimeIdx] || "";
           const leaveType = cols[leaveTypeIdx] || "";
 
-          // 由於名字已經被徹底清洗，產出的 Document ID 將會具有絕對唯一的精準覆蓋實效
+          // 由於欄位不再移位，產出的 Document ID 將會完全正確
           const docId = `${selectedProject}_${name}_${dateStr}`;
 
           await setDoc(doc(attendanceRef, docId), {
             projectId: selectedProject,
             month: selectedMonth,
-            name: name, // 存入清洗完畢的乾淨人名
+            name: name, 
             date: dateStr,
             checkIn: checkIn === '--' ? '' : checkIn,
             checkOut: checkOut === '--' ? '' : checkOut,
@@ -119,7 +141,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           successCount++;
         }
-        setStatusMessage(`[新版考勤表A] 匯入成功！共解析並精準覆蓋 ${successCount} 筆乾淨的出勤與請假明細。`);
+        setStatusMessage(`[新版考勤表A] 匯入成功！共解析並精準覆蓋 ${successCount} 筆出勤與請假明細。`);
       }
 
       // ----------------------------------------------------
@@ -134,7 +156,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           const nameField = cols[1] || "";
           if (nameField.includes('名：')) {
-            // 💡 核心優化點：針對考勤表 C 切割出來的主管/同仁人名，同樣在源頭立刻進行字串去空白除錯
             currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
             continue; 
           }
@@ -158,7 +179,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             await setDoc(doc(attendanceRef, docId), {
               projectId: selectedProject,
               month: dateStr.substring(0, 7), 
-              name: currentEmployeeName, // 存入清洗完畢的乾淨人名
+              name: currentEmployeeName, 
               date: dateStr,
               checkIn,
               checkOut,
@@ -170,16 +191,15 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             successCount++;
           }
         }
-        setStatusMessage(`[考勤表C] 民國曆解析完成！成功一體化匯入 ${successCount} 筆乾淨的出勤與請假明細。`);
+        setStatusMessage(`[考勤表C] 民國曆解析完成！成功一體化匯入 ${successCount} 筆出勤與請假明細。`);
       }
 
       setUploadStatus('success');
     } catch (error) {
       console.error("考勤匯入發生錯誤:", error);
       setUploadStatus('error');
-      setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
-    } finally {
+    } final {
       setIsUploading(false);
       e.target.value = ''; 
     }
