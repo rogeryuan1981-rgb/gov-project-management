@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, CheckSquare, Users, FolderArchive, Settings, ChevronDown, Plus, Check, X, Calculator } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, Users, FolderArchive, Settings, ChevronDown, Plus, Check, X, Calculator, Clock } from 'lucide-react';
 import { collection, onSnapshot, addDoc, getFirestore } from 'firebase/firestore';
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from 'firebase/app';
 
 // 避免編譯器路徑錯誤，使用行內安全初始化 Firebase
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
@@ -72,15 +72,17 @@ export default function Sidebar({ activeTab, setActiveTab, selectedProject, setS
     }
   };
 
+  // 💡 核心規劃調整：將「人事合規」與「考勤管理」在主選單陣列中徹底獨立解耦
   const menuItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: '總覽儀表板' },
     { id: 'tasks', icon: CheckSquare, label: '工項與進度追蹤' },
     { id: 'hr', icon: Users, label: '人事合規紀錄' },
+    { id: 'attendance', icon: Clock, label: '計畫考勤管理' }, // 💥 全新獨立考勤模組頂層入口
     { id: 'archive', icon: FolderArchive, label: '雲端歸檔空間' },
     { id: 'reimbursement', icon: Calculator, label: '核銷作業專區' },
   ];
 
-  // 取得當前選取專案的名稱以供顯示 (透過 UID 反查)
+  // 取得當慢選取專案的名稱以供顯示 (透過 UID 反查)
   const currentProjectName = projects.find(p => p.id === selectedProject)?.name || '請新建或選擇專案';
 
   return (
