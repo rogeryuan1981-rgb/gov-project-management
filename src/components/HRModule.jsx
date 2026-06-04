@@ -9,29 +9,22 @@ const db = getFirestore(app);
 
 const globalAppId = typeof __app_id !== 'undefined' ? __app_id : 'gov-project-saas';
 
-// 優先從環境變數讀取 Client ID
 const DRIVE_CLIENT_ID = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID) 
   || '134813517167-s4t64mucti470adauc6mvpbrtn0ncont.apps.googleusercontent.com';
 
-// ================= 真實 Google Drive API 引擎 =================
 const getOrCreateFolder = async (folderName, parentId, accessToken) => {
   const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id)`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
   if (searchRes.status === 401) throw new Error('UNAUTHORIZED');
   const searchData = await searchRes.json();
-
-  if (searchData.files && searchData.files.length > 0) {
-    return searchData.files[0];
-  } else {
-    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
-    });
-    if (createRes.status === 401) throw new Error('UNAUTHORIZED');
-    return await createRes.json();
-  }
+  if (searchData.files && searchData.files.length > 0) return searchData.files[0];
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
+  });
+  if (createRes.status === 401) throw new Error('UNAUTHORIZED');
+  return await createRes.json();
 };
 
 const uploadToGoogleDrive = async (file, fileName, pathArray, accessToken) => {
@@ -55,12 +48,11 @@ export default function HRModule({ user, selectedProject }) {
   const [personnel, setPersonnel] = useState([]);
   const [requirements, setRequirements] = useState([]);
   const [dbError, setDbError] = useState(null); 
-  
   const [projectData, setProjectData] = useState({});
-  const [projectName, setProjectName] = useState(''); 
+  const [projectName, setProjectName] = useState(''); // 💡 補齊宣告，防止 undefined 崩潰
   
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
-  const [isSidebarOpen, setIsReqModalOpen] = useState(false); // 這裡維持原名稱變數綁定防破裂
+  const [isSidebarOpen, setIsReqModalOpen] = useState(false); 
   const [isVacancyModalOpen, setIsVacancyModalOpen] = useState(false); 
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
   
@@ -98,7 +90,6 @@ export default function HRModule({ user, selectedProject }) {
 
   const tokenClientRef = useRef(null);
 
-  // 初始化 Google Identity Services
   useEffect(() => {
     const initGis = () => {
       tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
@@ -468,7 +459,6 @@ export default function HRModule({ user, selectedProject }) {
     }
   };
 
-  // 聚合引擎計算
   const reqGroups = {};
   requirements.forEach(req => {
     const key = `${req.unit}::${req.position}`;
@@ -866,7 +856,7 @@ export default function HRModule({ user, selectedProject }) {
             {availableUnits.length > 0 && (
               <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
                 <button onClick={() => setIsAddPersonModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
-                <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center"><Save size={16} className="mr-2" /> 儲存人员</button>
+                <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center"><Save size={16} className="mr-2" /> 儲存人員</button>
               </div>
             )}
           </div>
@@ -1073,7 +1063,7 @@ export default function HRModule({ user, selectedProject }) {
                           onClick={() => setNewReq({...newReq, noteItems: [...(newReq.noteItems || []), '']})}
                           className="flex items-center text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition-colors mt-2 px-1"
                         >
-                          <Plus size={14} className="mr-1" /> 新增一項條列說明
+                          <Plus size={14} className="mr-1} /> 新增一項條列說明
                         </button>
                       </div>
                     </div>
@@ -1173,7 +1163,7 @@ export default function HRModule({ user, selectedProject }) {
                 <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2"><AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警</h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：</p>
                 {futureVacancies.length === 0 ? (
-                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p></div>
+                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出 any 人力空窗危機。</p></div>
                 ) : (
                   <div className="space-y-3">
                     {futureVacancies.map((fv, idx) => (
@@ -1238,7 +1228,7 @@ export default function HRModule({ user, selectedProject }) {
                 ))
               )}
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 text-slate-700 text-sm font-bold rounded-xl">關閉明細</button></div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 text-sm font-bold rounded-xl">關閉明細</button></div>
           </div>
         </div>
       )}
