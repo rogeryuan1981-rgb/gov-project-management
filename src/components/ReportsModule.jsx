@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calculator, FileText, Users, CheckSquare, Download, Calendar, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
-import { collection, onSnapshot, getFirestore, getDocs, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, getFirestore, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
@@ -16,6 +16,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [projectStartDate, setProjectStartDate] = useState('');
   const [projectEndDate, setProjectEndDate] = useState('');
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
 
   // 用於考勤表 A4 PDF 動態生成的月份選擇，預設為當前月份
   const [attendanceYearMonth, setAttendanceYearMonth] = useState(new Date().toISOString().substring(0, 7));
@@ -90,12 +91,12 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 💥 新增功能：1. 人員考勤匯總表 (A4 PDF 核銷憑證中心) =================
+  // ================= 💥 功能：1. 人員考勤匯總表 (A4 PDF 核銷憑證中心) =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
 
-    setIsLoading(true);
+    setIsLoadingAttendance(true);
     try {
       // A. 聯讀雲端工作日曆設定
       const calendarDocRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'calendars', selectedProject);
@@ -108,7 +109,7 @@ export default function ReportsModule({ user, selectedProject }) {
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => doc.data());
 
-      // C. 解析當前所選年月的日期範圍
+      // C. 解析當前所選年月份的日期範圍
       const year = parseInt(attendanceYearMonth.split('-')[0], 10);
       const month = parseInt(attendanceYearMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
@@ -121,7 +122,7 @@ export default function ReportsModule({ user, selectedProject }) {
       });
 
       if (activePersonnelInMonth.length === 0) {
-        setIsLoading(false);
+        setIsLoadingAttendance(false);
         return showMessage('error', '選定月份內之計畫名冊中查無任何人員建檔。');
       }
 
@@ -131,7 +132,6 @@ export default function ReportsModule({ user, selectedProject }) {
       activePersonnelInMonth.forEach(person => {
         let dailyRowsHtml = "";
         
-        // 個人當月統計累加器
         let totalDutyDays = 0;
         let totalActualWorkDays = 0;
         let totalLateCount = 0;
@@ -147,7 +147,7 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateObj = new Date(dateStr);
           const weekdayStr = ['日', '一', '二', '三', '四', '五', '六'][dateObj.getDay()];
 
-          // 1. 動態歷史編制判定演算法
+          // 1. 逐日動態單位與職稱追蹤演算法
           let currentDayUnit = person.unit || '未指定單位';
           let currentDayRole = person.role || '未指定職稱';
 
@@ -160,7 +160,6 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayRole = matchedHistory.role || currentDayRole;
             }
           } else {
-            // 預留降級示範邏輯
             if (person.name === '于家源' && dateStr <= '2026-05-17') currentDayUnit = '企劃組';
             if (person.name === '于家源' && dateStr >= '2026-05-18') currentDayUnit = '專案辦公室';
           }
@@ -185,14 +184,12 @@ export default function ReportsModule({ user, selectedProject }) {
 
           // 3. 備註欄異動公文事件自動標註引擎
           let dailyComment = "";
-          
           if (person.hireDate && person.hireDate === dateStr) {
             dailyComment += "ℹ️ 今日到職起聘。 ";
           }
           if (person.contractEnd && person.contractEnd === dateStr) {
             dailyComment += "⚠️ 離職最後工作日。 ";
           }
-          // 轉調追蹤註記
           if (person.name === '于家源' && dateStr === '2026-05-17') {
             dailyComment += "🔄 轉調前最後工作日 (預計於 05/18 轉調至 專案辦公室-專案經理職缺)。 ";
           }
@@ -200,7 +197,7 @@ export default function ReportsModule({ user, selectedProject }) {
             dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-助理研究員)。 ";
           }
 
-          // 4. 精準彈性工時遞延合規判定邏輯
+          // 4. 精準彈性工時遞延合規判定
           let finalStatusText = "--";
           let rowBgStyle = "";
 
@@ -208,24 +205,23 @@ export default function ReportsModule({ user, selectedProject }) {
             if (checkIn || checkOut) finalStatusText = "假日加班";
             else finalStatusText = "例假日/放假";
           } else {
-            totalDutyDays++; // 工作日加一
+            totalDutyDays++; 
             if (leaveType) {
               finalStatusText = `已請假 (${leaveType})`;
-              totalLeaveHours += 8; // 預設常態整天沖銷
+              totalLeaveHours += 8; 
             } else if (!checkIn && !checkOut) {
               finalStatusText = "曠職 (應上班未打卡)";
               totalAbsentCount++;
-              rowBgStyle = "background-color: #fef2f2;"; // 曠職亮紅底
+              rowBgStyle = "background-color: #fef2f2;"; 
             } else if (!checkIn || !checkOut) {
               finalStatusText = "異常: 缺打卡";
-              rowBgStyle = "background-color: #fff7ed;"; // 缺卡亮橘底
+              rowBgStyle = "background-color: #fff7ed;"; 
             } else {
-              // 雙邊有卡，套用遞延計算
               const inMins = timeToMinutes(checkIn);
               const outMins = timeToMinutes(checkOut);
               if (inMins !== null && outMins !== null) {
                 totalActualWorkDays++;
-                const maxStartMins = 9 * 60; // 09:00
+                const maxStartMins = 9 * 60; 
                 let isLate = inMins > maxStartMins;
                 let lateMinutes = isLate ? inMins - maxStartMins : 0;
                 let legalMinOutMins = isLate ? 18 * 60 : Math.max(inMins, 8 * 60) + (9 * 60);
@@ -253,7 +249,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
           dailyRowsHtml += `
             <tr style="${rowBgStyle}">
-              <td style="text-align: center; font-mono font-bold;">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
+              <td style="text-align: center; font-weight: bold;">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
               <td style="text-align: center; font-family: monospace;">${checkIn || '--'}</td>
               <td style="text-align: center; font-family: monospace;">${checkOut || '--'}</td>
               <td style="text-align: center;">${leaveType ? `${leaveType} ${leaveRangeInfo}` : '--'}</td>
@@ -264,7 +260,6 @@ export default function ReportsModule({ user, selectedProject }) {
           `;
         }
 
-        // F. 封裝單人 A4 考勤表頁面，並強制 A4 直式分頁
         pdfPagesHtml += `
           <div class="a4-page">
             <div style="text-align: center; font-size: 22px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -292,7 +287,7 @@ export default function ReportsModule({ user, selectedProject }) {
                   累計遲到：<span class="${totalLateCount > 0 ? 'text-danger font-bold' : ''}">${totalLateCount} 次 (${totalLateMinutes} 分)</span><br/>
                   累計早退：<span class="${totalEarlyLeaveCount > 0 ? 'text-danger font-bold' : ''}">${totalEarlyLeaveCount} 次 (${totalEarlyLeaveMinutes} 分)</span><br/>
                   核准請假：<span>${totalLeaveHours} 小時</span><br/>
-                  判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold animate-pulse' : ''}">${totalAbsentCount} 天</span>
+                  判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold' : ''}">${totalAbsentCount} 天</span>
                 </td>
               </tr>
             </table>
@@ -321,11 +316,9 @@ export default function ReportsModule({ user, selectedProject }) {
             </div>
             <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 5px;">列印日期：${getLocalTodayStr()} | 專案唯一稽核ID: ${selectedProject}_${person.name}</div>
           </div>
-        </div>
         `;
       });
 
-      // F. 完整封裝 A4 PDF 控制樣式與列印視窗導出
       const printContent = `
         <!DOCTYPE html>
         <html lang="zh-TW">
@@ -337,31 +330,21 @@ export default function ReportsModule({ user, selectedProject }) {
             body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.25; background: #fff; padding: 0; margin: 0; }
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
-            
-            /* 上方資訊表樣式 */
             .info-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; border: 2px solid #0f172a; table-layout: fixed; }
             .info-table td { padding: 5px 8px; border: 1px solid #cbd5e1; vertical-align: middle; }
             .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 11px; }
             .info-value { width: 37%; font-size: 11px; }
-            
-            /* 明細表格樣式 */
             .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
             .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; word-wrap: break-word; font-size: 10.5px; }
             .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 11px; border-bottom: 2px solid #0f172a; }
-            
             .text-center { text-align: center; }
             .text-danger { color: #dc2626; }
             .text-emerald { color: #059669; font-weight: bold; }
             .font-bold { font-weight: bold; }
-            .font-mono { font-family: monospace; }
-            
-            /* 底部核章簽名區 */
             .sign-section { margin-top: 25px; display: flex; justify-content: space-between; padding: 0 5px; }
             .sign-box { border: 1px solid #94a3b8; width: 30%; height: 65px; padding: 6px; border-radius: 6px; box-sizing: border-box; font-size: 11px; font-weight: bold; color: #334155; }
-            
             .no-print-bar { text-align: center; background: #e0e7ff; padding: 12px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
-            .print-btn { padding: 8px 24px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 13px; shadow: 0 1px 2px rgba(0,0,0,0.05); }
-            .print-btn:hover { background: #4338ca; }
+            .print-btn { padding: 8px 24px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 13px; }
             @media print { .no-print-bar { display: none !important; } }
           </style>
         </head>
@@ -383,11 +366,11 @@ export default function ReportsModule({ user, selectedProject }) {
       console.error("生成考勤憑證發生致命錯誤:", error);
       showMessage('error', '考勤憑證生成失敗，請檢查資料夾關聯。');
     } finally {
-      setIsLoading(false);
+      setIsLoadingAttendance(false);
     }
   };
 
-  // ================= 2. 異動與空缺紀錄表 (保留原本精密的員額 Slot 扣款扣件演算法) =================
+  // ================= 2. 異動與空缺紀錄表 (100% 完整留存，並修正 633 行編編譯錯誤) =================
   const exportVacancyReportPDF = () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!startDate || !endDate) return showMessage('error', '請先設定報表區間。');
@@ -630,7 +613,13 @@ export default function ReportsModule({ user, selectedProject }) {
                     const rowClasses = []; if (isUnitStart && vtIdx === 0 && pIdx === 0) rowClasses.push('unit-top-border');
                     table3Html += `<tr class="${rowClasses.join(' ')}">`;
                     if (vtIdx === 0 && pIdx === 0) table3Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
-                    if (pIdx === 0) { table3Html += `<td rowspan="${vt.periods.length}">${vt.role}</td>`<td rowspan="${vt.periods.length}" class="text-center">${vt.maxReq} 人</td>`; }
+                    
+                    // 💡 修正後：將原本引起 Vite 編譯報錯的字窗拼接分開處理，安全累加
+                    if (pIdx === 0) { 
+                      table3Html += `<td rowspan="${vt.periods.length}">${vt.role}</td>`;
+                      table3Html += `<td rowspan="${vt.periods.length}" class="text-center">${vt.maxReq} 人</td>`; 
+                    }
+                    
                     if (vp) { table3Html += `<td>${vp.start} ~ ${vp.end} <span style="font-size:10px; color:#64748b;">(少 ${vp.missing}人)</span></td><td class="text-right highlight font-bold">${vp.penaltyMissing * vp.days > 0 ? vp.penaltyMissing * vp.days : '-'}</td><td class="text-right grace">${vp.graceMissing * vp.days > 0 ? vp.graceMissing * vp.days : '-'}</td>`; }
                     table3Html += `</tr>`;
                 });
@@ -714,7 +703,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* 頂部控制面板：整合原本的異動區間，以及為考勤表新增的月份選擇器 */}
+      {/* 頂部控制面板：整合區間選擇器與全新月份選取器 */}
       <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
@@ -724,12 +713,10 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
         
         <div className="flex flex-col sm:flex-row gap-3">
-          {/* 為 1. 人員考勤表設計的專屬月份切換器 */}
           <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700">
             <span className="text-xs font-bold text-slate-500">考勤月份:</span>
             <input type="month" value={attendanceYearMonth} onChange={(e) => setAttendanceYearMonth(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 dark:text-slate-200 outline-none dark:[&::-webkit-calendar-picker-indicator]:invert" />
           </div>
-          {/* 原本用於 2. 與 3. 的日期區間控制器 */}
           <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-900/50 px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 transition-colors">
             <Calendar className="text-slate-400" size={16} />
             <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 dark:text-slate-200 outline-none" />
@@ -739,20 +726,20 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       </div>
 
-      {/* 功能卡片矩陣 */}
+      {/* 功能卡片區 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* 💥 已全面升級：1. 人員考勤匯總表卡片 */}
+        {/* 1. 人員考勤匯總表卡片 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
           <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-5"><FileText className="text-blue-600" size={28} /></div>
           <h3 className="text-lg font-bold mb-2">1. 人員考勤匯總表</h3>
           <p className="text-sm text-slate-500 flex-1 mb-8">結合計畫名冊與工作日曆，動態按日追蹤異動軌跡與工時彈性，一鍵生成每人每月一張之 A4 PDF 核銷憑證。</p>
-          <button onClick={exportAttendancePDF} disabled={!isDataLoaded} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm flex justify-center items-center space-x-2">
-            {isDataLoaded ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}<span>匯出 A4 憑證 PDF</span>
+          <button onClick={exportAttendancePDF} disabled={!isDataLoaded || isLoadingAttendance} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm flex justify-center items-center space-x-2">
+            {isDataLoaded && !isLoadingAttendance ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}<span>匯出 A4 憑證 PDF</span>
           </button>
         </div>
 
-        {/* 2. 異動與空缺紀錄表 (100% 完整留存既有 Slot 比對扣款演算) */}
+        {/* 2. 異動與空缺紀錄表 (已完整留存) */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核</div>
           <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-5"><Users className="text-emerald-600" size={28} /></div>
@@ -763,7 +750,7 @@ export default function ReportsModule({ user, selectedProject }) {
           </button>
         </div>
 
-        {/* 3. 期中/期末成果初稿 (100% 完整留存) */}
+        {/* 3. 期中/期末成果初稿 (已完整留存) */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col group hover:border-amber-300 transition-colors">
           <div className="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-2xl w-fit mb-5"><CheckSquare className="text-amber-600" size={28} /></div>
           <h3 className="text-lg font-bold mb-2">3. 期中/期末成果初稿</h3>
