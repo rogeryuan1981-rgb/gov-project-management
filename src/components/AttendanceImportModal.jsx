@@ -43,7 +43,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
   };
 
   // =========================================================================
-  // 💡 【核心優化】智慧型雙引號狀態機 CSV 解析引擎
+  // 💡 智慧型雙引號狀態機 CSV 解析引擎
   // 能夠精準辨識雙引號範圍。當逗號位於雙引號內部時（如部門欄位），自動跳過拆分，徹底解決欄位集體右移移位 Bug
   // =========================================================================
   const parseCSVRows = (text) => {
@@ -199,9 +199,12 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       console.error("考勤匯入發生錯誤:", error);
       setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
-    } final {
+    } finally {
+      // 💡 已修正：還原為標準的 JavaScript 錯誤攔截終端區塊，確保狀態安全回歸
       setIsUploading(false);
-      e.target.value = ''; 
+      if (e && e.target) {
+        e.target.value = '';
+      }
     }
   };
 
