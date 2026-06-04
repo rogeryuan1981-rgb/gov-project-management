@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart, ExternalLink, Check, ListChecks, Clock } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, Upload, Plus, Settings, X, Save, Trash2, PieChart, Edit2, FileText, Download, Loader2, File as FileIcon, CalendarDays, Mail, ArrowUpDown, ArrowUp, ArrowDown, Filter, ChevronRight, LineChart, ExternalLink, Check, ListChecks } from 'lucide-react';
 import { collection, onSnapshot, doc, addDoc, deleteDoc, updateDoc, getFirestore } from 'firebase/firestore';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import AttendanceImportModal from './AttendanceImportModal';
-import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
-import AttendanceViewModal from './AttendanceViewModal';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -61,15 +58,11 @@ export default function HRModule({ user, selectedProject }) {
   
   const [projectData, setProjectData] = useState({});
   const [projectName, setProjectName] = useState(''); 
-  const [activeSubTab, setActiveSubTab] = useState('hr'); 
   
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
-  const [isReqModalOpen, setIsReqModalOpen] = useState(false);
+  const [isSidebarOpen, setIsReqModalOpen] = useState(false); // 這裡維持原名稱變數綁定防破裂
   const [isVacancyModalOpen, setIsVacancyModalOpen] = useState(false); 
   const [isForecastModalOpen, setIsForecastModalOpen] = useState(false); 
-  const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
-  const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
-  const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
   
   const [editingPerson, setEditingPerson] = useState(null);
 
@@ -99,7 +92,6 @@ export default function HRModule({ user, selectedProject }) {
     contractStart: defaultStartDate, contractEnd: '', files: []
   });
   
-  // 新增：加入 penaltyStartDate (計罰起始日)
   const [newReq, setNewReq] = useState({
     unit: '', position: '', startDate: defaultStartDate, penaltyStartDate: defaultStartDate, endDate: defaultEndDate, count: 1, isResident: true, noteItems: ['']
   });
@@ -328,10 +320,7 @@ export default function HRModule({ user, selectedProject }) {
     e.preventDefault();
     if (!newReq.unit || !newReq.position || !newReq.startDate || !newReq.endDate) return;
     
-    // 過濾掉空白的條列項目
     const filteredNoteItems = (newReq.noteItems || []).filter(n => n.trim() !== '');
-
-    // 防呆：若沒填計罰起始日，預設等同於需求起始日
     const finalPenaltyDate = newReq.penaltyStartDate || newReq.startDate;
 
     try {
@@ -355,7 +344,6 @@ export default function HRModule({ user, selectedProject }) {
   };
 
   const exportReqCSVTemplate = () => {
-    // 更新 CSV 範本，加入計罰起始日
     const csvContent = `\uFEFF單位,職位,需求人數,需求開始日(YYYY-MM-DD),計罰起始日/寬限期(YYYY-MM-DD),需求結束日(YYYY-MM-DD),是否駐點(是/否),額外需求說明(多項請用分號;隔開)\n範例單位,專員,2,${defaultStartDate},${defaultStartDate},${defaultEndDate},是,需具備相關證照;需三年專案經驗`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
@@ -380,9 +368,8 @@ export default function HRModule({ user, selectedProject }) {
       for (let i = startIndex; i < rows.length; i++) {
         const cols = rows[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         if (cols.length >= 3) {
-          // CSV 欄位位移解析
           const startDateStr = formatImportDate(cols[3]) || defaultStartDate;
-          const penaltyDateStr = formatImportDate(cols[4]) || startDateStr; // 若未填，預設同起日
+          const penaltyDateStr = formatImportDate(cols[4]) || startDateStr; 
           const endDateStr = formatImportDate(cols[5]) || defaultEndDate;
           const isResidentBool = cols[6] === '是' || cols[6] === 'true';
           const importedNotes = cols[7] ? cols[7].split(';').map(n => n.trim()).filter(Boolean) : [];
@@ -429,13 +416,12 @@ export default function HRModule({ user, selectedProject }) {
         contractStart: editingPerson.contractStart || '', contractEnd: editingPerson.contractEnd || '',
         history: sortedHistory, unit: latestRecord.unit, role: latestRecord.role,
         roleStartDate: latestRecord.startDate, isResident: newIsResident,
-        fulfilledReqs: editingPerson.fulfilledReqs || [] // 儲存打勾的額外需求項目
+        fulfilledReqs: editingPerson.fulfilledReqs || []
       });
       setEditingPerson(null);
     } catch (error) { console.error("更新人員失敗:", error); }
   };
 
-  // 真實檔案上傳處理 (綁定人事)
   const handlePersonnelFileUpload = async (e, personId) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -667,10 +653,6 @@ export default function HRModule({ user, selectedProject }) {
   const residentCount = personnel.filter(p => p.isResident && getPersonStatus(p) === 'active').length;
   const nonResidentCount = personnel.filter(p => !p.isResident && getPersonStatus(p) === 'active').length;
 
-  const isResidentCompliant = activeReqsSum > 0 ? residentCount >= activeReqsSum : true;
-  const isNonResidentCompliant = activeReqsNonResSum > 0 ? nonResidentCount >= activeReqsNonResSum : true;
-  const proxyAlertCount = personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length;
-
   const exportCurrentPersonnelCSV = () => {
     if (sortedPersonnel.length === 0) { alert('目前無人員資料可供匯出'); return; }
     const headers = ['姓名', 'Email', '計畫單位', '目前職位', '駐點狀態', '在職狀態', '最初到職日', '就任此職位日', '計畫參與開始日', '計畫參與結束日'];
@@ -705,229 +687,146 @@ export default function HRModule({ user, selectedProject }) {
 
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white">人事合規紀錄 ({projectName || '載入中...'})</h2>
-          <p className="text-sm text-slate-500 mt-1">管理本計畫之人員名冊、動態歷程與人力需求合規狀態。</p>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">人事合規紀錄中心 ({projectName || '載入中...'})</h2>
+          <p className="text-sm text-slate-500 mt-1">管理本計畫之人員名冊、轉任動態歷程與人力編制合規精算狀態。</p>
         </div>
       </div>
 
-      <div className="flex space-x-6 border-b border-slate-200 dark:border-slate-700 mb-6">
-        <button onClick={() => setActiveSubTab('hr')} className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeSubTab === 'hr' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}>人事建檔與編制</button>
-        <button onClick={() => setActiveSubTab('attendance')} className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeSubTab === 'attendance' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}>考勤紀錄與規政代理</button>
-      </div>
+      <div className="space-y-6 animate-in fade-in duration-300">
+        <div className="flex justify-end">
+          <button onClick={handleOpenReqModal} className="flex items-center space-x-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-sm font-bold shadow-sm">
+            <Settings size={16} className="text-indigo-500" /><span>設定計畫人力需求編制</span>
+          </button>
+        </div>
 
-      {activeSubTab === 'hr' && (
-        <div className="space-y-6 animate-in fade-in duration-300">
-          <div className="flex justify-end">
-            <button onClick={handleOpenReqModal} className="flex items-center space-x-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-sm font-bold shadow-sm">
-              <Settings size={16} className="text-indigo-500" /><span>設定計畫人力需求</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5">
-              <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><CheckCircle2 size={24} /></div>
-              <div>
-                <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力</p>
-                <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">{residentCount}<span className="text-sm text-slate-400 mx-1">/ {activeReqsSum || 0}</span></p>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5">
-              <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400"><Users size={24} /></div>
-              <div>
-                <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力</p>
-                <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">{nonResidentCount}<span className="text-sm text-slate-400 mx-1">/ {activeReqsNonResSum || 0}</span></p>
-              </div>
-            </div>
-
-            <div onClick={() => totalVacancyDays > 0 && setIsVacancyModalOpen(true)} className={`p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors ${totalVacancyDays > 0 ? 'bg-white dark:bg-slate-800 border-orange-200 dark:border-orange-500/30 cursor-pointer hover:border-orange-400 dark:hover:border-orange-500/50 group' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700/50'}`}>
-              <div className="flex items-center space-x-5">
-                <div className={`p-3.5 rounded-xl transition-transform ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}><CalendarDays size={24} /></div>
-                <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">異常空缺現況</p><p className={`text-2xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>{totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>人天</span></p></div>
-              </div>
-              {totalVacancyDays > 0 && <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>}
-            </div>
-
-            <div onClick={() => setIsForecastModalOpen(true)} className="p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-500/30 cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 group">
-              <div className="flex items-center space-x-5">
-                <div className="p-3.5 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><LineChart size={24} /></div>
-                <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">近期異動預估</p><p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{upcomingEvents.length} <span className="text-sm font-medium text-indigo-500">項變動</span></p></div>
-              </div>
-              <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5">
+            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><CheckCircle2 size={24} /></div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前駐點人力</p>
+              <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">{residentCount}<span className="text-sm text-slate-400 mx-1">/ {activeReqsSum || 0}</span></p>
             </div>
           </div>
 
-          {personnel.length > 0 && (
-            <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm transition-colors">
-              <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center"><PieChart size={16} className="mr-2 text-indigo-500" />計畫單位人數彙整 (僅計在職)</h4>
-              <div className="flex flex-wrap gap-4">
-                {Object.entries(unitSummary).map(([unit, count]) => (
-                  <div key={unit} className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-between min-w-[160px]">
-                    <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span><span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
-                  </div>
-                ))}
-                <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
-                  <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span><span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center space-x-5">
+            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400"><Users size={24} /></div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">目前非駐點人力</p>
+              <p className="text-2xl font-black text-slate-800 dark:text-white flex items-baseline">{nonResidentCount}<span className="text-sm text-slate-400 mx-1">/ {activeReqsNonResSum || 0}</span></p>
+            </div>
+          </div>
+
+          <div onClick={() => totalVacancyDays > 0 && setIsVacancyModalOpen(true)} className={`p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors ${totalVacancyDays > 0 ? 'bg-white dark:bg-slate-800 border-orange-200 dark:border-orange-500/30 cursor-pointer hover:border-orange-400 dark:hover:border-orange-500/50 group' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700/50'}`}>
+            <div className="flex items-center space-x-5">
+              <div className={`p-3.5 rounded-xl transition-transform ${totalVacancyDays > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}><CalendarDays size={24} /></div>
+              <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">現況異常空缺天數</p><p className={`text-2xl font-black ${totalVacancyDays > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>{totalVacancyDays} <span className={`text-sm font-medium ${totalVacancyDays > 0 ? 'text-orange-500' : 'text-slate-500'}`}>人天</span></p></div>
+            </div>
+            {totalVacancyDays > 0 && <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>}
+          </div>
+
+          <div onClick={() => setIsForecastModalOpen(true)} className="p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-colors bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-500/30 cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 group">
+            <div className="flex items-center space-x-5">
+              <div className="p-3.5 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><LineChart size={24} /></div>
+              <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">未來異動預估</p><p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{upcomingEvents.length} <span className="text-sm font-medium text-indigo-500">項變動</span></p></div>
+            </div>
+            <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
+          </div>
+        </div>
+
+        {personnel.length > 0 && (
+          <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm transition-colors">
+            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 flex items-center"><PieChart size={16} className="mr-2 text-indigo-500" />計畫單位人數彙整 (僅計在職)</h4>
+            <div className="flex flex-wrap gap-4">
+              {Object.entries(unitSummary).map(([unit, count]) => (
+                <div key={unit} className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-between min-w-[160px]">
+                  <span className="text-sm font-bold text-slate-600 dark:text-slate-300 mr-4">{unit}</span><span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{count} <span className="text-xs font-medium text-slate-400">人</span></span>
                 </div>
+              ))}
+              <div className="px-4 py-3 bg-indigo-50 dark:bg-indigo-500/20 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-sm flex items-center justify-between min-w-[160px]">
+                <span className="text-sm font-bold text-indigo-800 dark:text-indigo-300 mr-4">總計在職人數</span><span className="text-xl font-black text-indigo-600 dark:text-indigo-400">{totalActivePersonnel} <span className="text-xs font-medium text-indigo-400 dark:text-indigo-500">人</span></span>
               </div>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden flex flex-col">
+          <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
+            <h3 className="font-bold text-slate-800 dark:text-white">計畫同仁花名冊與學經歷證明</h3>
+            <div className="flex space-x-3">
+              <button onClick={exportCurrentPersonnelCSV} className="flex items-center space-x-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:shadow-sm transition-all text-sm font-bold"><Download size={16} className="text-indigo-500 dark:text-indigo-400" /><span>匯出人員清冊</span></button>
+              <button onClick={handleOpenAddPersonModal} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold text-sm transition-colors"><Plus size={16} /><span>新增同仁建檔</span></button>
+            </div>
+          </div>
+          
+          {allExistingUnits.length > 0 && (
+            <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-800 flex flex-wrap gap-2 items-center">
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-2 flex items-center"><Filter size={14} className="mr-1" /> 單位快速過濾：</span>
+              <button onClick={() => setSelectedUnitFilter('ALL')} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}>全部 (ALL)</button>
+              {allExistingUnits.map(unit => (
+                <button key={unit} onClick={() => setSelectedUnitFilter(unit)} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === unit ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}>{unit}</button>
+              ))}
             </div>
           )}
-
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/50 dark:bg-slate-800/80 gap-4">
-              <h3 className="font-bold text-slate-800 dark:text-white">人員名冊與動態歷程</h3>
-              <div className="flex space-x-3">
-                <button onClick={exportCurrentPersonnelCSV} className="flex items-center space-x-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:shadow-sm transition-all text-sm font-bold"><Download size={16} className="text-indigo-500 dark:text-indigo-400" /><span>匯出現況人員清冊</span></button>
-                <button onClick={handleOpenAddPersonModal} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold text-sm transition-colors"><Plus size={16} /><span>新增人員</span></button>
-              </div>
-            </div>
-            
-            {allExistingUnits.length > 0 && (
-              <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-800 flex flex-wrap gap-2 items-center">
-                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-2 flex items-center"><Filter size={14} className="mr-1" /> 單位過濾：</span>
-                <button onClick={() => setSelectedUnitFilter('ALL')} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}>全部 (ALL)</button>
-                {allExistingUnits.map(unit => (
-                  <button key={unit} onClick={() => setSelectedUnitFilter(unit)} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${selectedUnitFilter === unit ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'}`}>{unit}</button>
-                ))}
-              </div>
-            )}
-            
-            <div className="overflow-x-auto flex-1 min-h-[450px]">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
-                  <tr>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('name')}>姓名/單位 <SortIcon columnKey="name" /></th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('status')}>狀態/駐點 <SortIcon columnKey="status" /></th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('role')}>現任職務 <SortIcon columnKey="role" /></th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('roleDate')}>就任日期 <SortIcon columnKey="roleDate" /></th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('date')}>參與計畫期間/到職日 <SortIcon columnKey="date" /></th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">相關檔案</th>
-                    <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                  {personnel.length === 0 ? (
-                    <tr><td colSpan="7" className="py-16 text-center"><div className="flex flex-col items-center justify-center"><Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" /><p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無人事建檔資料</p></div></td></tr>
-                  ) : sortedPersonnel.length === 0 ? (
-                    <tr><td colSpan="7" className="py-16 text-center"><div className="flex flex-col items-center justify-center"><Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" /><p className="text-slate-700 dark:text-slate-300 font-medium mb-1">查無符合目前條件之人員資料</p></div></td></tr>
-                  ) : (
-                    sortedPersonnel.map(u => {
-                      const status = getPersonStatus(u);
-                      return (
-                        <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
-                          <td className="py-4 px-6"><div className="flex flex-col items-start"><span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span><span className="text-[10px] text-slate-400 mb-1">{u.email || '未建立 Email'}</span><span className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(u.unit)}`}>{u.unit || '未指定單位'}</span></div></td>
-                          <td className="py-4 px-6">
-                            <div className="flex flex-col items-start gap-1">
-                              {status === 'active' && <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>}
-                              {status === 'inactive' && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">已離職</span>}
-                              {status === 'pending' && <span className="px-2 py-0.5 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 rounded text-[10px] font-bold border border-blue-200 dark:border-blue-500/30">尚未到職</span>}
-                              {u.isResident ? <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">駐點人員</span> : <span className="text-[10px] text-slate-400">非駐點</span>}
-                            </div>
-                          </td>
-                          <td className="py-4 px-6"><span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span></td>
-                          <td className="py-4 px-6"><span className="text-sm font-medium text-slate-600 dark:text-slate-300">{u.roleStartDate || u.hireDate}</span></td>
-                          <td className="py-4 px-6">
-                            <div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">
-                              {status === 'pending' ? '尚未到職' : `${u.contractStart || '-'} ~ ${u.contractEnd || '至今'}`}
-                            </div>
-                            <div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div>
-                          </td>
-                          <td className="py-4 px-6">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{u.files?.length || 0} 個檔案</span>
-                              <label className="cursor-pointer p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/20 dark:text-indigo-400 dark:hover:bg-indigo-500/40 rounded-lg transition-colors" title="上傳相關檔案 (會真實存入 Drive)">
-                                <input type="file" className="hidden" onChange={(e) => handlePersonnelFileUpload(e, u.id)} disabled={uploadingPersonnelId === u.id} />
-                                {uploadingPersonnelId === u.id ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                              </label>
-                            </div>
-                          </td>
-                          <td className="py-4 px-6 text-right"><button onClick={() => handleOpenEditPerson(u)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"><Edit2 size={14} className="mr-1.5" /> 維護與檢視</button></td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeSubTab === 'attendance' && (
-        <div className="space-y-6 animate-in fade-in duration-300">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className={`bg-white dark:bg-slate-800 p-6 rounded-2xl border shadow-sm flex items-center space-x-5 transition-colors ${proxyAlertCount > 0 ? 'border-orange-200 dark:border-orange-500/30' : 'border-slate-200 dark:border-slate-700/50'}`}>
-              <div className={`p-3.5 rounded-xl ${proxyAlertCount > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}><AlertCircle size={28} /></div>
-              <div><p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理異常待補件</p><p className={`text-3xl font-black ${proxyAlertCount > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>{proxyAlertCount} <span className={`text-sm font-medium ${proxyAlertCount > 0 ? 'text-orange-500' : 'text-slate-500'}`}>件</span></p></div>
-            </div>
-            
-            {/* 新增：快速前往工作日曆設定的小卡片/按鈕 */}
-            <div 
-              onClick={() => setIsCalendarSettingsOpen(true)}
-              className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group"
-            >
-              <div className="flex items-center space-x-5">
-                <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                  <CalendarDays size={24} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與假別</p>
-                  <p className="text-sm font-black text-slate-800 dark:text-white">設定應上班日與假期</p>
-                </div>
-              </div>
-              <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                <ChevronRight size={16} />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h3 className="font-bold text-slate-800 dark:text-white mb-1">匯入出勤紀錄</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400">上傳每月考勤 Excel 報表，系統將自動比對請假天數與規政代理合規性。</p>
-            </div>
-            {/* 修改：將按鈕綁定 onClick 事件，觸發彈窗 */}
-            <button 
-              onClick={() => setIsAttendanceImportOpen(true)}
-              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-sm font-bold flex-shrink-0"
-            >
-              <Upload size={18} />
-              <span>匯入考勤 Excel</span>
-            </button>
-            <button 
-              onClick={() => setIsAttendanceViewOpen(true)}
-              className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:shadow-sm transition-all text-sm font-bold flex-shrink-0"
-            >
-              <Clock size={18} className="text-indigo-500" />
-              <span>檢視已匯入紀錄</span>
-            </button>
-          </div>
-
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm overflow-hidden">
-            <div className="p-5 border-b border-slate-200 dark:border-slate-700/50 bg-slate-50/50 dark:bg-slate-800/80"><h3 className="font-bold text-slate-800 dark:text-white">規政代理異常名單</h3></div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">人員姓名</th><th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">所屬單位</th><th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">異常狀態</th><th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                  {personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').length === 0 ? (
-                     <tr><td colSpan="4" className="py-12 text-center text-slate-500 dark:text-slate-400 text-sm font-medium">目前無任何代理異常紀錄。</td></tr>
-                  ) : (
-                    personnel.filter(p => p.proxyAlert && getPersonStatus(p) === 'active').map(u => (
-                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                        <td className="py-4 px-6 font-bold text-slate-900 dark:text-slate-200">{u.name}</td><td className="py-4 px-6 text-sm text-slate-600 dark:text-slate-400">{u.unit}</td>
-                        <td className="py-4 px-6"><span className="inline-flex items-center px-2 py-1 rounded bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold border border-orange-200 dark:border-orange-500/30"><AlertCircle size={14} className="mr-1" /> 缺代理人</span></td>
-                        <td className="py-4 px-6 text-right"><button className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:hover:bg-indigo-500/20 rounded-lg text-xs font-bold transition-colors">補齊文件</button></td>
+          
+          <div className="overflow-x-auto flex-1 min-h-[450px]">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('name')}>姓名/單位 <SortIcon columnKey="name" /></th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('status')}>狀態/駐點 <SortIcon columnKey="status" /></th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('role')}>現任職務 <SortIcon columnKey="role" /></th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('roleDate')}>就任日期 <SortIcon columnKey="roleDate" /></th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700" onClick={() => handleSort('date')}>參與計畫期間/到職日 <SortIcon columnKey="date" /></th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">履歷資歷檔案</th>
+                  <th className="py-4 px-6 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {personnel.length === 0 ? (
+                  <tr><td colSpan="7" className="py-16 text-center"><div className="flex flex-col items-center justify-center"><Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" /><p className="text-slate-700 dark:text-slate-300 font-medium mb-1">此專案目前尚無人事建檔資料</p></div></td></tr>
+                ) : sortedPersonnel.length === 0 ? (
+                  <tr><td colSpan="7" className="py-16 text-center"><div className="flex flex-col items-center justify-center"><Users size={48} className="text-slate-300 dark:text-slate-600 mb-4" /><p className="text-slate-700 dark:text-slate-300 font-medium mb-1">查無符合目前條件之人員資料</p></div></td></tr>
+                ) : (
+                  sortedPersonnel.map(u => {
+                    const status = getPersonStatus(u);
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors group">
+                        <td className="py-4 px-6"><div className="flex flex-col items-start"><span className="font-bold text-slate-900 dark:text-slate-200">{u.name}</span><span className="text-[10px] text-slate-400 mb-1">{u.email || '未建立 Email'}</span><span className={`text-[10px] font-bold px-2 py-0.5 rounded border w-fit mt-0.5 ${getUnitColorClass(u.unit)}`}>{u.unit || '未指定單位'}</span></div></td>
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col items-start gap-1">
+                            {status === 'active' && <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">在職</span>}
+                            {status === 'inactive' && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600">已離職</span>}
+                            {status === 'pending' && <span className="px-2 py-0.5 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 rounded text-[10px] font-bold border border-blue-200 dark:border-blue-500/30">尚未到職</span>}
+                            {u.isResident ? <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">駐點人員</span> : <span className="text-[10px] text-slate-400">非駐點</span>}
+                          </div>
+                        </td>
+                        <td className="py-4 px-6"><span className="font-bold text-slate-700 dark:text-slate-300 text-sm">{u.role}</span></td>
+                        <td className="py-4 px-6"><span className="text-sm font-medium text-slate-600 dark:text-slate-300">{u.roleStartDate || u.hireDate}</span></td>
+                        <td className="py-4 px-6">
+                          <div className="text-sm font-bold text-indigo-700 dark:text-indigo-400 font-mono tracking-tight">
+                            {status === 'pending' ? '尚未到職' : `${u.contractStart || '-'} ~ ${u.contractEnd || '至今'}`}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-1">最初到職日: {u.hireDate}</div>
+                        </td>
+                        <td className="py-4 px-6">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{u.files?.length || 0} 個檔案</span>
+                            <label className="cursor-pointer p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:bg-indigo-500/20 dark:text-indigo-400 dark:hover:bg-indigo-500/40 rounded-lg transition-colors" title="上傳學經歷證明 (真實存入 Drive)">
+                              <input type="file" className="hidden" onChange={(e) => handlePersonnelFileUpload(e, u.id)} disabled={uploadingPersonnelId === u.id} />
+                              {uploadingPersonnelId === u.id ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                            </label>
+                          </div>
+                        </td>
+                        <td className="py-4 px-6 text-right"><button onClick={() => handleOpenEditPerson(u)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"><Edit2 size={14} className="mr-1.5" /> 維護與歷程變更</button></td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
-      )}
+      </div>
 
       {/* ================= Modals 區塊 ================= */}
       {isAddPersonModalOpen && (
@@ -967,7 +866,7 @@ export default function HRModule({ user, selectedProject }) {
             {availableUnits.length > 0 && (
               <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
                 <button onClick={() => setIsAddPersonModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
-                <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center"><Save size={16} className="mr-2" /> 儲存人員</button>
+                <button type="submit" form="addPersonForm" className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center"><Save size={16} className="mr-2" /> 儲存人员</button>
               </div>
             )}
           </div>
@@ -1025,7 +924,6 @@ export default function HRModule({ user, selectedProject }) {
                   </div>
                 </div>
 
-                {/* 3. 額外需求符合確認 */}
                 <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                   <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 mb-4 border-b border-slate-100 dark:border-slate-700 pb-2 flex items-center">
                     <ListChecks size={16} className="mr-2 text-indigo-500" /> 3. 額外需求符合確認
@@ -1088,7 +986,7 @@ export default function HRModule({ user, selectedProject }) {
                         </div>
                       ))
                     ) : (
-                      <div className="col-span-1 sm:col-span-2 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 text-center"><p className="text-xs text-slate-500 dark:text-slate-400">目前尚無上傳任何相關檔案 (如：畢業證書、經歷證明)。</p></div>
+                      <div className="col-span-1 sm:col-span-2 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 text-center"><p className="text-xs text-slate-500 dark:text-slate-400">目前尚無上傳任何學經歷或資格文件證明。</p></div>
                     )}
                   </div>
                 </div>
@@ -1103,7 +1001,7 @@ export default function HRModule({ user, selectedProject }) {
       )}
 
       {/* Modal: 人力需求設定 */}
-      {isReqModalOpen && (
+      {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
@@ -1142,7 +1040,6 @@ export default function HRModule({ user, selectedProject }) {
                     </div>
                     <div><label className="block text-[10px] font-bold text-slate-500 mb-1 text-indigo-600 dark:text-indigo-400">需求結束日</label><input required type="date" value={newReq.endDate} onChange={e=>setNewReq({...newReq, endDate: e.target.value})} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" /></div>
                     
-                    {/* 條列式額外需求說明 */}
                     <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
                       <div className="space-y-2">
@@ -1156,14 +1053,14 @@ export default function HRModule({ user, selectedProject }) {
                                 newItems[idx] = e.target.value;
                                 setNewReq({...newReq, noteItems: newItems});
                               }}
-                              placeholder="請輸入需求項目 (例如：需具備三年專案經驗、需取得 PMP 證照)..." 
+                              placeholder="請輸入需求項目..." 
                               className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-lg text-sm outline-none focus:border-indigo-500" 
                             />
                             <button 
                               type="button" 
                               onClick={() => {
                                 const newItems = (newReq.noteItems || []).filter((_, i) => i !== idx);
-                                setNewReq({...newReq, noteItems: newItems});
+                                  setNewReq({...newReq, noteItems: newItems});
                               }}
                               className="p-2 text-slate-400 hover:text-red-500 bg-slate-100 hover:bg-red-50 dark:bg-slate-800 dark:hover:bg-red-500/10 rounded-lg transition-colors"
                             >
@@ -1180,13 +1077,12 @@ export default function HRModule({ user, selectedProject }) {
                         </button>
                       </div>
                     </div>
-
                   </div>
                   <div className="flex justify-end mt-2"><button type="submit" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">加入設定</button></div>
                 </form>
               </div>
 
-              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求區間</h4>
+              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3">已建立的需求編制區間</h4>
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700">
@@ -1234,6 +1130,7 @@ export default function HRModule({ user, selectedProject }) {
                 </table>
               </div>
             </div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsReqModalOpen(false)} className="px-6 py-2 bg-slate-200 text-slate-700 text-sm font-bold rounded-xl">關閉設定</button></div>
           </div>
         </div>
       )}
@@ -1274,9 +1171,9 @@ export default function HRModule({ user, selectedProject }) {
               </div>
               <div>
                 <h4 className="text-base font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center border-b border-orange-200 dark:border-orange-500/30 pb-2"><AlertCircle size={18} className="mr-2" /> 系統推演之未來職位空缺預警</h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：<br/><span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-bold mt-1 inline-block">💡 提示：若某人員離職，但下方未出現空缺警示，表示該職位「已有其他人員重疊交接中，滿足總量需求」或「該需求區間已到期」。</span></p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">依據上述已知變動進行推演，若不即時補齊人力，下列職務將在特定日期產生空缺斷層：</p>
                 {futureVacancies.length === 0 ? (
-                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p><p className="text-xs text-slate-500 mt-1">目前已知的離職與轉任皆已有替補人員銜接。</p></div>
+                  <div className="text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm"><CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500 opacity-50" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">未來 60 天內無推演出任何人力空窗危機。</p></div>
                 ) : (
                   <div className="space-y-3">
                     {futureVacancies.map((fv, idx) => (
@@ -1294,7 +1191,7 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 今日職位空缺明細 (詳細卡片版) */}
+      {/* Modal: 今日職位空缺明細 */}
       {isVacancyModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
@@ -1304,7 +1201,7 @@ export default function HRModule({ user, selectedProject }) {
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-6">
               {vacancyBreakdown.length === 0 ? (
-                <div className="py-12 text-center text-slate-500"><CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400 opacity-50" /><p className="font-bold text-lg">目前無職位空缺異常</p><p className="text-sm mt-2">各項計畫人力需求皆已補齊。</p></div>
+                <div className="py-12 text-center text-slate-500"><CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400 opacity-50" /><p className="font-bold text-lg">目前無職位空缺異常</p></div>
               ) : (
                 vacancyBreakdown.map((item, idx) => (
                   <div key={idx} className="bg-white dark:bg-slate-800 rounded-2xl border border-orange-200 dark:border-orange-500/30 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
@@ -1341,34 +1238,10 @@ export default function HRModule({ user, selectedProject }) {
                 ))
               )}
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white text-slate-700 text-sm font-bold rounded-xl transition-colors">關閉明細</button></div>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsVacancyModalOpen(false)} className="px-6 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 text-slate-700 text-sm font-bold rounded-xl">關閉明細</button></div>
           </div>
         </div>
       )}
-      <AttendanceImportModal 
-        isOpen={isAttendanceImportOpen}
-        onClose={() => setIsAttendanceImportOpen(false)}
-        selectedProject={selectedProject}
-        projectName={projectName || selectedProject}
-      />
-
-      <WorkCalendarSettingsModal 
-        isOpen={isCalendarSettingsOpen}
-        onClose={() => setIsCalendarSettingsOpen(false)}
-        selectedProject={selectedProject}
-      />
-      <AttendanceViewModal 
-        isOpen={isAttendanceViewOpen}
-        onClose={() => setIsAttendanceViewOpen(false)}
-        selectedProject={selectedProject}
-      />
-      <AttendanceViewModal 
-        isOpen={isAttendanceViewOpen}
-        onClose={() => setIsAttendanceViewOpen(false)}
-        selectedProject={selectedProject}
-        personnel={personnel} 
-        allExistingUnits={allExistingUnits}/* 補上這一行，把計畫人員名冊丟給檢視視窗 */
-      />
     </div>
   );
 }
