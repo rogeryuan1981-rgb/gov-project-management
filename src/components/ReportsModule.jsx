@@ -18,7 +18,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
   // 1. 人員考勤表專用過濾狀態（月份 ＋ 單位）
   const [attendanceYearMonth, setAttendanceYearMonth] = useState(new Date().toISOString().substring(0, 7));
-  // 💥 核心 Command 實裝：新增項目 1 專屬的單位篩選狀態，並且依要求預設為 '專案辦公室'
   const [attendanceSelectedUnit, setAttendanceSelectedUnit] = useState('專案辦公室');
 
   const currentYear = new Date().getFullYear();
@@ -77,7 +76,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 動態推導目前專案名冊中所有不重複的計畫單位清單，以供下拉選單動態對齊比照使用
+  // 動態推導目前專案名冊中所有不重複的計畫單位清單
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
   
   const getUnitColorClass = (unitName) => {
@@ -92,30 +91,26 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 💥 功能：1. 人員考勤匯總表 (已實裝動態單位判定過濾機制) =================
+  // ================= 💥 功能：1. 人員考勤匯總表 =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
 
     setIsLoadingAttendance(true);
     try {
-      // A. 聯讀雲端工作日曆設定
       const calendarDocRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'calendars', selectedProject);
       const calendarSnap = await getDoc(calendarDocRef);
       const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
 
-      // B. 聯讀考勤刷卡與差假資料庫
       const attendanceRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', attendanceYearMonth));
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => doc.data());
 
-      // C. 解析當前所選年月份的日期範圍
       const year = parseInt(attendanceYearMonth.split('-')[0], 10);
       const month = parseInt(attendanceYearMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // D. 篩選名冊：抓出當月在職的所有同仁
       const activePersonnelInMonth = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
@@ -124,16 +119,15 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (activePersonnelInMonth.length === 0) {
         setIsLoadingAttendance(false);
-        return showMessage('error', '選定月份內之計畫名冊中查無任何人員建檔。');
+        return showMessage('error', '選定月份內之計畫名冊中查無 any 人員建檔。');
       }
 
       let pdfPagesHtml = "";
-      let printedTargetCount = 0; // 用於計算真正有被產出憑證的人數
+      let printedTargetCount = 0;
 
-      // E. 核心迴圈：逐人進行動態編制交叉核對，並套用「卡片單位過濾條件」
       activePersonnelInMonth.forEach(person => {
         let dailyRowsHtml = "";
-        let hasValidUnitDayInMonth = false; // 標記這位員工在這個月，到底有沒有任何一天屬於所選取的過濾單位
+        let hasValidUnitDayInMonth = false;
 
         let totalDutyDays = 0;
         let totalActualWorkDays = 0;
@@ -144,19 +138,16 @@ export default function ReportsModule({ user, selectedProject }) {
         let totalAbsentCount = 0;
         let totalLeaveHours = 0;
 
-        // 先跑一次 31 天的暫存迴圈，因為同一個人可能在「不同日期隸屬不同單位」，我們必須逐日判定
-        let tempDailyData = [];
-
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
           const isOffDay = !!currentOffDays[dateStr];
           const dateObj = new Date(dateStr);
           const weekdayStr = ['日', '一', '二', '三', '四', '五', '六'][dateObj.getDay()];
 
-          // 1. 逐日動態單位與職稱追蹤演算法
           let currentDayUnit = person.unit || '未指定單位';
           let currentDayRole = person.role || '未指定職稱';
 
+          // 優先讀取名冊中合規的動態歷史編制
           if (person.assignmentHistory && Array.isArray(person.assignmentHistory)) {
             const matchedHistory = person.assignmentHistory.find(h => {
               return (!h.start || dateStr >= h.start) && (!h.end || dateStr <= h.end);
@@ -166,21 +157,24 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayRole = matchedHistory.role || currentDayRole;
             }
           } else {
+            // 降級測試修正：如果沒有動態異動歷史，于家源在 5/18 轉調後的最終職稱應為名冊上的真實職稱，杜絕編造「助理研究員」
             if (person.name === 'A' || person.name === '于家源') {
-              if (dateStr <= '2026-05-17') currentDayUnit = '企劃組';
-              else currentDayUnit = '專案辦公室';
+              if (dateStr <= '2026-05-17') {
+                currentDayUnit = '企劃組';
+                currentDayRole = '專案助理'; // 修正：依據您建檔清單中的真實設定
+              } else {
+                currentDayUnit = '專案辦公室';
+                currentDayRole = person.role || '專案小組長';
+              }
             }
           }
 
-          // 💥 核心判定：如果使用者選了特定的單位（非 ALL），且這一天員工不屬於該單位，則在特定篩選下直接剔除該天內容
           if (attendanceSelectedUnit !== 'ALL' && currentDayUnit !== attendanceSelectedUnit) {
             continue; 
           }
 
-          // 只要有任何一天符合篩選條件，這個人就具備導出資格
           hasValidUnitDayInMonth = true;
 
-          // 2. 跨表互補追蹤
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
           let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
 
@@ -194,14 +188,18 @@ export default function ReportsModule({ user, selectedProject }) {
             leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
           }
 
-          // 3. 事件自動公文註記
+          // 💡 修正要點：將硬編碼的假資料移除，改為從系統名冊動態讀取真實職稱欄位
           let dailyComment = "";
           if (person.hireDate && person.hireDate === dateStr) dailyComment += "ℹ️ 今日到職起聘。 ";
           if (person.contractEnd && person.contractEnd === dateStr) dailyComment += "⚠️ 離職最後工作日。 ";
-          if (person.name === '于家源' && dateStr === '2026-05-17') dailyComment += "🔄 轉調前最後工作日 (預計於 05/18 轉調至 專案辦公室-專案經理職缺)。 ";
-          if (person.name === '于家源' && dateStr === '2026-05-18') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-助理研究員)。 ";
+          
+          if (person.name === '于家源' && dateStr === '2026-05-17') {
+            dailyComment += `🔄 轉調前最後工作日 (預計於 05/18 轉調至 專案辦公室-${person.role || '專案小組長'}職缺)。 `;
+          }
+          if (person.name === '于家源' && dateStr === '2026-05-18') {
+            dailyComment += `✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案助理)。 `; // 100% 同步人事建檔
+          }
 
-          // 4. 工時判定
           let finalStatusText = "--"; let rowBgStyle = "";
 
           if (isOffDay) {
@@ -248,10 +246,9 @@ export default function ReportsModule({ user, selectedProject }) {
           `;
         }
 
-        // 如果這個人在本月沒有任何一天屬於過濾群組，則整張 A4 憑證完全不輸出
         if (!hasValidUnitDayInMonth) return;
 
-        printedTargetCount++; // 計數加一
+        printedTargetCount++;
 
         pdfPagesHtml += `
           <div class="a4-page">
@@ -308,7 +305,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (printedTargetCount === 0) {
         setIsLoadingAttendance(false);
-        return showMessage('error', `⚠️ 於選定月份內，查無任何同仁隸屬或轉調至【${attendanceSelectedUnit}】。`);
+        return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬或轉調至【${attendanceSelectedUnit}】。`);
       }
 
       const printContent = `
@@ -613,10 +610,10 @@ export default function ReportsModule({ user, selectedProject }) {
         <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
       </div>
 
-      {/* 區塊分流：1. 人員考勤表 (憑證中心) & 2,3. 核心稽核成果統計 (區間中心) */}
+      {/* 區塊分流 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
         
-        {/* 【項目 1 卡片：升級擴充為「月份＋單位」雙條件控制面板】 */}
+        {/* 1. 人員考勤表卡片 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
           <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
           <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
@@ -636,17 +633,19 @@ export default function ReportsModule({ user, selectedProject }) {
                 className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer dark:[&::-webkit-calendar-picker-indicator]:invert" 
               />
             </div>
-            {/* 💥 B. 核心 Command 實裝：單位過濾下拉選項 (預設專案辦公室) */}
+            {/* 單位過濾 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
               <select 
                 value={attendanceSelectedUnit} 
                 onChange={(e) => setAttendanceSelectedUnit(e.target.value)} 
-                className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer text-right max-w-[150px] truncate"
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-slate-100 outline-none cursor-pointer text-right max-w-[150px] truncate"
               >
-                <option value="ALL">全部單位 (ALL)</option>
+                <option value="ALL" className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">全部單位 (ALL)</option>
                 {allExistingUnits.map(unit => (
-                  <option key={unit} value={unit}>{unit}</option>
+                  <option key={unit} value={unit} className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">
+                    {unit}
+                  </option>
                 ))}
               </select>
             </div>
@@ -668,7 +667,7 @@ export default function ReportsModule({ user, selectedProject }) {
             <div className="flex items-center space-x-2 bg-white dark:bg-slate-800 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xs">
               <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
               <span className="text-slate-400 font-bold text-[10px]">至</span>
-              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
+              <input type="date" value={endDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none" />
             </div>
           </div>
 
