@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, Upload, CalendarDays, ShieldAlert, AlertCircle, ChevronRight, CheckCircle2, Sliders, ToggleLeft, ToggleRight, Check } from 'lucide-react';
-import { collection, onSnapshot, doc, getFirestore } from 'firebase/firestore'; 
+import { collection, onSnapshot, doc, getFirestore, query, where } from 'firebase/firestore'; // 💡 已經精確補上 query 與 where 引入
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
@@ -26,15 +26,15 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
 
-  // 💡 1. 代理規則手動配置狀態 (預設值完全符合公務體系標準，可自由即時切換)
+  // 1. 代理規則配置狀態
   const [proxyThresholdDays, setProxyThresholdDays] = useState(2); // 連續超過幾天請假需要代理
   const [includeHolidays, setIncludeHolidays] = useState(false); // 中間隔假日算不算
   const [monthlyThresholdDays, setMonthlyThresholdDays] = useState(5); // 當月累計超過幾天需要代理
   
-  // 哪些假別當天「不用安排代理」，但在判定連續與累計天數時「仍須計入」
+  // 哪些假別當天不用排代理，但在判定連續與累計天數時仍須計入
   const [exemptLeaveTypes, setExemptLeaveTypes] = useState(['特休', '補休']);
 
-  // 全方位假別清單，供使用者勾選
+  // 全方位假別清單
   const ALL_LEAVE_TYPES = ['特休', '事假', '病假', '喪假', '公出', '補休'];
 
   const [attendanceRecords, setAttendanceRecords] = useState([]);
@@ -55,12 +55,12 @@ export default function AttendanceModule({ user, selectedProject }) {
     const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
     const reqRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'manpower_reqs');
     
-    // 監聽打卡流水號紀錄，供代理異常時數實時動態精算
+    // 監聽當月打卡流水號紀錄
     const attRecordsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
     const qAtt = query(attRecordsRef, where('projectId', '==', selectedProject), where('month', '==', todayYearMonth));
     
-    const unsubAtt = onSnapshot(attRecordsRef, (snapshot) => {
-      const loadedAtt = snapshot.docs.map(doc => doc.data()).filter(r => r.projectId === selectedProject && r.month === todayYearMonth);
+    const unsubAtt = onSnapshot(qAtt, (snapshot) => {
+      const loadedAtt = snapshot.docs.map(doc => doc.data());
       setAttendanceRecords(loadedAtt);
     });
 
@@ -98,9 +98,8 @@ export default function AttendanceModule({ user, selectedProject }) {
       let monthlyLeaveCount = 0;
       let continuousLeaveChain = 0;
 
-      // 逐日建立該同仁在當月的請假快照
       const monthLeaveMap = {};
-      const monthProxyMap = {}; // 是否有安排代理人
+      const monthProxyMap = {};
 
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -108,7 +107,6 @@ export default function AttendanceModule({ user, selectedProject }) {
         
         if (dayRecord && dayRecord.leaveType) {
           monthLeaveMap[d] = dayRecord.leaveType;
-          // 假設流水號內代理人欄位有填寫非空字串，視為已安排代理
           monthProxyMap[d] = !!(dayRecord.proxyName || dayRecord.proxyNameField); 
         } else {
           monthLeaveMap[d] = null;
@@ -116,7 +114,6 @@ export default function AttendanceModule({ user, selectedProject }) {
         }
       }
 
-      // 逐日進行智慧鏈條推演
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const isOffDay = !!currentOffDays[dateStr];
@@ -125,9 +122,9 @@ export default function AttendanceModule({ user, selectedProject }) {
 
         if (isOffDay) {
           if (includeHolidays) {
-            // 如果中間隔假日算進連續，則假日不切斷鏈條（但放假日當天不加計時數也不扣款）
+            // 例假日算入連續鏈條不切斷
           } else {
-            continuousLeaveChain = 0; // 假日切斷連續請假鏈條
+            continuousLeaveChain = 0;
           }
           continue;
         }
@@ -136,23 +133,18 @@ export default function AttendanceModule({ user, selectedProject }) {
           monthlyLeaveCount++;
           continuousLeaveChain++;
 
-          // 核心條件交叉審查：是否觸發「需要安排代理」的法規門檻
           const needProxyByContinuous = continuousLeaveChain > proxyThresholdDays;
           const needProxyByMonthly = monthlyLeaveCount > monthlyThresholdDays;
 
           if (needProxyByContinuous || needProxyByMonthly) {
-            // 審查當天的假別是不是免除代理排班的假別 (例如特休)
             const isExemptToday = exemptLeaveTypes.includes(leaveType);
-            
             if (!isExemptToday) {
-              // 當天假別不能免除，且沒有安排代理，判定為合規代理異常！
               if (!hasProxy) {
-                totalExceptionHours += 8; // 單日計罰或待補件時數以 8 小時為基準累加
+                totalExceptionHours += 8; 
               }
             }
           }
         } else {
-          // 當天沒請假正常到工，重設連續請假鏈條
           continuousLeaveChain = 0;
         }
       }
@@ -184,14 +176,12 @@ export default function AttendanceModule({ user, selectedProject }) {
         </div>
       </div>
 
-      {/* 💡 頂部管理數據面板：文字與單位已全面升級 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className={`bg-white dark:bg-slate-800 p-6 rounded-2xl border shadow-sm flex items-center space-x-5 transition-colors ${totalProxyExceptionHours > 0 ? 'border-orange-200 dark:border-orange-500/30' : 'border-slate-200 dark:border-slate-700/50'}`}>
           <div className={`p-3.5 rounded-xl ${totalProxyExceptionHours > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
             <AlertCircle size={28} />
           </div>
           <div>
-            {/* 💡 修正2：文字改成 代理異常，單位由件改成小時 */}
             <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">代理異常</p>
             <p className={`text-3xl font-black ${totalProxyExceptionHours > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
               {totalProxyExceptionHours} <span className="text-sm font-medium text-slate-500">小時</span>
@@ -230,9 +220,6 @@ export default function AttendanceModule({ user, selectedProject }) {
         </div>
       </div>
 
-      {/* =========================================================================
-          💡 全新加開：規政代理與合規防呆主動設定面板 (100% 全量代碼展開)
-         ========================================================================= */}
       <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm">
         <div className="flex items-center space-x-3 mb-5 border-b border-slate-100 dark:border-slate-700 pb-3">
           <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><Sliders size={18} /></div>
@@ -292,9 +279,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                 );
               })}
             </div>
-            <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-              💡 範例：若核選「特休免排代理」，當同仁前兩天請特休、第三天請事假時，前兩天不會觸發異常，但因特休天數計入鏈條，第三天事假若符合連續/累計要求且未排代理，將精準計算 8 小時異常。
-            </p>
           </div>
         </div>
       </div>
