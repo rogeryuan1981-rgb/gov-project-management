@@ -96,16 +96,14 @@ export default function ReportsModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 💡 【全新引入】：智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格
+  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格
   const cleanTimeRangeOnly = (rangeStr) => {
     if (!rangeStr) return '';
-    // 匹配如 115/04/08 08:30 或 2026-04-08 08:30 夾帶的時間段落
     const timePattern = /(\d{2}:\d{2})/g;
     const matches = rangeStr.match(timePattern);
     if (matches && matches.length >= 2) {
       return `${matches[0]} ~ ${matches[1]}`;
     }
-    // 如果原本就是單純的時間範圍，直接處理空格
     return rangeStr.replace(/\s+/g, '');
   };
 
@@ -213,10 +211,7 @@ export default function ReportsModule({ user, selectedProject }) {
           hasValidUnitDayInMonth = true;
 
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
-          
-          // 💡 支援多假別聚合桶
           let dailyLeaveRows = [];
-
           let checkIn = ""; let checkOut = ""; 
           let proxySegments = [];
 
@@ -228,18 +223,15 @@ export default function ReportsModule({ user, selectedProject }) {
             
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
 
-            // 遍歷當日所有流水號，收集所有有效的請假事件
             dayRecords.forEach(rec => {
               let lType = rec.leaveType || "";
               if (!lType && rec.leaveRangeInfo && (rec.leaveRangeInfo.includes('假') || rec.leaveRangeInfo.includes('休'))) {
-                // 嘗試從範圍字串中還原假別
                 if (rec.leaveRangeInfo.includes('事假')) lType = '事假';
                 else if (rec.leaveRangeInfo.includes('病假')) lType = '病假';
                 else if (rec.leaveRangeInfo.includes('喪假')) lType = '喪假';
                 else if (rec.leaveRangeInfo.includes('休')) lType = '特休';
               }
 
-              // 💡 修正3：不論資料源是「休假」還是「特休」，一律清洗映射對齊為「特休」
               if (lType === '休假' || lType === '特休') {
                 lType = '特休';
               }
@@ -251,7 +243,6 @@ export default function ReportsModule({ user, selectedProject }) {
             });
           }
 
-          // 處理工時合規與扣薪計算
           let finalStatusText = "--"; let rowBgStyle = "";
           let primaryLeaveType = dailyLeaveRows.length > 0 ? dailyLeaveRows[0].type : "";
 
@@ -267,21 +258,20 @@ export default function ReportsModule({ user, selectedProject }) {
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
 
-              // 逐筆加總當日所有請假事件的扣薪時數
               dailyLeaveRows.forEach(lRow => {
-                let currentLeaveHours = 8;
+                let currentDayLeaveHours = 8;
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
                   const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                  currentLeaveHours = Math.ceil(effectiveMins / 60);
+                  currentDayLeaveHours = Math.ceil(effectiveMins / 60);
                 } else if (lRow.rawTime && (lRow.rawTime.includes('4小時') || lRow.rawTime.includes('半天'))) {
-                  currentLeaveHours = 4;
+                  currentDayLeaveHours = 4;
                 }
 
                 if (leaveHoursSummary.hasOwnProperty(lRow.type)) {
-                  leaveHoursSummary[lRow.type] += currentLeaveHours;
+                  leaveHoursSummary[lRow.type] += currentDayLeaveHours;
                 } else {
-                  leaveHoursSummary['其他'] += currentLeaveHours;
+                  leaveHoursSummary['其他'] += currentDayLeaveHours;
                 }
 
                 let deductionWeight = 0;
@@ -290,7 +280,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 } else if (lRow.type === '病假') {
                   deductionWeight = 0.5;
                 }
-                totalLeaveDeduction += (currentLeaveHours * hourlyWage * deductionWeight);
+                totalLeaveDeduction += (currentDayLeaveHours * hourlyWage * deductionWeight);
               });
 
             } else if (!checkIn && !checkOut) {
@@ -317,18 +307,14 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 修正1 & 修正2：處理請假時間的多假別一行呈現與換行排版
           let leaveCellHtml = "--";
           if (dailyLeaveRows.length > 0) {
-            // 💡 修正2：若當天有請兩種假再請換行呈現，如：事假 08:30 ~ 12:30 \n 特休 13:30 ~ 17:30
-            // 💡 修正1：假別和時間保持在同一行不拆散
             leaveCellHtml = dailyLeaveRows.map(lRow => {
               const displayTime = lRow.cleanTime || lRow.rawTime;
               return `<div style="white-space: nowrap; line-height: 1.3;">${lRow.type} ${displayTime}</div>`;
             }).join('');
           }
 
-          // 智慧事件與代理同仁整合串接備註
           let finalCommentsArray = [];
           if (person.hireDate && person.hireDate === dateStr) finalCommentsArray.push("ℹ️ 今日到職起聘。");
           if (person.contractEnd && person.contractEnd === dateStr) finalCommentsArray.push("⚠️ 離職最後工作日。");
@@ -355,7 +341,6 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 修正2：取消代理人獨立欄位，若有代理人資訊，一律打包格式化納入備註中展示
           if (proxySegments.length > 0) {
             const proxyString = proxySegments.map(seg => `${seg.proxyName}(${seg.startHour}-${seg.endHour})`).join(', ');
             finalCommentsArray.push(`[職務代理] ${proxyString}`);
@@ -363,7 +348,6 @@ export default function ReportsModule({ user, selectedProject }) {
             finalCommentsArray.push(`[職務代理] ${dayRecords[0].proxyName}`);
           }
 
-          // 加上工時交叉結果的狀態備註，確保審計數據留存
           if (finalStatusText !== "--" && finalStatusText !== "正常出勤" && !finalStatusText.includes("已請假")) {
             finalCommentsArray.push(`[出勤判定] ${finalStatusText}`);
           }
@@ -386,7 +370,6 @@ export default function ReportsModule({ user, selectedProject }) {
         printedTargetCount++;
 
         const displayRoleHeader = person.name === 'Yuan Roger' || person.name === '于家源' ? (attendanceSelectedUnit === '企劃組' ? '專案助理' : person.role || '專案小組長') : (person.role || '未指定');
-
         const leaveDetailsText = Object.entries(leaveHoursSummary)
           .filter(([_, hrs]) => hrs > 0)
           .map(([type, hrs]) => `${type} ${hrs}H`)
@@ -445,286 +428,287 @@ export default function ReportsModule({ user, selectedProject }) {
           </div>
         </div>
       `;
-      });
+    });
 
-      if (printedTargetCount === 0) {
-        setIsLoadingAttendance(false);
-        return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬或轉調至【${attendanceSelectedUnit}】。`);
-      }
-
-      const printContent = `
-        <!DOCTYPE html>
-        <html lang="zh-TW">
-        <head>
-          <meta charset="UTF-8">
-          <title>計畫人員考勤明細月核銷憑證</title>
-          <style>
-            @page { size: A4 portrait; margin: 6mm 6mm 6mm 6mm; }
-            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
-            .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
-            .a4-page:last-child { page-break-after: avoid; }
-            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; border: 2px solid #0f172a; table-layout: fixed; }
-            .info-table td { padding: 4px 5px; border: 1px solid #cbd5e1; vertical-align: middle; }
-            .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 10.5px; }
-            .info-value { width: 37%; font-size: 10.5px; }
-            .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
-            .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; word-wrap: break-word; font-size: 9.5px; }
-            .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10px; border-bottom: 2px solid #0f172a; padding: 4px 5px; text-align: center; }
-            .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
-            .no-print-bar { text-align: center; background: #e0e7ff; padding: 10px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
-            .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
-            @media print { .no-print-bar { display: none !important; } }
-          </style>
-        </head>
-        <body>
-          <div class="no-print-bar">
-            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】憑證</button>
-          </div>
-          ${pdfPagesHtml}
-        </body>
-        </html>
-      `;
-
-      const printWindow = window.open('', '', 'width=1100,height=850');
-      printWindow.document.write(printContent); printWindow.document.close();
-      setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', `✅ 已成功優化 A4 核銷憑證，解決跨天字串溢出。`);
-    } catch (error) {
-      console.error("生成考勤憑證發生致命錯誤:", error);
-      showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
-    } finally {
+    if (printedTargetCount === 0) {
       setIsLoadingAttendance(false);
+      return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬或轉調至【${attendanceSelectedUnit}】。`);
     }
-  };
 
-  // ================= 功能：2. 異動與空缺紀錄表 =================
-  const exportVacancyReportPDF = () => {
-    if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
-    if (!startDate || !endDate) return showMessage('error', '請先設定報表區間。');
-
-    const startMs = new Date(startDate).getTime();
-    const endMs = new Date(endDate).getTime();
-    const projStartMs = projectStartDate ? new Date(projectStartDate).getTime() : 0;
-
-    if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
-
-    const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
-    const getUnitWeight = (unit) => unitWeights[unit] || 99;
-    const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
-    const getRoleWeight = (role) => roleWeights[role] || 99;
-
-    const activePersonnelChanges = [];
-    personnel.forEach(p => {
-      const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
-      const validHistory = (p.history || []).filter(h => {
-          if (!h.unit || !h.role || !h.startDate) return false;
-          const hStartMs = new Date(h.startDate).getTime();
-          const hEndMs = h.endDate ? new Date(h.endDate).getTime() : (p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity);
-          return hEndMs >= projStartMs && hStartMs <= endMs;
-      }).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-
-      if (validHistory.length > 0) {
-         const events = [];
-         validHistory.forEach((h, idx) => {
-             if (idx === 0) {
-                 const effectiveStartMs = Math.max(new Date(h.startDate).getTime(), pOnboardMs, projStartMs);
-                 events.push(`${new Date(effectiveStartMs).toISOString().split('T')[0]} 擔任 (${h.unit}) (${h.role})`);
-             } else {
-                 events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
-             }
-         });
-         if (p.contractEnd) {
-             const exitD = new Date(p.contractEnd); exitD.setDate(exitD.getDate() + 1);
-             if (exitD.getTime() >= startMs && exitD.getTime() <= endMs) events.push(`${exitD.toISOString().split('T')[0]} 離職`);
-         }
-         activePersonnelChanges.push({ name: p.name, unit: validHistory[0].unit, role: validHistory[0].role, events: events });
-      }
-    });
-
-    activePersonnelChanges.sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role)));
-
-    const roleGroups = {};
-    requirements.forEach(req => {
-        const key = `${req.unit}::${req.position}`;
-        if (!roleGroups[key]) roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
-        roleGroups[key].reqs.push({ count: parseInt(req.count, 10) || 1, sMs: req.startDate ? new Date(req.startDate).getTime() : 0, eMs: req.endDate ? new Date(req.endDate).getTime() : Infinity, pMs: req.penaltyStartDate ? new Date(req.penaltyStartDate).getTime() : (req.startDate ? new Date(req.startDate).getTime() : 0) });
-    });
-
-    personnel.forEach(p => {
-        const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0; const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
-        (p.history || []).forEach(h => {
-            if (!h.unit || !h.role) return; const key = `${h.unit}::${h.role}`;
-            if (roleGroups[key]) {
-                const hStartMs = new Date(h.startDate).getTime(); const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
-                const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
-                if (effectiveStartMs <= hEndMs && effectiveStartMs <= endMs) roleGroups[key].segments.push({ name: p.name, startMs: effectiveStartMs, endMs: hEndMs, startStr: new Date(effectiveStartMs).toISOString().split('T')[0], endStr: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今') });
-            }
-        });
-    });
-
-    const expandedSlots = []; const vacancyTables = [];
-    Object.values(roleGroups).sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role))).forEach(group => {
-        let maxReqCount = 0; const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs))); const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
-        if (groupStartLimitMs > groupEndLimitMs) return;
-        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
-            let dReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) dReq += r.count; }); maxReqCount = Math.max(maxReqCount, dReq);
-        }
-        const slots = Array.from({length: maxReqCount}, (_, i) => ({ unit: group.unit, role: group.role, slotIndex: i + 1, label: `員額 ${i + 1}`, occupants: [] })); const overstaffSlots = [];
-        group.segments.sort((a, b) => a.startMs - b.startMs).forEach(seg => {
-            let assigned = false;
-            for (let slot of slots) { const last = slot.occupants[slot.occupants.length - 1]; if (!last || last.endMs < seg.startMs) { slot.occupants.push(seg); assigned = true; break; } }
-            if (!assigned) {
-                for (let slot of overstaffSlots) { const last = slot.occupants[slot.occupants.length - 1]; if (!last || last.endMs < seg.startMs) { slot.occupants.push(seg); assigned = true; break; } }
-                if (!assigned) overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
-            }
-        });
-        [...slots, ...overstaffSlots].forEach(slot => {
-            const finalTimeline = []; let currentTime = groupStartLimitMs;
-            const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
-            sortedOccs.forEach(occ => {
-                if (occ.startMs > currentTime) { const vStart = currentTime; const vEnd = occ.startMs - 86400000; if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); }
-                finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr }); currentTime = occ.endMs + 86400000;
-            });
-            if (currentTime <= groupEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(groupEndLimitMs).toISOString().split('T')[0] });
-            slot.timeline = finalTimeline;
-        });
-        expandedSlots.push(...slots, ...overstaffSlots);
-        let currentVacancy = null; const vacancyPeriods = []; let totalPenaltyDays = 0; let totalGraceDays = 0;
-        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
-            let dailyReq = 0; let dailyPenaltyReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) { dailyReq += r.count; if (t >= r.pMs) dailyPenaltyReq += r.count; } });
-            if (dailyReq === 0) { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } continue; }
-            let activeCount = 0; group.segments.forEach(seg => { if (t >= seg.startMs && t <= seg.endMs) activeCount++; });
-            const missing = Math.max(0, dailyReq - activeCount); const penaltyMissing = Math.max(0, dailyPenaltyReq - activeCount); const graceMissing = missing - penaltyMissing;
-            if (missing > 0) {
-                totalPenaltyDays += penaltyMissing; totalGraceDays += graceMissing; const dStr = new Date(t).toISOString().split('T')[0];
-                if (!currentVacancy) currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 };
-                else if (currentVacancy.missing === missing && currentVacancy.penaltyMissing === penaltyMissing) { currentVacancy.end = dStr; currentVacancy.days++; }
-                else { vacancyPeriods.push(currentVacancy); currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 }; }
-            } else { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } }
-        }
-        if (currentVacancy) vacancyPeriods.push(currentVacancy);
-        if (vacancyPeriods.length > 0) vacancyTables.push({ unit: group.unit, role: group.role, maxReq: maxReqCount, periods: vacancyPeriods, totalPenaltyDays, totalGraceDays });
-    });
-
-    const columnGroupedData = []; let currentUnitGroup = null; let currentRoleGroup = null; let posIndexCounter = 1;
-    expandedSlots.forEach(slot => {
-        if (!currentUnitGroup || currentUnitGroup.unit !== slot.unit) { currentUnitGroup = { unit: slot.unit, roles: [], rowSpan: 0 }; columnGroupedData.push(currentUnitGroup); currentRoleGroup = null; }
-        if (!currentRoleGroup || currentRoleGroup.role !== slot.role) { currentRoleGroup = { role: slot.role, slots: [], rowSpan: 0 }; currentUnitGroup.roles.push(currentRoleGroup); }
-        const slotRowSpan = Math.max(1, slot.timeline.length); currentRoleGroup.slots.push({ ...slot, rowSpan: slotRowSpan, posIndex: posIndexCounter++ });
-        currentRoleGroup.rowSpan += slotRowSpan; currentUnitGroup.rowSpan += slotRowSpan;
-    });
-
-    let table2Html = `
-      <h2 style="page-break-before: always; margin-top: 0;">二、 期間內各職位人員在職狀況 (按員額 Slot 拆分)</h2>
-      <table style="border: 2px solid #1e293b; border-collapse: collapse;">
-        <colgroup><col style="width: 45px;"><col style="width: 100px;"><col style="width: 110px;"><col style="width: 80px;"><col style="width: 90px;"><col style="width: 90px;"><col style="width: 90px;"></colgroup>
-        <tr style="border-bottom: 2px solid #1e293b;"><th>序號</th><th>單位</th><th>職位</th><th>員額編號</th><th>姓名/狀態</th><th>到職日</th><th>離職日</th></tr>
-    `;
-
-    columnGroupedData.forEach((uGroup, uIdx) => {
-        const isUnitStart = uIdx > 0;
-        uGroup.roles.forEach((rGroup, rIdx) => {
-            rGroup.slots.forEach((slot, sIdx) => {
-                const timeline = slot.timeline.length > 0 ? slot.timeline : [{ isEmpty: true }];
-                timeline.forEach((event, eIdx) => {
-                    const rowClasses = []; if (isUnitStart && rIdx === 0 && sIdx === 0 && eIdx === 0) rowClasses.push('unit-top-border');
-                    table2Html += `<tr class="${rowClasses.join(' ')}">`;
-                    if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center font-bold">${slot.posIndex}</td>`;
-                    if (rIdx === 0 && sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
-                    if (sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${rGroup.rowSpan}">${rGroup.role}</td>`;
-                    if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center">${slot.label}</td>`;
-                    if (event.isEmpty) { table2Html += `<td colspan="3" style="color:#94a3b8; text-align:center;">(此員額於期間內全段空缺)</td>`; }
-                    else if (event.isVacancy) { table2Html += `<td class="highlight font-bold">空缺</td><td class="highlight font-mono">${event.startStr}</td><td class="highlight font-mono">${event.endStr}</td>`; }
-                    else { const displayEnd = event.endStr === '至今' ? '' : event.endStr; table2Html += `<td><strong>${event.name}</strong></td><td class="font-mono">${event.startStr}</td><td class="font-mono">${displayEnd}</td>`; }
-                    table2Html += `</tr>`;
-                });
-            });
-        });
-    });
-    table2Html += `</table>`;
-
-    const vacancyGroupedData = []; let currentVacUnit = null;
-    vacancyTables.forEach(vt => {
-        if (!currentVacUnit || currentVacUnit.unit !== vt.unit) { currentVacUnit = { unit: vt.unit, rows: [], rowSpan: 0 }; vacancyGroupedData.push(currentVacUnit); }
-        currentVacUnit.rows.push(vt); currentVacUnit.rowSpan += Math.max(1, vt.periods.length);
-    });
-
-    let table3Html = `
-        <h2 style="page-break-before: always; margin-top: 0;">三、 職位空缺天數精算 (合併精算與違約判定)</h2>
-        <table style="border: 2px solid #1e293b; border-collapse: collapse;">
-          <colgroup><col style="width:100px;"><col style="width:110px;"><col style="width:70px;"><col><col style="width:80px;"><col style="width:80px;"></colgroup>
-          <tr style="border-bottom: 2px solid #1e293b;"><th>單位</th><th>職位</th><th class="text-center">編制</th><th>確切空缺日期區間 (合併計算)</th><th class="text-right">違約空窗<br/>(人天)</th><th class="text-right">免罰寬限<br/>(人天)</th></tr>
-    `;
-
-    if (vacancyTables.length === 0) {
-        table3Html += '<tr><td colspan="6" class="text-center">此期間無 any 人力空窗，配置完全合規。</td></tr>';
-    } else {
-        vacancyGroupedData.forEach((uGroup, uIdx) => {
-            const isUnitStart = uIdx > 0;
-            uGroup.rows.forEach((vt, vtIdx) => {
-                const periods = vt.periods.length > 0 ? vt.periods : [null];
-                periods.forEach((vp, pIdx) => {
-                    const rowClasses = []; if (isUnitStart && vtIdx === 0 && pIdx === 0) rowClasses.push('unit-top-border');
-                    table3Html += `<tr class="${rowClasses.join(' ')}">`;
-                    if (vtIdx === 0 && pIdx === 0) table3Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
-                    if (pIdx === 0) { 
-                      table3Html += `<td rowspan="${vt.periods.length}">${vt.role}</td>`;
-                      table3Html += `<td rowspan="${vt.periods.length}" class="text-center">${vt.maxReq} 人</td>`; 
-                    }
-                    if (vp) { table3Html += `<td>${vp.start} ~ ${vp.end} <span style="font-size:10px; color:#64748b;">(少 ${vp.missing}人)</span></td><td class="text-right highlight font-bold">${vp.penaltyMissing * vp.days > 0 ? vp.penaltyMissing * vp.days : '-'}</td><td class="text-right grace">${vp.graceMissing * vp.days > 0 ? vp.graceMissing * vp.days : '-'}</td>`; }
-                    table3Html += `</tr>`;
-                });
-            });
-        });
-        table3Html += `<tr style="background:#f8fafc; font-weight:bold; border-top: 2px solid #1e293b;"><td colspan="4" class="text-right">累計加總：</td><td class="text-right highlight font-bold" style="font-size:15px;">${vacancyTables.reduce((acc, vt) => acc + vt.totalPenaltyDays, 0)}</td><td class="text-right grace" style="font-size:15px;">${vacancyTables.reduce((acc, vt) => acc + vt.totalGraceDays, 0)}</td></tr>`;
-    }
-    table3Html += `</table>`;
-
-    return (
-      // JSX layout
-      <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-300">
-        {message && (
-          <div className={`p-4 rounded-xl border flex items-start shadow-sm animate-in slide-in-from-top-2 ${message.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
-            <span className="text-sm font-bold">{message.text}</span>
-          </div>
-        )}
-        <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">核銷作業報表中心</h2>
+    const printContent = `
+      <!DOCTYPE html>
+      <html lang="zh-TW">
+      <head>
+        <meta charset="UTF-8">
+        <title>計畫人員考勤明細月核銷憑證</title>
+        <style>
+          @page { size: A4 portrait; margin: 6mm 6mm 6mm 6mm; }
+          body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
+          .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
+          .a4-page:last-child { page-break-after: avoid; }
+          .info-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; border: 2px solid #0f172a; table-layout: fixed; }
+          .info-table td { padding: 4px 5px; border: 1px solid #cbd5e1; vertical-align: middle; }
+          .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 10.5px; }
+          .info-value { width: 37%; font-size: 10.5px; }
+          .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
+          .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; word-wrap: break-word; font-size: 9.5px; }
+          .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10px; border-bottom: 2px solid #0f172a; padding: 4px 5px; text-align: center; }
+          .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
+          .no-print-bar { text-align: center; background: #e0e7ff; padding: 10px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
+          .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
+          @media print { .no-print-bar { display: none !important; } }
+        </style>
+      </head>
+      <body>
+        <div class="no-print-bar">
+          <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】憑證</button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
-            <h3 className="text-lg font-bold mb-1">1. 人員考勤匯總表</h3>
-            <div className="space-y-2.5 mb-5 mt-auto">
-              <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400">結算月份</span>
-                <input type="month" value={attendanceYearMonth} onChange={(e) => setAttendanceYearMonth(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer" />
-              </div>
-              <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400">計畫單位</span>
-                <select value={attendanceSelectedUnit} onChange={(e) => setAttendanceSelectedUnit(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer">
-                  <option value="ALL">全部單位 (ALL)</option>
-                  {allExistingUnits.map(unit => <option key={unit} value={unit}>{unit}</option>)}
-                </select>
-              </div>
+        ${pdfPagesHtml}
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '', 'width=1100,height=850');
+    printWindow.document.write(printContent); printWindow.document.close();
+    setTimeout(() => printWindow.focus(), 500);
+    showMessage('success', `✅ 已成功優化 A4 核銷憑證，解決跨天字串溢出。`);
+  } catch (error) {
+    console.error("生成考勤憑證發生致命錯誤:", error);
+    showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
+  } finally {
+    setIsLoadingAttendance(false);
+  }
+};
+
+// ================= 功能：2. 異動與空缺紀錄表 =================
+const exportVacancyReportPDF = () => {
+  if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
+  if (!startDate || !endDate) return showMessage('error', '請先設定報表區間。');
+
+  const startMs = new Date(startDate).getTime();
+  const endMs = new Date(endDate).getTime();
+  const projStartMs = projectStartDate ? new Date(projectStartDate).getTime() : 0;
+
+  if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
+
+  const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
+  const getUnitWeight = (unit) => unitWeights[unit] || 99;
+  const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
+  const getRoleWeight = (role) => roleWeights[role] || 99;
+
+  const activePersonnelChanges = [];
+  personnel.forEach(p => {
+    const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
+    const validHistory = (p.history || []).filter(h => {
+        if (!h.unit || !h.role || !h.startDate) return false;
+        const hStartMs = new Date(h.startDate).getTime();
+        const hEndMs = h.endDate ? new Date(h.endDate).getTime() : (p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity);
+        return hEndMs >= projStartMs && hStartMs <= endMs;
+    }).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+    if (validHistory.length > 0) {
+       const events = [];
+       validHistory.forEach((h, idx) => {
+           if (idx === 0) {
+               const effectiveStartMs = Math.max(new Date(h.startDate).getTime(), pOnboardMs, projStartMs);
+               events.push(`${new Date(effectiveStartMs).toISOString().split('T')[0]} 擔任 (${h.unit}) (${h.role})`);
+           } else {
+               events.push(`${h.startDate} 擔任 (${h.unit}) (${h.role})`);
+           }
+       });
+       if (p.contractEnd) {
+           const exitD = new Date(p.contractEnd); exitD.setDate(exitD.getDate() + 1);
+           if (exitD.getTime() >= startMs && exitD.getTime() <= endMs) events.push(`${exitD.toISOString().split('T')[0]} 離職`);
+       }
+       activePersonnelChanges.push({ name: p.name, unit: validHistory[0].unit, role: validHistory[0].role, events: events });
+    }
+  });
+
+  activePersonnelChanges.sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role)));
+
+  const roleGroups = {};
+  requirements.forEach(req => {
+      const key = `${req.unit}::${req.position}`;
+      if (!roleGroups[key]) roleGroups[key] = { unit: req.unit, role: req.position, reqs: [], segments: [] };
+      roleGroups[key].reqs.push({ count: parseInt(req.count, 10) || 1, sMs: req.startDate ? new Date(req.startDate).getTime() : 0, eMs: req.endDate ? new Date(req.endDate).getTime() : Infinity, pMs: req.penaltyStartDate ? new Date(req.penaltyStartDate).getTime() : (req.startDate ? new Date(req.startDate).getTime() : 0) });
+  });
+
+  personnel.forEach(p => {
+      const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0; const pEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+      (p.history || []).forEach(h => {
+          if (!h.unit || !h.role) return; const key = `${h.unit}::${h.role}`;
+          if (roleGroups[key]) {
+              const hStartMs = new Date(h.startDate).getTime(); const hEndMs = Math.min(h.endDate ? new Date(h.endDate).getTime() : Infinity, pEndMs);
+              const effectiveStartMs = Math.max(hStartMs, pOnboardMs, projStartMs);
+              if (effectiveStartMs <= hEndMs && effectiveStartMs <= endMs) roleGroups[key].segments.push({ name: p.name, startMs: effectiveStartMs, endMs: hEndMs, startStr: new Date(effectiveStartMs).toISOString().split('T')[0], endStr: h.endDate ? h.endDate : (p.contractEnd ? p.contractEnd : '至今') });
+          }
+      });
+  });
+
+  const expandedSlots = []; const vacancyTables = [];
+  Object.values(roleGroups).sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role))).forEach(group => {
+      let maxReqCount = 0; const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs))); const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
+      if (groupStartLimitMs > groupEndLimitMs) return;
+      for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+          let dReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) dReq += r.count; }); maxReqCount = Math.max(maxReqCount, dReq);
+      }
+      const slots = Array.from({length: maxReqCount}, (_, i) => ({ unit: group.unit, role: group.role, slotIndex: i + 1, label: `員額 ${i + 1}`, occupants: [] })); const overstaffSlots = [];
+      group.segments.sort((a, b) => a.startMs - b.startMs).forEach(seg => {
+          let assigned = false;
+          for (let slot of slots) { const last = slot.occupants[slot.occupants.length - 1]; if (!last || last.endMs < seg.startMs) { slot.occupants.push(seg); assigned = true; break; } }
+          if (!assigned) {
+              for (let slot of overstaffSlots) { const last = slot.occupants[slot.occupants.length - 1]; if (!last || last.endMs < seg.startMs) { slot.occupants.push(seg); assigned = true; break; } }
+              if (!assigned) overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
+          }
+      });
+      [...slots, ...overstaffSlots].forEach(slot => {
+          const finalTimeline = []; let currentTime = groupStartLimitMs;
+          const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
+          sortedOccs.forEach(occ => {
+              if (occ.startMs > currentTime) { const vStart = currentTime; const vEnd = occ.startMs - 86400000; if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); }
+              finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr }); currentTime = occ.endMs + 86400000;
+          });
+          if (currentTime <= groupEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(groupEndLimitMs).toISOString().split('T')[0] });
+          slot.timeline = finalTimeline;
+      });
+      expandedSlots.push(...slots, ...overstaffSlots);
+      let currentVacancy = null; const vacancyPeriods = []; let totalPenaltyDays = 0; let totalGraceDays = 0;
+      for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+          let dailyReq = 0; let dailyPenaltyReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) { dailyReq += r.count; if (t >= r.pMs) dailyPenaltyReq += r.count; } });
+          if (dailyReq === 0) { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } continue; }
+          let activeCount = 0; group.segments.forEach(seg => { if (t >= seg.startMs && t <= seg.endMs) activeCount++; });
+          const missing = Math.max(0, dailyReq - activeCount); const penaltyMissing = Math.max(0, dailyPenaltyReq - activeCount); const graceMissing = missing - penaltyMissing;
+          if (missing > 0) {
+              totalPenaltyDays += penaltyMissing; totalGraceDays += graceMissing; const dStr = new Date(t).toISOString().split('T')[0];
+              if (!currentVacancy) currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 };
+              else if (currentVacancy.missing === missing && currentVacancy.penaltyMissing === penaltyMissing) { currentVacancy.end = dStr; currentVacancy.days++; }
+              else { vacancyPeriods.push(currentVacancy); currentVacancy = { start: dStr, end: dStr, missing, penaltyMissing, graceMissing, days: 1 }; }
+          } else { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } }
+      }
+      if (currentVacancy) vacancyPeriods.push(currentVacancy);
+      if (vacancyPeriods.length > 0) vacancyTables.push({ unit: group.unit, role: group.role, maxReq: maxReqCount, periods: vacancyPeriods, totalPenaltyDays, totalGraceDays });
+  });
+
+  const columnGroupedData = []; let currentUnitGroup = null; let currentRoleGroup = null; let posIndexCounter = 1;
+  expandedSlots.forEach(slot => {
+      if (!currentUnitGroup || currentUnitGroup.unit !== slot.unit) { currentUnitGroup = { unit: slot.unit, roles: [], rowSpan: 0 }; columnGroupedData.push(currentUnitGroup); currentRoleGroup = null; }
+      if (!currentRoleGroup || currentRoleGroup.role !== slot.role) { currentRoleGroup = { role: slot.role, slots: [], rowSpan: 0 }; currentUnitGroup.roles.push(currentRoleGroup); }
+      const slotRowSpan = Math.max(1, slot.timeline.length); currentRoleGroup.slots.push({ ...slot, rowSpan: slotRowSpan, posIndex: posIndexCounter++ });
+      currentRoleGroup.rowSpan += slotRowSpan; currentUnitGroup.rowSpan += slotRowSpan;
+  });
+
+  let table2Html = `
+    <h2 style="page-break-before: always; margin-top: 0;">二、 期間內各職位人員在職狀況 (按員額 Slot 拆分)</h2>
+    <table style="border: 2px solid #1e293b; border-collapse: collapse;">
+      <colgroup><col style="width: 45px;"><col style="width: 100px;"><col style="width: 110px;"><col style="width: 80px;"><col style="width: 90px;"><col style="width: 90px;"><col style="width: 90px;"></colgroup>
+      <tr style="border-bottom: 2px solid #1e293b;"><th>序號</th><th>單位</th><th>職位</th><th>員額編號</th><th>姓名/狀態</th><th>到職日</th><th>離職日</th></tr>
+  `;
+
+  columnGroupedData.forEach((uGroup, uIdx) => {
+      const isUnitStart = uIdx > 0;
+      uGroup.roles.forEach((rGroup, rIdx) => {
+          rGroup.slots.forEach((slot, sIdx) => {
+              const timeline = slot.timeline.length > 0 ? slot.timeline : [{ isEmpty: true }];
+              timeline.forEach((event, eIdx) => {
+                  const rowClasses = []; if (isUnitStart && rIdx === 0 && sIdx === 0 && eIdx === 0) rowClasses.push('unit-top-border');
+                  table2Html += `<tr class="${rowClasses.join(' ')}">`;
+                  if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center font-bold">${slot.posIndex}</td>`;
+                  if (rIdx === 0 && sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
+                  if (sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${rGroup.rowSpan}">${rGroup.role}</td>`;
+                  if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center">${slot.label}</td>`;
+                  if (event.isEmpty) { table2Html += `<td colspan="3" style="color:#94a3b8; text-align:center;">(此員額於期間內全段空缺)</td>`; }
+                  else if (event.isVacancy) { table2Html += `<td class="highlight font-bold">空缺</td><td class="highlight font-mono">${event.startStr}</td><td class="highlight font-mono">${event.endStr}</td>`; }
+                  else { const displayEnd = event.endStr === '至今' ? '' : event.endStr; table2Html += `<td><strong>${event.name}</strong></td><td class="font-mono">${event.startStr}</td><td class="font-mono">${displayEnd}</td>`; }
+                  table2Html += `</tr>`;
+              });
+          });
+      });
+  });
+  table2Html += `</table>`;
+
+  const vacancyGroupedData = []; let currentVacUnit = null;
+  vacancyTables.forEach(vt => {
+      if (!currentVacUnit || currentVacUnit.unit !== vt.unit) { currentVacUnit = { unit: vt.unit, rows: [], rowSpan: 0 }; vacancyGroupedData.push(currentVacUnit); }
+      currentVacUnit.rows.push(vt); currentVacUnit.rowSpan += Math.max(1, vt.periods.length);
+  });
+
+  let table3Html = `
+      <h2 style="page-break-before: always; margin-top: 0;">三、 職位空缺天數精算 (合併精算與違約判定)</h2>
+      <table style="border: 2px solid #1e293b; border-collapse: collapse;">
+        <colgroup><col style="width:100px;"><col style="width:110px;"><col style="width:70px;"><col><col style="width:80px;"><col style="width:80px;"></colgroup>
+        <tr style="border-bottom: 2px solid #1e293b;"><th>單位</th><th>職位</th><th class="text-center">編制</th><th>確切空缺日期區間 (合併計算)</th><th class="text-right">違約空窗<br/>(人天)</th><th class="text-right">免罰寬限<br/>(人天)</th></tr>
+  `;
+
+  if (vacancyTables.length === 0) {
+      table3Html += '<tr><td colspan="6" class="text-center">此期間無 any 人力空窗，配置完全合規。</td></tr>';
+  } else {
+      vacancyGroupedData.forEach((uGroup, uIdx) => {
+          const isUnitStart = uIdx > 0;
+          uGroup.rows.forEach((vt, vtIdx) => {
+              const periods = vt.periods.length > 0 ? vt.periods : [null];
+              periods.forEach((vp, pIdx) => {
+                  const rowClasses = []; if (isUnitStart && vtIdx === 0 && pIdx === 0) rowClasses.push('unit-top-border');
+                  table3Html += `<tr class="${rowClasses.join(' ')}">`;
+                  if (vtIdx === 0 && pIdx === 0) table3Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
+                  if (pIdx === 0) { 
+                    table3Html += `<td rowspan="${vt.periods.length}">${vt.role}</td>`;
+                    table3Html += `<td rowspan="${vt.periods.length}" class="text-center">${vt.maxReq} 人</td>`; 
+                  }
+                  if (vp) { table3Html += `<td>${vp.start} ~ ${vp.end} <span style="font-size:10px; color:#64748b;">(少 ${vp.missing}人)</span></td><td class="text-right highlight font-bold">${vp.penaltyMissing * vp.days > 0 ? vp.penaltyMissing * vp.days : '-'}</td><td class="text-right grace">${vp.graceMissing * vp.days > 0 ? vp.graceMissing * vp.days : '-'}</td>`; }
+                  table3Html += `</tr>`;
+              });
+          });
+      });
+      table3Html += `<tr style="background:#f8fafc; font-weight:bold; border-top: 2px solid #1e293b;"><td colspan="4" class="text-right">累計加總：</td><td class="text-right highlight font-bold" style="font-size:15px;">${vacancyTables.reduce((acc, vt) => acc + vt.totalPenaltyDays, 0)}</td><td class="text-right grace" style="font-size:15px;">${vacancyTables.reduce((acc, vt) => acc + vt.totalGraceDays, 0)}</td></tr>`;
+  }
+  table3Html += `</table>`;
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-300">
+      {message && (
+        <div className={`p-4 rounded-xl border flex items-start shadow-sm animate-in slide-in-from-top-2 ${message.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+          <span className="text-sm font-bold">{message.text}</span>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">核銷作業報表中心</h2>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
+          <h3 className="text-lg font-bold mb-1">1. 人員考勤匯總表</h3>
+          <div className="space-y-2.5 mb-5 mt-auto">
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400">結算月份</span>
+              <input type="month" value={attendanceYearMonth} onChange={(e) => setAttendanceYearMonth(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer" />
             </div>
-            <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 A4 憑證 PDF</span></button>
-          </div>
-          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
-            <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
-            <div className="space-y-2.5 mb-5 mt-auto">
-              <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-orange-600">精算起始日</span>
-                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
-              </div>
-              <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-orange-600">精算結束日</span>
-                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
-              </div>
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400">計畫單位</span>
+              <select value={attendanceSelectedUnit} onChange={(e) => setAttendanceSelectedUnit(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer">
+                <option value="ALL">全部單位 (ALL)</option>
+                {allExistingUnits.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+              </select>
             </div>
-            <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 PDF (精算明細版)</span></button>
           </div>
+          <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 A4 憑證 PDF</span></button>
+        </div>
+
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
+          <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
+          <div className="space-y-2.5 mb-5 mt-auto">
+            <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600">精算起始日</span>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
+            </div>
+            <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600">精算結束日</span>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
+            </div>
+          </div>
+          <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 PDF (精算明細版)</span></button>
         </div>
       </div>
-    );
-  };
+    </div>
+  );
 }
