@@ -16,7 +16,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
 
-  // 動態假別別名映射池狀態 (預設同步考勤模組核心字典)
+  // 動態假別別名映射池狀態 (同步考勤模組核心字典)
   const [leaveAliasMapping, setLeaveAliasMapping] = useState([
     { alias: '休假', official: '特休' },
     { alias: '補休假', official: '補休' }
@@ -114,7 +114,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return rangeStr.replace(/\s+/g, '');
   };
 
-  // 從人員名冊中完全動態推導目前專案中所有不重複的計畫單位清單，不再寫死
+  // 完全動態推導目前專案名冊中所有不重複的計畫單位清單，不再寫死
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
   
   const getUnitColorClass = (unitName) => {
@@ -128,7 +128,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 功能：1. 人員考勤匯總表 (動態歷史編制核銷凭证版) =================
+  // ================= 功能：1. 人員考勤匯總表 =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
@@ -217,10 +217,10 @@ export default function ReportsModule({ user, selectedProject }) {
           let proxySegments = [];
 
           if (dayRecords.length > 0) {
-            const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '');
-            const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '');
-            checkIn = validIn ? validIn.checkIn : (dayRecords[0].checkIn || "");
-            checkOut = validOut ? validOut.checkOut : (dayRecords[0].checkOut || "");
+            const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '' && r.checkIn !== '--');
+            const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '' && r.checkOut !== '--');
+            checkIn = validIn ? validIn.checkIn : "";
+            checkOut = validOut ? validOut.checkOut : "";
             
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
 
@@ -241,7 +241,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
               if (lType) {
                 const cleanedTime = cleanTimeRangeOnly(rec.leaveRangeInfo);
-                // 💡 防重複塞入相同假別區間的防重保護
                 if (!dailyLeaveRows.some(item => item.type === lType && item.cleanTime === cleanedTime)) {
                   dailyLeaveRows.push({ type: lType, rawTime: rec.leaveRangeInfo, cleanTime: cleanedTime });
                 }
@@ -253,10 +252,12 @@ export default function ReportsModule({ user, selectedProject }) {
           let primaryLeaveType = dailyLeaveRows.length > 0 ? dailyLeaveRows[0].type : "";
 
           if (isOffDay) {
-            if (checkIn || checkOut) finalStatusText = "假日加班";
+            if ((checkIn && checkIn !== "--") || (checkOut && checkOut !== "--")) finalStatusText = "假日加班";
             else finalStatusText = "例假日/放假";
           } else {
             totalDutyDays++; 
+            
+            // 💡 【核心重構：翻轉優先權】：只要當天有請假紀錄，優先進入請假工時交叉，杜絕空打卡被攔截為曠職
             if (primaryLeaveType) {
               finalStatusText = `已請假 (${primaryLeaveType})`;
               
@@ -267,7 +268,6 @@ export default function ReportsModule({ user, selectedProject }) {
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
                 
-                // 💡 鋼鐵級安全拆分保護：預先宣告防堵任何 undefined 穿透
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
                   if (parts.length >= 2 && parts[0] && parts[1]) {
@@ -282,7 +282,6 @@ export default function ReportsModule({ user, selectedProject }) {
                   currentDayLeaveHours = 4;
                 }
 
-                // 容錯安全閥：限制請假小時最高不超過 8 小時
                 if (currentDayLeaveHours > 8 || currentDayLeaveHours <= 0) {
                   currentDayLeaveHours = 8;
                 }
@@ -303,7 +302,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
             } else if ((!checkIn || checkIn === "" || checkIn === "--") && (!checkOut || checkOut === "" || checkOut === "--")) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
-            } else if (!checkIn || checkIn === "--" || !checkOut || checkOut === "--") {
+            } else if (!checkIn || checkIn === "" || checkIn === "--" || !checkOut || checkOut === "" || checkOut === "--") {
               finalStatusText = "異常: 缺打卡"; rowBgStyle = "background-color: #fff7ed;"; 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
@@ -486,8 +485,8 @@ export default function ReportsModule({ user, selectedProject }) {
         showMessage('error', '彈窗攔截器已啟動，請允許本站開窗以進行核銷預覽。');
       }
     } catch (error) {
-      console.error("生成考勤憑證發生處理錯誤:", error);
-      showMessage('error', '⚠️ 系統核心精算異常，請檢查資料結構格式。');
+      console.error("生成考勤憑證發生致命錯誤:", error);
+      showMessage('error', '⚠️ 報表精算核心執行中斷，請回報系統承辦人員。');
     } finally {
       setIsLoadingAttendance(false);
     }
@@ -715,8 +714,7 @@ export default function ReportsModule({ user, selectedProject }) {
     if (printWindow) {
       printWindow.document.write(printContent);
       printWindow.document.close();
-      setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', '✅ 異動與空缺紀錄表已產出。');
+      setTimeout(() => printWindow.focus(), 500); showMessage('success', '✅ 異動與空缺紀錄表已產出。');
     }
   };
 
@@ -728,7 +726,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
-      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
+      <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm bg-white dark:bg-slate-800">
         <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
           <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業與報表中心
         </h2>
