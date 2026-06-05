@@ -127,7 +127,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 功能：1. 人員考勤匯總表 (動態歷史編制核銷凭证版) =================
+  // ================= 功能：1. 人員考勤匯總表 =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
@@ -262,10 +262,13 @@ export default function ReportsModule({ user, selectedProject }) {
 
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
+                // 💡 修正防呆保護：確認時間格式包含 ~ 才可以執行分割精算，避免未請假或格式不符時陣列 undefined 造成崩潰
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
-                  const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                  currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                  if (parts[0] && parts[1]) {
+                    const effectiveMins = getEffectiveMinutes(parts[0].trim(), parts[1].trim());
+                    currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                  }
                 } else if (lRow.rawTime && (lRow.rawTime.includes('4小時') || lRow.rawTime.includes('半天'))) {
                   currentDayLeaveHours = 4;
                 }
@@ -285,9 +288,9 @@ export default function ReportsModule({ user, selectedProject }) {
                 totalLeaveDeduction += (currentDayLeaveHours * hourlyWage * deductionWeight);
               });
 
-            } else if (!checkIn && !checkOut) {
+            } else if ((!checkIn || checkIn === "" || checkIn === "--") && (!checkOut || checkOut === "" || checkOut === "--")) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
-            } else if (!checkIn || !checkOut) {
+            } else if (!checkIn || checkIn === "--" || !checkOut || checkOut === "--") {
               finalStatusText = "異常: 缺打卡"; rowBgStyle = "background-color: #fff7ed;"; 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
@@ -465,7 +468,7 @@ export default function ReportsModule({ user, selectedProject }) {
       setTimeout(() => printWindow.focus(), 500);
       showMessage('success', `✅ 已成功優化 A4 核銷憑證。`);
     } catch (error) {
-      console.error("生成考勤憑證發生致命錯誤:", error);
+      console.error("生成考勤憑證發生處理錯誤:", error);
       showMessage('error', '考勤憑證生成失敗。');
     } finally {
       setIsLoadingAttendance(false);
@@ -703,7 +706,6 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* 💡 頂部主面板：補上正確的深色模式白字 text-slate-800 dark:text-white */}
       <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
         <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
           <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業與報表中心
@@ -718,7 +720,6 @@ export default function ReportsModule({ user, selectedProject }) {
           <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
           <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
           
-          {/* 💡 標題與內文：全面補上 dark:text-white / dark:text-slate-300 */}
           <h3 className="text-lg font-bold mb-1 text-slate-800 dark:text-white">1. 人員考勤匯總表</h3>
           <p className="text-xs text-slate-400 dark:text-slate-300 leading-relaxed mb-4">按日追蹤全月異動軌跡與彈性工時，一鍵篩選出特定組別之 A4 法定核銷憑證。</p>
           
@@ -726,7 +727,6 @@ export default function ReportsModule({ user, selectedProject }) {
             {/* 月份選取 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
-              {/* 💡 輸入框：精準強制深色模式下維持白字 text-slate-700 dark:text-white */}
               <input 
                 type="month" 
                 value={attendanceYearMonth} 
@@ -737,7 +737,6 @@ export default function ReportsModule({ user, selectedProject }) {
             {/* 單位過濾 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
-              {/* 💡 下拉選單：修正深色模式黑底黑字選不到的問題 text-slate-800 dark:text-white */}
               <select 
                 value={attendanceSelectedUnit} 
                 onChange={(e) => setAttendanceSelectedUnit(e.target.value)} 
