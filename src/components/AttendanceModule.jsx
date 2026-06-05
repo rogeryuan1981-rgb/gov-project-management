@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Upload, CalendarDays, ShieldAlert, AlertCircle, ChevronRight, CheckCircle2, Sliders, ToggleLeft, ToggleRight, Check, X, UserCheck, Save, Calendar, Trash2, Edit2 } from 'lucide-react';
+import { Clock, Upload, CalendarDays, ShieldAlert, AlertCircle, ChevronRight, CheckCircle2, Sliders, ToggleLeft, ToggleRight, Check, X, UserCheck, Save, Calendar, Trash2, Edit2, Plus } from 'lucide-react';
 import { collection, onSnapshot, doc, getFirestore, query, where, updateDoc, setDoc, getDoc } from 'firebase/firestore'; 
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
@@ -39,6 +39,14 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [exemptLeaveTypes, setExemptLeaveTypes] = useState(['特休', '補休']);
   const [exemptUnits, setExemptUnits] = useState([]);
 
+  // 💡 【全新擴充狀態】：使用者可自行定義擴充的假別對齊字典別名物件
+  const [leaveAliasMapping, setLeaveAliasMapping] = useState([
+    { alias: '休假', official: '特休' },
+    { alias: '補休假', official: '補休' }
+  ]);
+  const [newAliasInput, setNewAliasInput] = useState('');
+  const [newOfficialSelect, setNewOfficialSelect] = useState('特休');
+
   const ALL_LEAVE_TYPES = ['特休', '事假', '病假', '喪假', '公出', '補休'];
 
   // 控制特定派代明細列的手動新表單展開狀態
@@ -69,8 +77,8 @@ export default function AttendanceModule({ user, selectedProject }) {
     if (endM <= startM) return 0;
 
     let totalMinutes = endM - startM;
-    const breakStart = 12 * 60 + 30; // 750 分鐘
-    const breakEnd = 13 * 60 + 30;   // 810 分鐘
+    const breakStart = 12 * 60 + 30; 
+    const breakEnd = 13 * 60 + 30;   
 
     const overlapStart = Math.max(startM, breakStart);
     const overlapEnd = Math.min(endM, breakEnd);
@@ -81,7 +89,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 💡 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格並相容 C 表民國曆
+  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格並相容 C 表民國曆
   const cleanTimeRangeOnly = (rangeStr) => {
     if (!rangeStr) return '';
     const timePattern = /(\d{2}:\d{2})/g;
@@ -135,7 +143,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
 
   // =========================================================================
-  // 🧠 核心重構：代理異常分析引擎 (同步清洗「休假 $\rightarrow$ 特休」與「休息工時扣除」)
+  // 🧠 核心重構：動態自訂假別別名歸納對齊之代理異常精算引擎
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -159,11 +167,9 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        // 抓取當日該同仁所有考勤流水號
         const dayRecords = attendanceRecords.filter(r => r.name === person.name && r.date === dateStr);
         
         if (dayRecords.length > 0) {
-          // 💡 智慧映射：優先分析出清洗後的假別名稱
           let lType = dayRecords.find(r => r.leaveType)?.leaveType || "";
           if (!lType) {
             const rangeRec = dayRecords.find(r => r.leaveRangeInfo && (r.leaveRangeInfo.includes('假') || r.leaveRangeInfo.includes('休')));
@@ -172,16 +178,18 @@ export default function AttendanceModule({ user, selectedProject }) {
               else if (rangeRec.leaveRangeInfo.includes('病假')) lType = '病假';
               else if (rangeRec.leaveRangeInfo.includes('喪假')) lType = '喪假';
               else if (rangeRec.leaveRangeInfo.includes('休')) lType = '特休';
+              else if (rangeRec.leaveRangeInfo.includes('補休')) lType = '補休';
             }
           }
 
-          // 💡 修正3：不論來源是「休假」還是「特休」，代理異常精算一律對齊清洗為「特休」
-          if (lType === '休假' || lType === '特休') {
-            lType = '特休';
+          // 💡 智慧動態清洗字典對齊線線：根據使用者在畫面上設定的 Mapping 動態對齊
+          const matchedMapping = leaveAliasMapping.find(m => m.alias === lType);
+          if (matchedMapping) {
+            lType = matchedMapping.official; // 動態映射為官方核心假別 (如 補休假 -> 補休)
           }
 
           monthLeaveMap[d] = lType || null;
-          monthRecordMap[d] = dayRecords[0]; // 儲存主參考流水號
+          monthRecordMap[d] = dayRecords[0]; 
         } else {
           monthLeaveMap[d] = null;
           monthRecordMap[d] = null;
@@ -230,7 +238,6 @@ export default function AttendanceModule({ user, selectedProject }) {
               const requiredMinutes = 8 * 60;
               let totalCoveredMinutes = 0;
 
-              // 讀取當日所有流水號覆蓋的分段代理時段數據
               const dayRecords = attendanceRecords.filter(r => r.name === person.name && r.date === dateStr);
               let segments = [];
               dayRecords.forEach(r => {
@@ -252,7 +259,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                 }
               } else {
                 segments.forEach(seg => {
-                  // 💡 修正：精準套用 12:30 - 13:30 中午休息扣除工時函數
                   totalCoveredMinutes += getEffectiveMinutes(seg.startHour, seg.endHour);
                 });
               }
@@ -290,26 +296,23 @@ export default function AttendanceModule({ user, selectedProject }) {
 
   const { exceptionHours: totalProxyExceptionHours, exceptionDetailsList: proxyExceptionList } = getProxyAnalysisReport();
 
-  const handleToggleExemptLeave = (type) => {
-    if (exemptLeaveTypes.includes(type)) {
-      setExemptLeaveTypes(exemptLeaveTypes.filter(t => t !== type));
-    } else {
-      setExemptLeaveTypes([...exemptLeaveTypes, type]);
+  const handleAddAliasRecord = () => {
+    if (!newAliasInput.trim()) return;
+    if (leaveAliasMapping.some(m => m.alias === newAliasInput.trim())) {
+      alert("此別名已經定義過，請勿重複添加！");
+      return;
     }
+    setLeaveAliasMapping([...leaveAliasMapping, { alias: newAliasInput.trim(), official: newOfficialSelect }]);
+    setNewAliasInput('');
   };
 
-  const handleToggleExemptUnit = (unitName) => {
-    if (exemptUnits.includes(unitName)) {
-      setExemptUnits(exemptUnits.filter(u => u !== unitName));
-    } else {
-      setExemptUnits([...exemptUnits, unitName]);
-    }
+  const handleRemoveAliasRecord = (alias) => {
+    setLeaveAliasMapping(leaveAliasMapping.filter(m => m.alias !== alias));
   };
 
-  // 新增代理人分段時段
+  // 新增代理時段
   const handleSaveProxyAssignment = async (item) => {
     if (!assignForm.proxyName.trim()) { alert("請填寫代理人姓名！"); return; }
-    
     const startM = timeToMinutes(assignForm.startHour);
     const endM = timeToMinutes(assignForm.endHour);
     if (endM <= startM) { alert("錯誤：代理結束時間必須晚於起始時間！"); return; }
@@ -317,7 +320,6 @@ export default function AttendanceModule({ user, selectedProject }) {
     try {
       const attRecordsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const docRef = doc(attRecordsRef, item.realDocId);
-      
       const docSnap = await getDoc(docRef);
       const baseData = docSnap.exists() ? docSnap.data() : {};
 
@@ -331,7 +333,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       const updatedSegments = [...currentSegments, newSegment];
 
-      const updatedProxyData = {
+      await setDoc(docRef, {
         ...baseData,
         projectId: selectedProject,
         month: todayYearMonth,
@@ -342,24 +344,15 @@ export default function AttendanceModule({ user, selectedProject }) {
         proxyName: updatedSegments.map(s => s.proxyName).join(', '), 
         isManualMaintained: true, 
         updatedAt: new Date().getTime()
-      };
-
-      await setDoc(docRef, updatedProxyData, { merge: true });
+      }, { merge: true });
       setAssignForm({ proxyName: '', startHour: '08:30', endHour: '17:30' });
-      alert(`✅ 成功為 ${item.name} 新增一段代理時段：${newSegment.startHour}~${newSegment.endHour}！`);
-    } catch (e) {
-      console.error(e);
-      alert("指派代理時段失敗");
-    }
+      alert(`✅ 成功為 ${item.name} 新增排代時段！`);
+    } catch (e) { alert("指派代理失敗"); }
   };
 
   // 修改分段代理人
   const handleUpdateSubSegment = async (item, subIdx) => {
     if (!subEditForm.proxyName.trim()) { alert("代理人名不可為空！"); return; }
-    const startM = timeToMinutes(subEditForm.startHour);
-    const endM = timeToMinutes(subEditForm.endHour);
-    if (endM <= startM) { alert("結束時間錯誤！"); return; }
-
     try {
       const attRecordsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const docRef = doc(attRecordsRef, item.realDocId);
@@ -368,28 +361,17 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       const baseData = docSnap.data();
       const segments = [...(baseData.proxySegments || [])];
-      
-      segments[subIdx] = {
-        proxyName: subEditForm.proxyName.trim(),
-        startHour: subEditForm.startHour,
-        endHour: subEditForm.endHour,
-        updatedAt: new Date().getTime()
-      };
+      segments[subIdx] = { proxyName: subEditForm.proxyName.trim(), startHour: subEditForm.startHour, endHour: subEditForm.endHour, updatedAt: new Date().getTime() };
 
-      await updateDoc(docRef, {
-        proxySegments: segments,
-        proxyName: segments.map(s => s.proxyName).join(', '),
-        updatedAt: new Date().getTime()
-      });
-
+      await updateDoc(docRef, { proxySegments: segments, proxyName: segments.map(s => s.proxyName).join(', '), updatedAt: new Date().getTime() });
       setEditingSubRecordIdx(null);
-      alert("✅ 代理時段修改維護成功！");
+      alert("✅ 代理時段維護成功！");
     } catch (e) { console.error(e); }
   };
 
   // 刪除分段代理人
   const handleDeleteSubSegment = async (item, subIdx) => {
-    if (!confirm("確定要刪除這段代理時間歷程嗎？")) return;
+    if (!confirm("確定要刪除這段代理嗎？")) return;
     try {
       const attRecordsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const docRef = doc(attRecordsRef, item.realDocId);
@@ -398,13 +380,8 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       const baseData = docSnap.data();
       const segments = (baseData.proxySegments || []).filter((_, i) => i !== subIdx);
-
-      await updateDoc(docRef, {
-        proxySegments: segments,
-        proxyName: segments.map(s => s.proxyName).join(', '),
-        updatedAt: new Date().getTime()
-      });
-      alert("🗑️ 代理時段移除成功，時數已釋出。");
+      await updateDoc(docRef, { proxySegments: segments, proxyName: segments.map(s => s.proxyName).join(', '), updatedAt: new Date().getTime() });
+      alert("🗑️ 代理時段移除成功。");
     } catch (e) { console.error(e); }
   };
 
@@ -422,67 +399,31 @@ export default function AttendanceModule({ user, selectedProject }) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div 
-          onClick={() => totalProxyExceptionHours > 0 && setIsProxyExceptionDetailsOpen(true)}
-          className={`bg-white dark:bg-slate-800 p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-all ${
-            totalProxyExceptionHours > 0 
-              ? 'border-orange-200 dark:border-orange-500/30 cursor-pointer hover:border-orange-400 dark:hover:border-orange-500/50 group' 
-              : 'border-slate-200 dark:border-slate-700/50'
-          }`}
-        >
+        <div onClick={() => totalProxyExceptionHours > 0 && setIsProxyExceptionDetailsOpen(true)} className={`bg-white dark:bg-slate-800 p-6 rounded-2xl border shadow-sm flex items-center justify-between transition-all ${totalProxyExceptionHours > 0 ? 'border-orange-200 dark:border-orange-500/30 cursor-pointer hover:border-orange-400 dark:hover:border-orange-500/50 group' : 'border-slate-200 dark:border-slate-700/50'}`}>
           <div className="flex items-center space-x-5">
-            <div className={`p-3.5 rounded-xl transition-transform ${totalProxyExceptionHours > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}>
-              <AlertCircle size={28} />
-            </div>
+            <div className={`p-3.5 rounded-xl transition-transform ${totalProxyExceptionHours > 0 ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 group-hover:scale-110' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400 dark:text-slate-500'}`}><AlertCircle size={28} /></div>
             <div>
               <p className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-1">代理異常</p>
-              <p className={`text-3xl font-black ${totalProxyExceptionHours > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>
-                {totalProxyExceptionHours} <span className="text-sm font-medium text-slate-500">小時</span>
-              </p>
+              <p className={`text-3xl font-black ${totalProxyExceptionHours > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-800 dark:text-white'}`}>{totalProxyExceptionHours} <span className="text-sm font-medium text-slate-500">小時</span></p>
             </div>
           </div>
-          {totalProxyExceptionHours > 0 && (
-            <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center space-x-1">
-              <span className="text-xs font-bold">點擊補登代理時段</span>
-              <ChevronRight size={14} />
-            </div>
-          )}
+          {totalProxyExceptionHours > 0 && <div className="text-orange-500 dark:text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center space-x-1"><span className="text-xs font-bold">點擊補登代理時段</span><ChevronRight size={14} /></div>}
         </div>
         
-        <div 
-          onClick={() => setIsCalendarSettingsOpen(true)}
-          className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group"
-        >
+        <div onClick={() => setIsCalendarSettingsOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <CalendarDays size={24} />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與法定假別設定</p>
-              <p className="text-sm font-black text-slate-800 dark:text-white">點擊設定應上班日曆與假期</p>
-            </div>
+            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
+            <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與法定假別設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定應上班日曆與假期</p></div>
           </div>
-          <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
-            <ChevronRight size={16} />
-          </div>
+          <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
         </div>
 
-        <div 
-          onClick={() => setIsProxySettingsModalOpen(true)}
-          className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group"
-        >
+        <div onClick={() => setIsProxySettingsModalOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <Sliders size={24} />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理與合規防呆設定</p>
-              <p className="text-sm font-black text-slate-800 dark:text-white">點擊設定連續與累計請假天數</p>
-            </div>
+            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
+            <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理與合規防呆設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定連續與累計請假天數</p></div>
           </div>
-          <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
-            <ChevronRight size={16} />
-          </div>
+          <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
         </div>
       </div>
 
@@ -491,9 +432,7 @@ export default function AttendanceModule({ user, selectedProject }) {
           <h3 className="font-bold text-slate-800 dark:text-white mb-1">匯入最新打卡 CSV</h3>
           <p className="text-sm text-slate-500">支援 A/C 表格式，系統會自動比對並鎖定人工補登資料。</p>
         </div>
-        <div className="flex items-center space-x-3 shrink-0">
-          <button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button>
-        </div>
+        <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
       <div className="flex border-b border-slate-200 dark:border-slate-700 space-x-1 p-1 rounded-xl w-fit bg-slate-100/60 dark:bg-slate-900/40">
@@ -502,28 +441,24 @@ export default function AttendanceModule({ user, selectedProject }) {
       </div>
 
       <div className="attendance-sub-tab-content">
-        {attendanceSubTab === 'exception' ? (
-          <AttendanceExceptionManager selectedProject={selectedProject} personnel={personnel} />
-        ) : (
+        {attendanceSubTab === 'exception' ? <AttendanceExceptionManager selectedProject={selectedProject} personnel={personnel} /> : (
           <div className="bg-white dark:bg-slate-800 p-8 text-center rounded-2xl border dark:border-slate-700">
-             <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">您可以一鍵展開包含特赦鎖定狀態的 1~31 天跨表差假對齊大矩陣：</p>
+             <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">您可以一鍵展開包含特赦鎖定狀態的差假總覽：</p>
              <button onClick={() => setIsAttendanceViewOpen(true)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-xl transition-all">🔍 開啟全月覆核大彈窗</button>
           </div>
         )}
       </div>
 
-      {/* 代理異常維護開窗 */}
+      {/* 代理異常案件維護彈窗 */}
       {isProxyExceptionDetailsOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[85vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
               <div>
                 <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><ShieldAlert size={20} className="mr-2 text-orange-500" />特定假別代理異常案件審查中心</h3>
-                <p className="text-xs text-slate-400 mt-0.5">系統已啟動多重時段覆蓋率交叉精算，必須累積有效代理滿 8 小時（480分鐘）該日異常方可完全滑出本清單。</p>
               </div>
               <button onClick={() => { setIsProxyExceptionDetailsOpen(false); setAssigningId(null); setEditingSubRecordIdx(null); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
             </div>
-            
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
               <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800">
                 <table className="w-full text-left border-collapse table-fixed text-xs">
@@ -532,7 +467,7 @@ export default function AttendanceModule({ user, selectedProject }) {
                       <th className="py-3 px-4 w-[100px]">請假日期</th>
                       <th className="py-3 px-4 w-[130px]">姓名/組別</th>
                       <th className="py-3 px-4 w-[85px]">假別屬性</th>
-                      <th className="py-3 px-4">系統超標及代理狀態歷程原因</th>
+                      <th className="py-3 px-4">系統差假代理核對歷程</th>
                       <th className="py-3 px-4 text-right w-[240px]">核心手動分段派代作業</th>
                     </tr>
                   </thead>
@@ -540,7 +475,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                     {proxyExceptionList.map(item => {
                       const isAssigning = assigningId === item.uniqueId;
                       const currentSubSegments = item.proxySegments || [];
-                      
                       return (
                         <tr key={item.uniqueId} className={`hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors ${isAssigning ? 'bg-indigo-50/40 dark:bg-indigo-950/20' : ''}`}>
                           <td className="py-4 px-4 font-bold font-mono text-slate-900 dark:text-slate-100">{item.date}</td>
@@ -550,82 +484,51 @@ export default function AttendanceModule({ user, selectedProject }) {
                               <span className="text-[10px] text-slate-400 font-semibold">{item.unit}</span>
                             </div>
                           </td>
-                          <td className="py-4 px-4"><span className="px-2 py-0.5 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-md font-bold border border-red-100 dark:border-red-500/20">{item.leaveType}</span></td>
-                          
-                          <td className="py-4 px-4 space-y-3 vertical-align-top">
+                          <td className="py-4 px-4"><span className="px-2 py-0.5 bg-red-50 text-red-700 rounded-md font-bold">{item.leaveType}</span></td>
+                          <td className="py-4 px-4 space-y-3">
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-dashed">
-                              <div className="text-slate-700 dark:text-slate-300 font-semibold leading-relaxed">{item.triggerReason}</div>
-                              <div className="text-[10px] text-orange-600 dark:text-orange-400 font-extrabold mt-1">⚠️ 今日狀態：仍缺少 {item.uncoveredHours} 小時尚未指派完全。</div>
+                              <div>{item.triggerReason}</div>
+                              <div className="text-[10px] text-orange-600 font-extrabold mt-1">⚠️ 今日狀態：仍缺少 {item.uncoveredHours} 小時尚未指派完全。</div>
                             </div>
-
-                            {/* 已維護之代理歷程面板 */}
                             {currentSubSegments.length > 0 && (
-                              <div className="bg-slate-100/70 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5 animate-in fade-in">
-                                <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 flex items-center">
-                                  <Calendar size={12} className="mr-1 text-emerald-500" /> 已指派之分段代理歷程 ({currentSubSegments.length} 筆)：
-                                </div>
-                                <div className="space-y-1.5">
-                                  {currentSubSegments.map((subSeg, subIdx) => {
-                                    const isSubEditing = editingSubRecordIdx === `${item.uniqueId}_${subIdx}`;
-                                    return (
-                                      <div key={subIdx} className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 border rounded-lg text-[11px] shadow-2xs group/sub">
-                                        {isSubEditing ? (
-                                          <div className="flex items-center gap-1.5 w-full animate-in fade-in duration-150">
-                                            <input type="text" value={subEditForm.proxyName} onChange={e => setSubEditForm({...subEditForm, proxyName: e.target.value})} className="px-1.5 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-xs w-16 font-bold" />
-                                            <input type="text" value={subEditForm.startHour} onChange={e => setSubEditForm({...subEditForm, startHour: e.target.value})} className="px-1 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-[10px] w-12 text-center font-mono" />
-                                            <span className="text-slate-400">~</span>
-                                            <input type="text" value={subEditForm.endHour} onChange={e => setSubEditForm({...subEditForm, endHour: e.target.value})} className="px-1 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-[10px] w-12 text-center font-mono" />
-                                            <div className="ml-auto flex space-x-1">
-                                              <button type="button" onClick={() => setEditingSubRecordIdx(null)} className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-[10px]">❌</button>
-                                              <button type="button" onClick={() => handleUpdateSubSegment(item, subIdx)} className="px-1.5 py-0.5 bg-emerald-600 text-white rounded font-bold text-[10px]">💾</button>
-                                            </div>
+                              <div className="bg-slate-100/70 dark:bg-slate-900 p-3 rounded-xl border space-y-1.5">
+                                {currentSubSegments.map((subSeg, subIdx) => {
+                                  const isSubEditing = editingSubRecordIdx === `${item.uniqueId}_${subIdx}`;
+                                  return (
+                                    <div key={subIdx} className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 border rounded-lg text-[11px] shadow-2xs group/sub">
+                                      {isSubEditing ? (
+                                        <div className="flex items-center gap-1.5 w-full">
+                                          <input type="text" value={subEditForm.proxyName} onChange={e => setSubEditForm({...subEditForm, proxyName: e.target.value})} className="px-1.5 py-0.5 border rounded w-16" />
+                                          <input type="text" value={subEditForm.startHour} onChange={e => setSubEditForm({...subEditForm, startHour: e.target.value})} className="px-1 py-0.5 border rounded w-12 text-center" />
+                                          <input type="text" value={subEditForm.endHour} onChange={e => setSubEditForm({...subEditForm, endHour: e.target.value})} className="px-1 py-0.5 border rounded w-12 text-center" />
+                                          <button type="button" onClick={() => handleUpdateSubSegment(item, subIdx)} className="px-1.5 py-0.5 bg-emerald-600 text-white rounded text-[10px]">💾</button>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <div><span className="font-extrabold text-indigo-600">{subSeg.proxyName}</span> <span className="text-slate-400">({subSeg.startHour}~{subSeg.endHour})</span></div>
+                                          <div className="flex space-x-1 opacity-0 group-hover/sub:opacity-100 transition-opacity">
+                                            <button type="button" onClick={() => { setEditingSubRecordIdx(`${item.uniqueId}_${subIdx}`); setSubEditForm({ proxyName: subSeg.proxyName, startHour: subSeg.startHour, endHour: subSeg.endHour }); }} className="text-slate-400 hover:text-indigo-600"><Edit2 size={11}/></button>
+                                            <button type="button" onClick={() => handleDeleteSubSegment(item, subIdx)} className="text-slate-400 hover:text-red-500"><Trash2 size={11}/></button>
                                           </div>
-                                        ) : (
-                                          <>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <span className="font-extrabold text-indigo-600 dark:text-indigo-400">{subSeg.proxyName}</span>
-                                              <span className="text-slate-400 font-mono">({subSeg.startHour}~{subSeg.endHour})</span>
-                                            </div>
-                                            <div className="flex items-center space-x-1 ml-auto sm:opacity-0 group-hover/sub:opacity-100 transition-opacity">
-                                              <button type="button" onClick={() => { setEditingSubRecordIdx(`${item.uniqueId}_${subIdx}`); setSubEditForm({ proxyName: subSeg.proxyName, startHour: subSeg.startHour, endHour: subSeg.endHour }); }} className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"><Edit2 size={11} /></button>
-                                              <button type="button" onClick={() => handleDeleteSubSegment(item, subIdx)} className="p-1 text-slate-400 hover:text-red-500 transition-colors"><Trash2 size={11} /></button>
-                                            </div>
-                                          </>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </td>
-
-                          <td className="py-4 px-4 text-right vertical-align-top">
+                          <td className="py-4 px-4 text-right">
                             {isAssigning ? (
-                              <div className="space-y-2 p-3 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-md text-left animate-in slide-in-from-top-2 duration-200 w-full">
-                                <div className="font-bold text-[11px] text-indigo-700 dark:text-indigo-400 border-b pb-1 mb-1">➕ 新增本段代理時段</div>
-                                <div>
-                                  <label className="block text-[9px] font-bold text-slate-400 mb-0.5">代理人姓名 *</label>
-                                  <input type="text" value={assignForm.proxyName} onChange={e => setAssignForm({...assignForm, proxyName: e.target.value})} placeholder="請輸入同仁姓名" className="w-full px-2 py-1 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-xs outline-none text-slate-800 dark:text-white font-bold" />
+                              <div className="space-y-2 p-3 bg-white dark:bg-slate-900 border rounded-xl w-full text-left">
+                                <input type="text" value={assignForm.proxyName} onChange={e => setAssignForm({...assignForm, proxyName: e.target.value})} placeholder="代理人姓名" className="w-full px-2 py-1 border text-xs" />
+                                <div className="grid grid-cols-2 gap-1">
+                                  <input type="text" value={assignForm.startHour} onChange={e => setAssignForm({...assignForm, startHour: e.target.value})} className="w-full px-1 py-0.5 text-center text-xs" />
+                                  <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} className="w-full px-1 py-0.5 text-center text-xs" />
                                 </div>
-                                <div className="grid grid-cols-2 gap-1.5">
-                                  <div>
-                                    <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(起)</label>
-                                    <input type="text" value={assignForm.startHour} onChange={e => setAssignForm({...assignForm, startHour: e.target.value})} placeholder="08:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(迄)</label>
-                                    <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} placeholder="16:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
-                                  </div>
-                                </div>
-                                <div className="flex justify-end space-x-1.5 pt-1.5 border-t">
-                                  <button type="button" onClick={() => setAssigningId(null)} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded text-[10px]">取消</button>
-                                  <button type="button" onClick={() => handleSaveProxyAssignment(item)} className="px-2 py-0.5 bg-indigo-600 text-white font-bold rounded text-[10px] flex items-center shadow-xs">儲存此段</button>
-                                </div>
+                                <div className="flex justify-end space-x-1"><button type="button" onClick={() => setAssigningId(null)} className="px-2 py-0.5 bg-slate-100 text-[10px]">取消</button><button type="button" onClick={() => handleSaveProxyAssignment(item)} className="px-2 py-0.5 bg-indigo-600 text-white text-[10px]">儲存</button></div>
                               </div>
-                            ) : (
-                              <button type="button" onClick={() => { setAssigningId(item.uniqueId); setEditingSubRecordIdx(null); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '16:30' }); }} className="px-2.5 py-1.5 border border-slate-200 hover:border-indigo-400 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 font-bold transition-all inline-flex items-center"><UserCheck size={12} className="mr-1" />指派代理時段</button>
-                            )}
+                            ) : <button type="button" onClick={() => { setAssigningId(item.uniqueId); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '16:30' }); }} className="px-2.5 py-1.5 border font-bold text-indigo-600 rounded-xl hover:bg-indigo-50"><UserCheck size={12} className="mr-1"/>指派代理</button>}
                           </td>
                         </tr>
                       );
@@ -634,7 +537,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                 </table>
               </div>
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => { setIsProxyExceptionDetailsOpen(false); setAssigningId(null); setEditingSubRecordIdx(null); }} className="px-6 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 font-bold rounded-xl text-xs">關閉審查視窗</button></div>
           </div>
         </div>
       )}
@@ -643,61 +545,44 @@ export default function AttendanceModule({ user, selectedProject }) {
       {isProxySettingsModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><Sliders size={18} /></div>
-                <div>
-                  <h3 className="font-bold text-base text-slate-800 dark:text-white">規政代理與合規門檻防呆設定</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">獨立管理本計畫之請假天數與排除計算單位限制門檻。</p>
-                </div>
-              </div>
-              <button onClick={() => setIsProxySettingsModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
+            <div className="px-6 py-4 border-b bg-slate-50 dark:bg-slate-800 flex justify-between items-center">
+              <h3 className="font-bold text-base text-slate-800 dark:text-white flex items-center"><Sliders size={18} className="mr-2" />規政代理與合規門檻防呆設定</h3>
+              <button onClick={() => setIsProxySettingsModalOpen(false)} className="text-slate-400 p-1"><X size={20} /></button>
             </div>
-            <div className="p-6 overflow-y-auto space-y-6 bg-slate-50 dark:bg-slate-900/10">
-              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
+            <div className="p-6 overflow-y-auto space-y-6">
+              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2">1. 連續請假天數門檻</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-2">1. 連續請假天數門檻</label>
                   <div className="flex items-center space-x-3">
-                    <span className="text-xs text-slate-400">連續請假超過</span>
-                    <input type="number" min="1" value={proxyThresholdDays} onChange={e => setProxyThresholdDays(parseInt(e.target.value, 10) || 1)} className="w-16 p-2 bg-slate-50 dark:bg-slate-900 border rounded-xl text-center font-bold text-sm text-indigo-600 focus:border-indigo-500 outline-none" />
-                    <span className="text-xs text-slate-400">天，即必須排定職務代理人</span>
+                    <span>連續請假超過</span>
+                    <input type="number" min="1" value={proxyThresholdDays} onChange={e => setProxyThresholdDays(parseInt(e.target.value, 10) || 1)} className="w-16 p-2 bg-slate-50 border rounded-xl text-center font-bold text-indigo-600 outline-none" />
+                    <span>天，即必須排定職務代理人</span>
                   </div>
                 </div>
-
                 <div className="pt-2 border-t border-dashed">
-                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2">2. 連續請假中間「包含例假日/放假日」是否併入計算？</label>
-                  <button type="button" onClick={() => setIncludeHolidays(!includeHolidays)} className="flex items-center space-x-2 text-xs font-bold transition-colors">
-                    {includeHolidays ? (
-                      <><ToggleRight size={30} className="text-indigo-600" /><span className="text-indigo-600">併入計算 (假日前後相連視為連續)</span></>
-                    ) : (
-                      <><ToggleLeft size={30} className="text-slate-400" /><span className="text-slate-400">排除計算 (假日自動切斷連續鏈條)</span></>
-                    )}
+                  <label className="block text-xs font-bold text-slate-500 mb-2">2. 連續請假中間「包含例假日/放假日」是否併入計算？</label>
+                  <button type="button" onClick={() => setIncludeHolidays(!includeHolidays)} className="flex items-center space-x-2 text-xs font-bold">
+                    {includeHolidays ? <><ToggleRight size={30} className="text-indigo-600" /><span>併入計算</span></> : <><ToggleLeft size={30} className="text-slate-400" /><span>排除計算</span></>}
                   </button>
                 </div>
-
                 <div className="pt-2 border-t border-dashed">
-                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2">3. 當月累計天數門檻</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-2">3. 當月累計天數門檻</label>
                   <div className="flex items-center space-x-3">
-                    <span className="text-xs text-slate-400">當月累計請假超過</span>
-                    <input type="number" min="1" value={monthlyThresholdDays} onChange={e => setMonthlyThresholdDays(parseInt(e.target.value, 10) || 1)} className="w-16 p-2 bg-slate-50 dark:bg-slate-900 border rounded-xl text-center font-bold text-sm text-indigo-600 focus:border-indigo-500 outline-none" />
-                    <span className="text-xs text-slate-400">天，該月份後續請假皆須排定代理</span>
+                    <span>當月累計請假超過</span>
+                    <input type="number" min="1" value={monthlyThresholdDays} onChange={e => setMonthlyThresholdDays(parseInt(e.target.value, 10) || 1)} className="w-16 p-2 bg-slate-50 border rounded-xl text-center font-bold text-indigo-600 outline-none" />
+                    <span>天，該月份後續請假皆須排定代理</span>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2.5">
-                  4. 免除代理假別設定
-                </label>
-                <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900/40 p-4 rounded-2xl border">
+              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border">
+                <label className="block text-xs font-bold text-slate-500 mb-2.5">4. 免除代理假別設定</label>
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-4 rounded-2xl border">
                   {ALL_LEAVE_TYPES.map(type => {
                     const isExempt = exemptLeaveTypes.includes(type);
                     return (
-                      <label key={type} className={`flex items-center space-x-3 p-2.5 rounded-xl border cursor-pointer transition-colors text-xs font-bold ${isExempt ? 'bg-indigo-50 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-400' : 'bg-white border-slate-200 dark:bg-slate-800 text-slate-500'}`}>
+                      <label key={type} className={`flex items-center space-x-3 p-2.5 rounded-xl border cursor-pointer text-xs font-bold ${isExempt ? 'bg-indigo-50 text-indigo-700 font-bold' : 'bg-white text-slate-500'}`}>
                         <input type="checkbox" className="sr-only" checked={isExempt} onChange={() => handleToggleExemptLeave(type)} />
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${isExempt ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300'}`}>
-                          {isExempt && <Check size={12} />}
-                        </div>
                         <span>{type} {isExempt ? "(免排代理)" : "(須排代理)"}</span>
                       </label>
                     );
@@ -705,32 +590,57 @@ export default function AttendanceModule({ user, selectedProject }) {
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xs">
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2.5">
-                  5. 免除代理之計畫單位設定
+              {/* 💡 5. 【自訂需要被歸納定義的假別別名（如：補休假=補休）管理控制台】 */}
+              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border space-y-4">
+                <label className="block text-xs font-bold text-slate-500 mb-1">
+                  5. 假別別名歸納定義管理 (💡 用於清洗 CSV 不一致文字，如：輸入「補休假」自動歸納為官方「補休」)
                 </label>
-                {allExistingUnits.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-xl border text-center">計畫目前尚無已建檔的人事單位資料。</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-900/40 p-4 rounded-2xl border">
-                    {allExistingUnits.map(unitName => {
-                      const isUnitExempt = exemptUnits.includes(unitName);
-                      return (
-                        <label key={unitName} className={`flex items-center space-x-3 p-2.5 rounded-xl border cursor-pointer transition-colors text-xs font-bold ${isUnitExempt ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400' : 'bg-white border-slate-200 dark:bg-slate-800 text-slate-500'}`}>
-                          <input type="checkbox" className="sr-only" checked={isUnitExempt} onChange={() => handleToggleExemptUnit(unitName)} />
-                          <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${isUnitExempt ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-300'}`}>
-                            {isUnitExempt && <Check size={12} />}
-                          </div>
-                          <span>{unitName} {isUnitExempt ? "(免除代理)" : "(常態考核)"}</span>
-                        </label>
-                      );
-                    })}
+                
+                <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-2xl border">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-slate-400 mb-1">CSV 匯入別名文字</span>
+                    <input type="text" value={newAliasInput} onChange={e => setNewAliasInput(e.target.value)} placeholder="如：補休假" className="px-2.5 py-1.5 bg-white border rounded-xl text-xs outline-none focus:border-indigo-500 w-36 font-bold" />
                   </div>
-                )}
+                  <span className="text-slate-400 text-xs font-bold mt-4">一律對齊歸納為 $\rightarrow$</span>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-slate-400 mb-1">系統核心官方假別</span>
+                    <select value={newOfficialSelect} onChange={e => setNewOfficialSelect(e.target.value)} className="px-2.5 py-1.5 bg-white border rounded-xl text-xs outline-none font-bold text-indigo-600 w-32">
+                      {ALL_LEAVE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <button type="button" onClick={handleAddAliasRecord} className="mt-4 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center shadow-xs"><Plus size={14} className="mr-1"/>建立對齊規則</button>
+                </div>
+
+                <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
+                  {leaveAliasMapping.map((mapItem, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-white dark:bg-slate-900 border p-2.5 rounded-xl text-xs">
+                      <div>
+                        <span className="font-mono bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded text-slate-700 dark:text-slate-300 font-bold">{mapItem.alias}</span>
+                        <span className="mx-2 text-slate-400 font-bold">已成功歸納映射至官方 $\rightarrow$</span>
+                        <span className="font-bold text-indigo-600 dark:text-indigo-400">{mapItem.official}</span>
+                      </div>
+                      <button type="button" onClick={() => handleRemoveAliasRecord(mapItem.alias)} className="p-1 text-slate-400 hover:text-red-500 rounded-lg transition-colors"><Trash2 size={13}/></button>
+                    </div>
+                  ))}
+                </div>
               </div>
 
+              <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border">
+                <label className="block text-xs font-bold text-slate-500 mb-2.5">6. 免除代理之計畫單位設定</label>
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-4 rounded-2xl border">
+                  {allExistingUnits.map(unitName => {
+                    const isUnitExempt = exemptUnits.includes(unitName);
+                    return (
+                      <label key={unitName} className={`flex items-center space-x-3 p-2.5 rounded-xl border cursor-pointer text-xs font-bold ${isUnitExempt ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}>
+                        <input type="checkbox" className="sr-only" checked={isUnitExempt} onChange={() => handleToggleExemptUnit(unitName)} />
+                        <span>{unitName}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end"><button onClick={() => setIsProxySettingsModalOpen(false)} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center"><Check size={14} className="mr-1" />套用合規設定</button></div>
+            <div className="p-4 border-t bg-slate-50 flex justify-end"><button onClick={() => setIsProxySettingsModalOpen(false)} className="px-6 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">套用合規設定</button></div>
           </div>
         </div>
       )}
