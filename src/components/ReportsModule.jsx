@@ -78,13 +78,14 @@ export default function ReportsModule({ user, selectedProject }) {
 
   // 時間轉分鐘輔助函數
   const timeToMinutes = (timeStr) => {
-    if (!timeStr || !timeStr.includes(':')) return 0;
+    if (!timeStr || typeof timeStr !== 'string' || !timeStr.includes(':')) return 0;
     const parts = timeStr.split(':');
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
   // 實時精算扣除「12:30 - 13:30」中午休息工時之有效分鐘數函數
   const getEffectiveMinutes = (startStr, endStr) => {
+    if (!startStr || !endStr) return 0;
     const startM = timeToMinutes(startStr);
     const endM = timeToMinutes(endStr);
     if (endM <= startM) return 0;
@@ -104,7 +105,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
   // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格
   const cleanTimeRangeOnly = (rangeStr) => {
-    if (!rangeStr) return '';
+    if (!rangeStr || typeof rangeStr !== 'string') return '';
     const timePattern = /(\d{2}:\d{2})/g;
     const matches = rangeStr.match(timePattern);
     if (matches && matches.length >= 2) {
@@ -127,7 +128,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 功能：1. 人員考勤匯總表 =================
+  // ================= 功能：1. 人員考勤匯總表 (動態歷史編制核銷凭证版) =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
@@ -240,7 +241,10 @@ export default function ReportsModule({ user, selectedProject }) {
 
               if (lType) {
                 const cleanedTime = cleanTimeRangeOnly(rec.leaveRangeInfo);
-                dailyLeaveRows.push({ type: lType, rawTime: rec.leaveRangeInfo, cleanTime: cleanedTime });
+                // 💡 防重複塞入相同假別區間的防重保護
+                if (!dailyLeaveRows.some(item => item.type === lType && item.cleanTime === cleanedTime)) {
+                  dailyLeaveRows.push({ type: lType, rawTime: rec.leaveRangeInfo, cleanTime: cleanedTime });
+                }
               }
             });
           }
@@ -263,13 +267,12 @@ export default function ReportsModule({ user, selectedProject }) {
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
                 
-                // 💡 鋼鐵級防死鎖防崩潰保護：確認 cleanTime 確實存在且包含「~」波浪號才執行精算
+                // 💡 鋼鐵級安全拆分保護：預先宣告防堵任何 undefined 穿透
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
-                  if (parts[0] && parts[1]) {
+                  if (parts.length >= 2 && parts[0] && parts[1]) {
                     const startToken = parts[0].trim();
                     const endToken = parts[1].trim();
-                    // 再次防呆確認分割後字串包含冒號時間格式
                     if (startToken.includes(':') && endToken.includes(':')) {
                       const effectiveMins = getEffectiveMinutes(startToken, endToken);
                       currentDayLeaveHours = Math.ceil(effectiveMins / 60);
@@ -279,7 +282,11 @@ export default function ReportsModule({ user, selectedProject }) {
                   currentDayLeaveHours = 4;
                 }
 
-                // 💡 動態累加池防呆：如果留守字典不存在該鍵，則自動初始化為 0 避免噴出 NaN
+                // 容錯安全閥：限制請假小時最高不超過 8 小時
+                if (currentDayLeaveHours > 8 || currentDayLeaveHours <= 0) {
+                  currentDayLeaveHours = 8;
+                }
+
                 if (!leaveHoursSummary.hasOwnProperty(lRow.type)) {
                   leaveHoursSummary[lRow.type] = 0;
                 }
@@ -300,7 +307,7 @@ export default function ReportsModule({ user, selectedProject }) {
               finalStatusText = "異常: 缺打卡"; rowBgStyle = "background-color: #fff7ed;"; 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
-              if (inMins !== null && outMins !== null) {
+              if (inMins > 0 && outMins > 0) {
                 totalActualWorkDays++;
                 const maxStartMins = 9 * 60; 
                 let isLate = inMins > maxStartMins; let lateMinutes = isLate ? inMins - maxStartMins : 0;
@@ -470,12 +477,17 @@ export default function ReportsModule({ user, selectedProject }) {
       `;
 
       const printWindow = window.open('', '', 'width=1100,height=850');
-      printWindow.document.write(printContent); printWindow.document.close();
-      setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', `✅ 已成功優化 A4 核銷憑證。`);
+      if (printWindow) {
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        setTimeout(() => printWindow.focus(), 500);
+        showMessage('success', `✅ 已成功優化 A4 核銷憑證。`);
+      } else {
+        showMessage('error', '彈窗攔截器已啟動，請允許本站開窗以進行核銷預覽。');
+      }
     } catch (error) {
-      console.error("生成考勤憑證發生致命錯誤:", error);
-      showMessage('error', '⚠️ 系統核心精算異常，請檢查打卡 CSV 內容格式。');
+      console.error("生成考勤憑證發生處理錯誤:", error);
+      showMessage('error', '⚠️ 系統核心精算異常，請檢查資料結構格式。');
     } finally {
       setIsLoadingAttendance(false);
     }
@@ -700,8 +712,12 @@ export default function ReportsModule({ user, selectedProject }) {
     `;
 
     const printWindow = window.open('', '', 'width=1000,height=800');
-    printWindow.document.write(printContent); printWindow.document.close();
-    setTimeout(() => printWindow.focus(), 500); showMessage('success', '✅ 異動與空缺紀錄表已產出。');
+    if (printWindow) {
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+      setTimeout(() => printWindow.focus(), 500);
+      showMessage('success', '✅ 異動與空缺紀錄表已產出。');
+    }
   };
 
   return (
@@ -720,8 +736,6 @@ export default function ReportsModule({ user, selectedProject }) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-        
-        {/* 1. 人員考勤表卡片 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
           <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
           <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
@@ -730,7 +744,6 @@ export default function ReportsModule({ user, selectedProject }) {
           <p className="text-xs text-slate-400 dark:text-slate-300 leading-relaxed mb-4">按日追蹤全月異動軌跡與彈性工時，一鍵篩選出特定組別之 A4 法定核銷憑證。</p>
           
           <div className="space-y-2.5 mb-5 mt-auto">
-            {/* 月份選取 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
               <input 
@@ -740,7 +753,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 className="bg-transparent text-xs font-bold text-slate-700 dark:text-white outline-none cursor-pointer dark:[&::-webkit-calendar-picker-indicator]:invert" 
               />
             </div>
-            {/* 單位過濾 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
               <select 
@@ -760,7 +772,6 @@ export default function ReportsModule({ user, selectedProject }) {
           <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center shadow-sm"><span>匯出 A4 憑證 PDF</span></button>
         </div>
 
-        {/* 2. 異動與空缺紀錄表 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核</div>
           <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><Users className="text-emerald-600" size={28} /></div>
@@ -780,7 +791,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-white" 
               />
             </div>
-            
             <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
                 <Calendar size={12} className="mr-1" />精算結束日
@@ -795,7 +805,6 @@ export default function ReportsModule({ user, selectedProject }) {
           </div>
           <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center shadow-sm"><span>匯出 PDF (精算明細版)</span></button>
         </div>
-
       </div>
     </div>
   );
