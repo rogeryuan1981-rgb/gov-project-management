@@ -262,22 +262,28 @@ export default function ReportsModule({ user, selectedProject }) {
 
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
-                // 💡 修正防呆保護：確認時間格式包含 ~ 才可以執行分割精算，避免未請假或格式不符時陣列 undefined 造成崩潰
+                
+                // 💡 鋼鐵級防死鎖防崩潰保護：確認 cleanTime 確實存在且包含「~」波浪號才執行精算
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
                   if (parts[0] && parts[1]) {
-                    const effectiveMins = getEffectiveMinutes(parts[0].trim(), parts[1].trim());
-                    currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                    const startToken = parts[0].trim();
+                    const endToken = parts[1].trim();
+                    // 再次防呆確認分割後字串包含冒號時間格式
+                    if (startToken.includes(':') && endToken.includes(':')) {
+                      const effectiveMins = getEffectiveMinutes(startToken, endToken);
+                      currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                    }
                   }
                 } else if (lRow.rawTime && (lRow.rawTime.includes('4小時') || lRow.rawTime.includes('半天'))) {
                   currentDayLeaveHours = 4;
                 }
 
-                if (leaveHoursSummary.hasOwnProperty(lRow.type)) {
-                  leaveHoursSummary[lRow.type] += currentDayLeaveHours;
-                } else {
-                  leaveHoursSummary['其他'] += currentDayLeaveHours;
+                // 💡 動態累加池防呆：如果留守字典不存在該鍵，則自動初始化為 0 避免噴出 NaN
+                if (!leaveHoursSummary.hasOwnProperty(lRow.type)) {
+                  leaveHoursSummary[lRow.type] = 0;
                 }
+                leaveHoursSummary[lRow.type] += currentDayLeaveHours;
 
                 let deductionWeight = 0;
                 if (lRow.type === '事假') {
@@ -468,8 +474,8 @@ export default function ReportsModule({ user, selectedProject }) {
       setTimeout(() => printWindow.focus(), 500);
       showMessage('success', `✅ 已成功優化 A4 核銷憑證。`);
     } catch (error) {
-      console.error("生成考勤憑證發生處理錯誤:", error);
-      showMessage('error', '考勤憑證生成失敗。');
+      console.error("生成考勤憑證發生致命錯誤:", error);
+      showMessage('error', '⚠️ 系統核心精算異常，請檢查打卡 CSV 內容格式。');
     } finally {
       setIsLoadingAttendance(false);
     }
