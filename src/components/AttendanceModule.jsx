@@ -62,27 +62,34 @@ export default function AttendanceModule({ user, selectedProject }) {
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
-  // 💡 【全新引入】：實時精算扣除「12:30 - 13:30」法定休息時間的有效分鐘數引擎
+  // 實時精算扣除「12:30 - 13:30」中午休息工時之有效分鐘數函數
   const getEffectiveMinutes = (startStr, endStr) => {
     const startM = timeToMinutes(startStr);
     const endM = timeToMinutes(endStr);
     if (endM <= startM) return 0;
 
     let totalMinutes = endM - startM;
-
-    // 規定的休息時間區間：12:30 ~ 13:30
     const breakStart = 12 * 60 + 30; // 750 分鐘
     const breakEnd = 13 * 60 + 30;   // 810 分鐘
 
-    // 計算排代或請假區間與「12:30-13:30」休息時間的重疊分鐘數
     const overlapStart = Math.max(startM, breakStart);
     const overlapEnd = Math.min(endM, breakEnd);
 
     if (overlapEnd > overlapStart) {
-      totalMinutes -= (overlapEnd - overlapStart); // 扣除重疊的休息工時
+      totalMinutes -= (overlapEnd - overlapStart);
     }
-
     return totalMinutes;
+  };
+
+  // 💡 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格並相容 C 表民國曆
+  const cleanTimeRangeOnly = (rangeStr) => {
+    if (!rangeStr) return '';
+    const timePattern = /(\d{2}:\d{2})/g;
+    const matches = rangeStr.match(timePattern);
+    if (matches && matches.length >= 2) {
+      return `${matches[0]} ~ ${matches[1]}`;
+    }
+    return rangeStr.replace(/\s+/g, '');
   };
 
   useEffect(() => {
@@ -128,7 +135,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
 
   // =========================================================================
-  // 🧠 核心升級：精準扣除 12:30 - 13:30 中午休息工時之代理異常算力引擎
+  // 🧠 核心重構：代理異常分析引擎 (同步清洗「休假 $\rightarrow$ 特休」與「休息工時扣除」)
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -152,11 +159,29 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const dayRecord = attendanceRecords.find(r => r.name === person.name && r.date === dateStr);
+        // 抓取當日該同仁所有考勤流水號
+        const dayRecords = attendanceRecords.filter(r => r.name === person.name && r.date === dateStr);
         
-        if (dayRecord && dayRecord.leaveType) {
-          monthLeaveMap[d] = dayRecord.leaveType;
-          monthRecordMap[d] = dayRecord; 
+        if (dayRecords.length > 0) {
+          // 💡 智慧映射：優先分析出清洗後的假別名稱
+          let lType = dayRecords.find(r => r.leaveType)?.leaveType || "";
+          if (!lType) {
+            const rangeRec = dayRecords.find(r => r.leaveRangeInfo && (r.leaveRangeInfo.includes('假') || r.leaveRangeInfo.includes('休')));
+            if (rangeRec) {
+              if (rangeRec.leaveRangeInfo.includes('事假')) lType = '事假';
+              else if (rangeRec.leaveRangeInfo.includes('病假')) lType = '病假';
+              else if (rangeRec.leaveRangeInfo.includes('喪假')) lType = '喪假';
+              else if (rangeRec.leaveRangeInfo.includes('休')) lType = '特休';
+            }
+          }
+
+          // 💡 修正3：不論來源是「休假」還是「特休」，代理異常精算一律對齊清洗為「特休」
+          if (lType === '休假' || lType === '特休') {
+            lType = '特休';
+          }
+
+          monthLeaveMap[d] = lType || null;
+          monthRecordMap[d] = dayRecords[0]; // 儲存主參考流水號
         } else {
           monthLeaveMap[d] = null;
           monthRecordMap[d] = null;
@@ -202,23 +227,32 @@ export default function AttendanceModule({ user, selectedProject }) {
             const isExemptUnitToday = exemptUnits.includes(currentDayUnit);
 
             if (!isExemptLeaveToday && !isExemptUnitToday) {
-              // 一天扣除中午一小時休息後，標準應打滿 8 小時（480 分鐘）
               const requiredMinutes = 8 * 60;
               let totalCoveredMinutes = 0;
 
-              const segments = record?.proxySegments || [];
-              if (segments.length === 0 && record?.proxyName) {
-                const range = record.leaveRangeInfo || "08:30~17:30";
-                if (range.includes('~')) {
-                  const p = range.split('~');
-                  // 💡 修正點：單筆舊資料同步調用新版休息扣除函數
-                  totalCoveredMinutes += getEffectiveMinutes(p[0], p[1]);
-                } else {
-                  totalCoveredMinutes += requiredMinutes; 
+              // 讀取當日所有流水號覆蓋的分段代理時段數據
+              const dayRecords = attendanceRecords.filter(r => r.name === person.name && r.date === dateStr);
+              let segments = [];
+              dayRecords.forEach(r => {
+                if (r.proxySegments && r.proxySegments.length > 0) segments = [...segments, ...r.proxySegments];
+              });
+
+              if (segments.length === 0) {
+                const legacyProxyName = dayRecords.find(r => r.proxyName)?.proxyName;
+                const legacyRange = dayRecords.find(r => r.leaveRangeInfo)?.leaveRangeInfo || "08:30~17:30";
+                
+                if (legacyProxyName) {
+                  const cleanedRange = cleanTimeRangeOnly(legacyRange);
+                  if (cleanedRange.includes('~')) {
+                    const p = cleanedRange.split('~');
+                    totalCoveredMinutes += getEffectiveMinutes(p[0], p[1]);
+                  } else {
+                    totalCoveredMinutes += requiredMinutes; 
+                  }
                 }
               } else {
                 segments.forEach(seg => {
-                  // 💡 修正點：多時段排代資料精準扣除 12:30 ~ 13:30 區間
+                  // 💡 修正：精準套用 12:30 - 13:30 中午休息扣除工時函數
                   totalCoveredMinutes += getEffectiveMinutes(seg.startHour, seg.endHour);
                 });
               }
@@ -226,7 +260,6 @@ export default function AttendanceModule({ user, selectedProject }) {
               const uncoveredMinutes = Math.max(0, requiredMinutes - totalCoveredMinutes);
               const uncoveredHours = Math.ceil(uncoveredMinutes / 60);
 
-              // 只要未被 100% 代理滿 8 小時（例如目前 08:30-16:30 只代理了 7 小時，還差 1 小時），依然判定為異常
               if (uncoveredHours > 0) {
                 exceptionHours += uncoveredHours;
                 
@@ -239,7 +272,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                   unit: currentDayUnit,
                   date: dateStr,
                   leaveType: leaveType,
-                  leaveRangeInfo: record?.leaveRangeInfo || '全天差假',
                   uncoveredHours: uncoveredHours, 
                   proxySegments: segments, 
                   triggerReason: `代理時數不足！當天應代理 8 小時（扣除12:30-13:30休息），目前有效代理 ${Math.round(totalCoveredMinutes/60*10)/10} 小時，尚缺 ${uncoveredHours} 小時。`
@@ -270,11 +302,11 @@ export default function AttendanceModule({ user, selectedProject }) {
     if (exemptUnits.includes(unitName)) {
       setExemptUnits(exemptUnits.filter(u => u !== unitName));
     } else {
-      setExemptUnits([...exemptUnits, u => u !== unitName]);
+      setExemptUnits([...exemptUnits, unitName]);
     }
   };
 
-  // 新增代理時段
+  // 新增代理人分段時段
   const handleSaveProxyAssignment = async (item) => {
     if (!assignForm.proxyName.trim()) { alert("請填寫代理人姓名！"); return; }
     
@@ -321,7 +353,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     }
   };
 
-  // 修改子代理段落
+  // 修改分段代理人
   const handleUpdateSubSegment = async (item, subIdx) => {
     if (!subEditForm.proxyName.trim()) { alert("代理人名不可為空！"); return; }
     const startM = timeToMinutes(subEditForm.startHour);
@@ -350,15 +382,14 @@ export default function AttendanceModule({ user, selectedProject }) {
         updatedAt: new Date().getTime()
       });
 
-      // 同步重置狀態
       setEditingSubRecordIdx(null);
       alert("✅ 代理時段修改維護成功！");
     } catch (e) { console.error(e); }
   };
 
-  // 刪除特定子代理段落
+  // 刪除分段代理人
   const handleDeleteSubSegment = async (item, subIdx) => {
-    if (!confirm("確定要刪除這段代理時間歷程嗎？刪除後對應的代理時數將會被釋出重新判定為異常。")) return;
+    if (!confirm("確定要刪除這段代理時間歷程嗎？")) return;
     try {
       const attRecordsRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const docRef = doc(attRecordsRef, item.realDocId);
@@ -481,9 +512,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         )}
       </div>
 
-      {/* =========================================================================
-          💡 審查憑證彈窗：歷史時段控制面板 100% 內嵌渲染
-         ========================================================================= */}
+      {/* 代理異常維護開窗 */}
       {isProxyExceptionDetailsOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[85vh]">
@@ -558,25 +587,8 @@ export default function AttendanceModule({ user, selectedProject }) {
                                               <span className="text-slate-400 font-mono">({subSeg.startHour}~{subSeg.endHour})</span>
                                             </div>
                                             <div className="flex items-center space-x-1 ml-auto sm:opacity-0 group-hover/sub:opacity-100 transition-opacity">
-                                              <button 
-                                                type="button" 
-                                                onClick={() => {
-                                                  setEditingSubRecordIdx(`${item.uniqueId}_${subIdx}`);
-                                                  setSubEditForm({ proxyName: subSeg.proxyName, startHour: subSeg.startHour, endHour: subSeg.endHour });
-                                                }}
-                                                className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
-                                                title="修改此段代理"
-                                              >
-                                                <Edit2 size={11} />
-                                              </button>
-                                              <button 
-                                                type="button" 
-                                                onClick={() => handleDeleteSubSegment(item, subIdx)}
-                                                className="p-1 text-slate-400 hover:text-red-500 transition-colors"
-                                                title="移除此段代理"
-                                              >
-                                                <Trash2 size={11} />
-                                              </button>
+                                              <button type="button" onClick={() => { setEditingSubRecordIdx(`${item.uniqueId}_${subIdx}`); setSubEditForm({ proxyName: subSeg.proxyName, startHour: subSeg.startHour, endHour: subSeg.endHour }); }} className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"><Edit2 size={11} /></button>
+                                              <button type="button" onClick={() => handleDeleteSubSegment(item, subIdx)} className="p-1 text-slate-400 hover:text-red-500 transition-colors"><Trash2 size={11} /></button>
                                             </div>
                                           </>
                                         )}
