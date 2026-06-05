@@ -105,7 +105,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
 
   // =========================================================================
-  // 🧠 核心升級：具備部分時數扣減、多重排代時段覆蓋率精算之代理異常分析引擎
+  // 🧠 核心代理合規異常分析引擎 (支援分段代理覆蓋率計算)
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -179,15 +179,11 @@ export default function AttendanceModule({ user, selectedProject }) {
             const isExemptUnitToday = exemptUnits.includes(currentDayUnit);
 
             if (!isExemptLeaveToday && !isExemptUnitToday) {
-              // 💡 核心演算法升級：計算多重排代時段的覆蓋率
-              // 一天標準應上班時數為 8 小時 (480分鐘)
               const requiredMinutes = 8 * 60;
               let totalCoveredMinutes = 0;
 
-              // 相容單筆舊數據字串或新版多時段陣列結構 (proxySegments)
               const segments = record?.proxySegments || [];
               if (segments.length === 0 && record?.proxyName) {
-                // 如果是舊格式單筆數據，自動推導轉換為一個標準區段進行精算
                 const range = record.leaveRangeInfo || "08:30~17:30";
                 if (range.includes('~')) {
                   const p = range.split('~');
@@ -195,10 +191,9 @@ export default function AttendanceModule({ user, selectedProject }) {
                   const endM = timeToMinutes(p[1]);
                   if (endM > startM) totalCoveredMinutes += (endM - startM);
                 } else {
-                  totalCoveredMinutes += requiredMinutes; // 舊格式兜底視為全覆蓋
+                  totalCoveredMinutes += requiredMinutes; 
                 }
               } else {
-                // 逐筆累加多段代理的分鐘總量
                 segments.forEach(seg => {
                   const sM = timeToMinutes(seg.startHour);
                   const eM = timeToMinutes(seg.endHour);
@@ -206,11 +201,9 @@ export default function AttendanceModule({ user, selectedProject }) {
                 });
               }
 
-              // 💡 計算尚缺少多少代理時數 (不能少於門檻)
               const uncoveredMinutes = Math.max(0, requiredMinutes - totalCoveredMinutes);
               const uncoveredHours = Math.ceil(uncoveredMinutes / 60);
 
-              // 只要尚有未被代理滿 8 小時的部分，即算入異常案件明細中！
               if (uncoveredHours > 0) {
                 exceptionHours += uncoveredHours;
                 
@@ -224,8 +217,8 @@ export default function AttendanceModule({ user, selectedProject }) {
                   date: dateStr,
                   leaveType: leaveType,
                   leaveRangeInfo: record?.leaveRangeInfo || '全天差假',
-                  uncoveredHours: uncoveredHours, // 帶出殘留異常小時數
-                  proxySegments: segments, // 傳遞目前已建立的子代理歷程清單
+                  uncoveredHours: uncoveredHours, 
+                  proxySegments: segments, 
                   triggerReason: `代理時數不足！當天應代理 8 小時，目前已排代 ${Math.round(totalCoveredMinutes/60*10)/10} 小時，尚缺 ${uncoveredHours} 小時。`
                 });
               }
@@ -258,9 +251,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     }
   };
 
-  // =========================================================================
-  // 💥 多重分段代理人：新增代理人時段段落引擎 (不覆蓋舊時段，以多橫列陣列儲存)
-  // =========================================================================
+  // 新增代理時段段落引擎
   const handleSaveProxyAssignment = async (item) => {
     if (!assignForm.proxyName.trim()) { alert("請填寫代理人姓名！"); return; }
     
@@ -275,7 +266,6 @@ export default function AttendanceModule({ user, selectedProject }) {
       const docSnap = await getDoc(docRef);
       const baseData = docSnap.exists() ? docSnap.data() : {};
 
-      // 提取舊有的多段歷程
       const currentSegments = baseData.proxySegments || [];
       const newSegment = {
         proxyName: assignForm.proxyName.trim(),
@@ -294,7 +284,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         date: item.date,
         leaveType: item.leaveType,
         proxySegments: updatedSegments, 
-        proxyName: updatedSegments.map(s => s.proxyName).join(', '), // 同步拼串人名欄位相容舊報表表格
+        proxyName: updatedSegments.map(s => s.proxyName).join(', '), 
         isManualMaintained: true, 
         updatedAt: new Date().getTime()
       };
@@ -308,9 +298,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     }
   };
 
-  // =========================================================================
-  // 💥 已有代理歷程：就地更新/編輯子代理段落
-  // =========================================================================
+  // 就地編輯修改子代理段落
   const handleUpdateSubSegment = async (item, subIdx) => {
     if (!subEditForm.proxyName.trim()) { alert("代理人名不可為空！"); return; }
     const startM = timeToMinutes(subEditForm.startHour);
@@ -344,9 +332,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     } catch (e) { console.error(e); }
   };
 
-  // =========================================================================
-  // 💥 已有代理歷程：就地刪除特定子代理段落 (釋出時數)
-  // =========================================================================
+  // 就地刪除特定子代理段落
   const handleDeleteSubSegment = async (item, subIdx) => {
     if (!confirm("確定要刪除這段代理時間歷程嗎？刪除後對應的代理時數將會被釋出重新判定為異常。")) return;
     try {
@@ -472,7 +458,7 @@ export default function AttendanceModule({ user, selectedProject }) {
       </div>
 
       {/* =========================================================================
-          💡 升級：全新優化支援「部分時數扣減」與「已有歷史時段二級編輯面板」的派代大彈窗
+          💡 彈窗重大優化：將已維護歷史歷程完全整合回 <tr> 內部，杜絕表格吃字 bug
          ========================================================================= */}
       {isProxyExceptionDetailsOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -487,115 +473,86 @@ export default function AttendanceModule({ user, selectedProject }) {
             
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20">
               <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm bg-white dark:bg-slate-800">
-                <table className="w-full text-left border-collapse text-xs">
+                <table className="w-full text-left border-collapse table-fixed text-xs">
                   <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 font-bold text-slate-500">
                     <tr>
-                      <th className="py-3 px-4" style={{width: '95px'}}>請假日期</th>
-                      <th className="py-3 px-4" style={{width: '120px'}}>姓名/組別</th>
-                      <th className="py-3 px-4" style={{width: '85px'}}>假別屬性</th>
-                      <th className="py-3 px-4">系統超標及覆蓋率追蹤判定原因</th>
-                      <th className="py-3 px-4 text-right" style={{width: '210px'}}>核心手動分段派代作業</th>
+                      <th className="py-3 px-4 w-[100px]">請假日期</th>
+                      <th className="py-3 px-4 w-[130px]">姓名/組別</th>
+                      <th className="py-3 px-4 w-[85px]">假別屬性</th>
+                      <th className="py-3 px-4">系統超標及代理狀態歷程原因</th>
+                      <th className="py-3 px-4 text-right w-[240px]">核心手動分段派代作業</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60 text-slate-700 dark:text-slate-200 font-medium">
                     {proxyExceptionList.map(item => {
                       const isAssigning = assigningId === item.uniqueId;
-                      // 讀取這一天該案件目前已經登錄的所有子歷程
                       const currentSubSegments = item.proxySegments || [];
                       
                       return (
-                        <React.Fragment key={item.uniqueId}>
-                          <tr className={`hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors ${isAssigning ? 'bg-indigo-50/40 dark:bg-indigo-950/20' : ''}`}>
-                            <td className="py-3 px-4 font-bold font-mono text-slate-900 dark:text-slate-100">{item.date}</td>
-                            <td className="py-3 px-4">
-                              <div className="flex flex-col">
-                                <span className="font-bold text-slate-900 dark:text-slate-100">{item.name}</span>
-                                <span className="text-[10px] text-slate-400 font-semibold">{item.unit}</span>
-                              </div>
-                            </td>
-                            <td className="py-3 px-4"><span className="px-2 py-0.5 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-md font-bold border border-red-100 dark:border-red-500/20">{item.leaveType}</span></td>
-                            <td className="py-3 px-4">
-                              <div className="text-slate-600 dark:text-slate-300 leading-relaxed font-semibold">{item.triggerReason}</div>
-                              <div className="text-[10px] text-orange-600 font-bold mt-0.5">⚠️ 目前尚缺：{item.uncoveredHours} 小時尚未指派代理。</div>
-                            </td>
-                            <td className="py-3 px-4 text-right">
-                              {isAssigning ? (
-                                <div className="space-y-2 p-3 bg-white dark:bg-slate-900 border border-indigo-200 rounded-xl shadow-md text-left animate-in slide-in-from-top-2 duration-250 w-[240px] ml-auto">
-                                  <div className="font-bold text-[11px] text-indigo-700 border-b pb-1 mb-1">➕ 新增本段代理時段</div>
-                                  <div>
-                                    <label className="block text-[9px] font-bold text-slate-400 mb-0.5">代理人姓名 *</label>
-                                    <input type="text" value={assignForm.proxyName} onChange={e => setAssignForm({...assignForm, proxyName: e.target.value})} placeholder="請輸入同仁姓名" className="w-full px-2 py-1 bg-slate-50 dark:bg-slate-800 border rounded text-xs outline-none text-slate-800 dark:text-white font-bold" />
-                                  </div>
-                                  <div className="grid grid-cols-2 gap-1.5">
-                                    <div>
-                                      <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(起)</label>
-                                      <input type="text" value={assignForm.startHour} onChange={e => setAssignForm({...assignForm, startHour: e.target.value})} placeholder="08:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border rounded text-[11px] font-mono text-center" />
-                                    </div>
-                                    <div>
-                                      <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(迄)</label>
-                                      <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} placeholder="12:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border rounded text-[11px] font-mono text-center" />
-                                    </div>
-                                  </div>
-                                  <div className="flex justify-end space-x-1.5 pt-1.5 border-t">
-                                    <button type="button" onClick={() => setAssigningId(null)} className="px-2 py-0.5 bg-slate-100 text-slate-600 font-bold rounded text-[10px]">取消</button>
-                                    <button type="button" onClick={() => handleSaveProxyAssignment(item)} className="px-2 py-0.5 bg-indigo-600 text-white font-bold rounded text-[10px] flex items-center shadow-xs">儲存此段</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button type="button" onClick={() => { setAssigningId(item.uniqueId); setEditingSubRecordIdx(null); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '17:30' }); }} className="px-2.5 py-1.5 border border-slate-200 hover:border-indigo-400 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 font-bold transition-all inline-flex items-center"><UserCheck size={12} className="mr-1" />指派代理時段</button>
-                              )}
-                            </td>
-                          </tr>
+                        <tr key={item.uniqueId} className={`hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors ${isAssigning ? 'bg-indigo-50/40 dark:bg-indigo-950/20' : ''}`}>
+                          <td className="py-4 px-4 font-bold font-mono text-slate-900 dark:text-slate-100">{item.date}</td>
+                          <td className="py-4 px-4">
+                            <div className="flex flex-col">
+                              <span className="font-bold text-slate-900 dark:text-slate-100">{item.name}</span>
+                              <span className="text-[10px] text-slate-400 font-semibold">{item.unit}</span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4"><span className="px-2 py-0.5 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-md font-bold border border-red-100 dark:border-red-500/20">{item.leaveType}</span></td>
+                          
+                          {/* 💡 智慧整合：將「剩餘時數提示」與「已維護之代理歷程面板」全部鎖定在同一個儲存格內，絕不移位 */}
+                          <td className="py-4 px-4 space-y-3 vertical-align-top">
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-dashed">
+                              <div className="text-slate-700 dark:text-slate-300 font-semibold leading-relaxed">{item.triggerReason}</div>
+                              <div className="text-[10px] text-orange-600 dark:text-orange-400 font-extrabold mt-1">⚠️ 今日狀態：仍缺少 {item.uncoveredHours} 小時尚未指派完全。</div>
+                            </div>
 
-                          {/* 💡 核心加開：下方多橫列展示「之前已維護之子代理歷程」控制面板 */}
-                          {currentSubSegments.length > 0 && (
-                            <tr>
-                              <td colSpan="5" className="bg-slate-50/60 dark:bg-slate-900/30 px-6 py-2 border-b">
-                                <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 mb-1.5 flex items-center">
-                                  <Calendar size={11} className="mr-1 text-emerald-500" /> 已登錄之代理人時段分配清單 ({currentSubSegments.length} 段)：
+                            {/* 💡 【歷史代理時段控制面板】：已改寫嵌入在此，平常有資料就會直接 100% 秀在畫面上！ */}
+                            {currentSubSegments.length > 0 && (
+                              <div className="bg-slate-100/70 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5 animate-in fade-in">
+                                <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 flex items-center">
+                                  <Calendar size={12} className="mr-1 text-emerald-500" /> 已指派之分段代理歷程 ({currentSubSegments.length} 筆)：
                                 </div>
                                 <div className="space-y-1.5">
                                   {currentSubSegments.map((subSeg, subIdx) => {
                                     const isSubEditing = editingSubRecordIdx === `${item.uniqueId}_${subIdx}`;
                                     return (
-                                      <div key={subIdx} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white dark:bg-slate-800 border p-2 rounded-xl text-xs max-w-2xl shadow-2xs group/sub">
+                                      <div key={subIdx} className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 border rounded-lg text-[11px] shadow-2xs group/sub">
                                         {isSubEditing ? (
-                                          <div className="flex flex-wrap items-center gap-2 w-full animate-in fade-in duration-200">
-                                            <input type="text" value={subEditForm.proxyName} onChange={e => setSubEditForm({...subEditForm, proxyName: e.target.value})} className="px-2 py-0.5 border rounded bg-slate-50 w-24 font-bold" placeholder="代理人" />
-                                            <span className="text-[10px] text-slate-400">起</span>
-                                            <input type="text" value={subEditForm.startHour} onChange={e => setSubEditForm({...subEditForm, startHour: e.target.value})} className="px-1.5 py-0.5 border rounded bg-slate-50 w-16 text-center font-mono" />
-                                            <span className="text-[10px] text-slate-400">迄</span>
-                                            <input type="text" value={subEditForm.endHour} onChange={e => setSubEditForm({...subEditForm, endHour: e.target.value})} className="px-1.5 py-0.5 border rounded bg-slate-50 w-16 text-center font-mono" />
+                                          <div className="flex items-center gap-1.5 w-full animate-in fade-in duration-150">
+                                            <input type="text" value={subEditForm.proxyName} onChange={e => setSubEditForm({...subEditForm, proxyName: e.target.value})} className="px-1.5 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-xs w-16 font-bold" />
+                                            <input type="text" value={subEditForm.startHour} onChange={e => setSubEditForm({...subEditForm, startHour: e.target.value})} className="px-1 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-[10px] w-12 text-center font-mono" />
+                                            <span className="text-slate-400">~</span>
+                                            <input type="text" value={subEditForm.endHour} onChange={e => setSubEditForm({...subEditForm, endHour: e.target.value})} className="px-1 py-0.5 border rounded bg-slate-50 dark:bg-slate-900 text-[10px] w-12 text-center font-mono" />
                                             <div className="ml-auto flex space-x-1">
-                                              <button type="button" onClick={() => setEditingSubRecordIdx(null)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px]">取消</button>
-                                              <button type="button" onClick={() => handleUpdateSubSegment(item, subIdx)} className="px-2 py-0.5 bg-emerald-600 text-white rounded font-bold text-[10px]">儲存</button>
+                                              <button type="button" onClick={() => setEditingSubRecordIdx(null)} className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-[10px]">❌</button>
+                                              <button type="button" onClick={() => handleUpdateSubSegment(item, subIdx)} className="px-1.5 py-0.5 bg-emerald-600 text-white rounded font-bold text-[10px]">💾</button>
                                             </div>
                                           </div>
                                         ) : (
                                           <>
-                                            <div className="flex items-center space-x-4">
-                                              <span className="font-bold text-slate-800 dark:text-slate-200">👤 代理人：<span className="text-indigo-600 dark:text-indigo-400 font-extrabold">{subSeg.proxyName}</span></span>
-                                              <span className="font-medium text-slate-500 font-mono bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded">⏰ 代理時間區間：{subSeg.startHour} ~ {subSeg.endHour}</span>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <span className="font-extrabold text-indigo-600 dark:text-indigo-400">{subSeg.proxyName}</span>
+                                              <span className="text-slate-400 font-mono">({subSeg.startHour}~{subSeg.endHour})</span>
                                             </div>
-                                            <div className="flex items-center space-x-2 ml-auto opacity-0 group-hover/sub:opacity-100 transition-opacity">
+                                            <div className="flex items-center space-x-1 ml-auto sm:opacity-0 group-hover/sub:opacity-100 transition-opacity">
                                               <button 
                                                 type="button" 
                                                 onClick={() => {
                                                   setEditingSubRecordIdx(`${item.uniqueId}_${subIdx}`);
                                                   setSubEditForm({ proxyName: subSeg.proxyName, startHour: subSeg.startHour, endHour: subSeg.endHour });
                                                 }}
-                                                className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
-                                                title="就地編輯修改此段代理時間"
+                                                className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
+                                                title="修改此段代理"
                                               >
-                                                <Edit2 size={12} />
+                                                <Edit2 size={11} />
                                               </button>
                                               <button 
                                                 type="button" 
                                                 onClick={() => handleDeleteSubSegment(item, subIdx)}
-                                                className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors"
+                                                className="p-1 text-slate-400 hover:text-red-500 transition-colors"
                                                 title="移除此段代理"
                                               >
-                                                <Trash2 size={12} />
+                                                <Trash2 size={11} />
                                               </button>
                                             </div>
                                           </>
@@ -604,10 +561,38 @@ export default function AttendanceModule({ user, selectedProject }) {
                                     );
                                   })}
                                 </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-4 px-4 text-right vertical-align-top">
+                            {isAssigning ? (
+                              <div className="space-y-2 p-3 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 rounded-xl shadow-md text-left animate-in slide-in-from-top-2 duration-200 w-full">
+                                <div className="font-bold text-[11px] text-indigo-700 dark:text-indigo-400 border-b pb-1 mb-1">➕ 新增本段代理時段</div>
+                                <div>
+                                  <label className="block text-[9px] font-bold text-slate-400 mb-0.5">代理人姓名 *</label>
+                                  <input type="text" value={assignForm.proxyName} onChange={e => setAssignForm({...assignForm, proxyName: e.target.value})} placeholder="請輸入同仁姓名" className="w-full px-2 py-1 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-xs outline-none text-slate-800 dark:text-white font-bold" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <div>
+                                    <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(起)</label>
+                                    <input type="text" value={assignForm.startHour} onChange={e => setAssignForm({...assignForm, startHour: e.target.value})} placeholder="08:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(迄)</label>
+                                    <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} placeholder="12:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
+                                  </div>
+                                </div>
+                                <div className="flex justify-end space-x-1.5 pt-1.5 border-t">
+                                  <button type="button" onClick={() => setAssigningId(null)} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded text-[10px]">取消</button>
+                                  <button type="button" onClick={() => handleSaveProxyAssignment(item)} className="px-2 py-0.5 bg-indigo-600 text-white font-bold rounded text-[10px] flex items-center shadow-xs">儲存此段</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button type="button" onClick={() => { setAssigningId(item.uniqueId); setEditingSubRecordIdx(null); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '17:30' }); }} className="px-2.5 py-1.5 border border-slate-200 hover:border-indigo-400 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 font-bold transition-all inline-flex items-center"><UserCheck size={12} className="mr-1" />指派代理時段</button>
+                            )}
+                          </td>
+                        </tr>
                       );
                     })}
                   </tbody>
