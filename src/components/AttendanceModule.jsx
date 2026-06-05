@@ -62,6 +62,29 @@ export default function AttendanceModule({ user, selectedProject }) {
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
+  // 💡 【全新引入】：實時精算扣除「12:30 - 13:30」法定休息時間的有效分鐘數引擎
+  const getEffectiveMinutes = (startStr, endStr) => {
+    const startM = timeToMinutes(startStr);
+    const endM = timeToMinutes(endStr);
+    if (endM <= startM) return 0;
+
+    let totalMinutes = endM - startM;
+
+    // 規定的休息時間區間：12:30 ~ 13:30
+    const breakStart = 12 * 60 + 30; // 750 分鐘
+    const breakEnd = 13 * 60 + 30;   // 810 分鐘
+
+    // 計算排代或請假區間與「12:30-13:30」休息時間的重疊分鐘數
+    const overlapStart = Math.max(startM, breakStart);
+    const overlapEnd = Math.min(endM, breakEnd);
+
+    if (overlapEnd > overlapStart) {
+      totalMinutes -= (overlapEnd - overlapStart); // 扣除重疊的休息工時
+    }
+
+    return totalMinutes;
+  };
+
   useEffect(() => {
     if (!user || !selectedProject) return;
     setDbError(null);
@@ -105,7 +128,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
 
   // =========================================================================
-  // 🧠 核心代理合規異常分析引擎 (支援分段代理覆蓋率計算)
+  // 🧠 核心升級：精準扣除 12:30 - 13:30 中午休息工時之代理異常算力引擎
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -179,6 +202,7 @@ export default function AttendanceModule({ user, selectedProject }) {
             const isExemptUnitToday = exemptUnits.includes(currentDayUnit);
 
             if (!isExemptLeaveToday && !isExemptUnitToday) {
+              // 一天扣除中午一小時休息後，標準應打滿 8 小時（480 分鐘）
               const requiredMinutes = 8 * 60;
               let totalCoveredMinutes = 0;
 
@@ -187,23 +211,22 @@ export default function AttendanceModule({ user, selectedProject }) {
                 const range = record.leaveRangeInfo || "08:30~17:30";
                 if (range.includes('~')) {
                   const p = range.split('~');
-                  const startM = timeToMinutes(p[0]);
-                  const endM = timeToMinutes(p[1]);
-                  if (endM > startM) totalCoveredMinutes += (endM - startM);
+                  // 💡 修正點：單筆舊資料同步調用新版休息扣除函數
+                  totalCoveredMinutes += getEffectiveMinutes(p[0], p[1]);
                 } else {
                   totalCoveredMinutes += requiredMinutes; 
                 }
               } else {
                 segments.forEach(seg => {
-                  const sM = timeToMinutes(seg.startHour);
-                  const eM = timeToMinutes(seg.endHour);
-                  if (eM > sM) totalCoveredMinutes += (eM - sM);
+                  // 💡 修正點：多時段排代資料精準扣除 12:30 ~ 13:30 區間
+                  totalCoveredMinutes += getEffectiveMinutes(seg.startHour, seg.endHour);
                 });
               }
 
               const uncoveredMinutes = Math.max(0, requiredMinutes - totalCoveredMinutes);
               const uncoveredHours = Math.ceil(uncoveredMinutes / 60);
 
+              // 只要未被 100% 代理滿 8 小時（例如目前 08:30-16:30 只代理了 7 小時，還差 1 小時），依然判定為異常
               if (uncoveredHours > 0) {
                 exceptionHours += uncoveredHours;
                 
@@ -219,7 +242,7 @@ export default function AttendanceModule({ user, selectedProject }) {
                   leaveRangeInfo: record?.leaveRangeInfo || '全天差假',
                   uncoveredHours: uncoveredHours, 
                   proxySegments: segments, 
-                  triggerReason: `代理時數不足！當天應代理 8 小時，目前已排代 ${Math.round(totalCoveredMinutes/60*10)/10} 小時，尚缺 ${uncoveredHours} 小時。`
+                  triggerReason: `代理時數不足！當天應代理 8 小時（扣除12:30-13:30休息），目前有效代理 ${Math.round(totalCoveredMinutes/60*10)/10} 小時，尚缺 ${uncoveredHours} 小時。`
                 });
               }
             }
@@ -247,11 +270,11 @@ export default function AttendanceModule({ user, selectedProject }) {
     if (exemptUnits.includes(unitName)) {
       setExemptUnits(exemptUnits.filter(u => u !== unitName));
     } else {
-      setExemptUnits([...exemptUnits, unitName]);
+      setExemptUnits([...exemptUnits, u => u !== unitName]);
     }
   };
 
-  // 新增代理時段段落引擎
+  // 新增代理時段
   const handleSaveProxyAssignment = async (item) => {
     if (!assignForm.proxyName.trim()) { alert("請填寫代理人姓名！"); return; }
     
@@ -298,7 +321,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     }
   };
 
-  // 就地編輯修改子代理段落
+  // 修改子代理段落
   const handleUpdateSubSegment = async (item, subIdx) => {
     if (!subEditForm.proxyName.trim()) { alert("代理人名不可為空！"); return; }
     const startM = timeToMinutes(subEditForm.startHour);
@@ -327,12 +350,13 @@ export default function AttendanceModule({ user, selectedProject }) {
         updatedAt: new Date().getTime()
       });
 
+      // 同步重置狀態
       setEditingSubRecordIdx(null);
       alert("✅ 代理時段修改維護成功！");
     } catch (e) { console.error(e); }
   };
 
-  // 就地刪除特定子代理段落
+  // 刪除特定子代理段落
   const handleDeleteSubSegment = async (item, subIdx) => {
     if (!confirm("確定要刪除這段代理時間歷程嗎？刪除後對應的代理時數將會被釋出重新判定為異常。")) return;
     try {
@@ -458,7 +482,7 @@ export default function AttendanceModule({ user, selectedProject }) {
       </div>
 
       {/* =========================================================================
-          💡 彈窗重大優化：將已維護歷史歷程完全整合回 <tr> 內部，杜絕表格吃字 bug
+          💡 審查憑證彈窗：歷史時段控制面板 100% 內嵌渲染
          ========================================================================= */}
       {isProxyExceptionDetailsOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -466,7 +490,7 @@ export default function AttendanceModule({ user, selectedProject }) {
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
               <div>
                 <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><ShieldAlert size={20} className="mr-2 text-orange-500" />特定假別代理異常案件審查中心</h3>
-                <p className="text-xs text-slate-400 mt-0.5">系統已啟動多重時段覆蓋率交叉精算，必須累積代理滿 8 小時（480分鐘）該日異常方可完全滑出本清單。</p>
+                <p className="text-xs text-slate-400 mt-0.5">系統已啟動多重時段覆蓋率交叉精算，必須累積有效代理滿 8 小時（480分鐘）該日異常方可完全滑出本清單。</p>
               </div>
               <button onClick={() => { setIsProxyExceptionDetailsOpen(false); setAssigningId(null); setEditingSubRecordIdx(null); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
             </div>
@@ -499,14 +523,13 @@ export default function AttendanceModule({ user, selectedProject }) {
                           </td>
                           <td className="py-4 px-4"><span className="px-2 py-0.5 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-md font-bold border border-red-100 dark:border-red-500/20">{item.leaveType}</span></td>
                           
-                          {/* 💡 智慧整合：將「剩餘時數提示」與「已維護之代理歷程面板」全部鎖定在同一個儲存格內，絕不移位 */}
                           <td className="py-4 px-4 space-y-3 vertical-align-top">
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-dashed">
                               <div className="text-slate-700 dark:text-slate-300 font-semibold leading-relaxed">{item.triggerReason}</div>
                               <div className="text-[10px] text-orange-600 dark:text-orange-400 font-extrabold mt-1">⚠️ 今日狀態：仍缺少 {item.uncoveredHours} 小時尚未指派完全。</div>
                             </div>
 
-                            {/* 💡 【歷史代理時段控制面板】：已改寫嵌入在此，平常有資料就會直接 100% 秀在畫面上！ */}
+                            {/* 已維護之代理歷程面板 */}
                             {currentSubSegments.length > 0 && (
                               <div className="bg-slate-100/70 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5 animate-in fade-in">
                                 <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1 flex items-center">
@@ -580,7 +603,7 @@ export default function AttendanceModule({ user, selectedProject }) {
                                   </div>
                                   <div>
                                     <label className="block text-[9px] font-bold text-slate-400 mb-0.5">時間(迄)</label>
-                                    <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} placeholder="12:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
+                                    <input type="text" value={assignForm.endHour} onChange={e => setAssignForm({...assignForm, endHour: e.target.value})} placeholder="16:30" className="w-full px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded text-[11px] font-mono text-center" />
                                   </div>
                                 </div>
                                 <div className="flex justify-end space-x-1.5 pt-1.5 border-t">
@@ -589,7 +612,7 @@ export default function AttendanceModule({ user, selectedProject }) {
                                 </div>
                               </div>
                             ) : (
-                              <button type="button" onClick={() => { setAssigningId(item.uniqueId); setEditingSubRecordIdx(null); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '17:30' }); }} className="px-2.5 py-1.5 border border-slate-200 hover:border-indigo-400 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 font-bold transition-all inline-flex items-center"><UserCheck size={12} className="mr-1" />指派代理時段</button>
+                              <button type="button" onClick={() => { setAssigningId(item.uniqueId); setEditingSubRecordIdx(null); setAssignForm({ proxyName: '', startHour: '08:30', endHour: '16:30' }); }} className="px-2.5 py-1.5 border border-slate-200 hover:border-indigo-400 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-50 dark:hover:bg-indigo-500/10 font-bold transition-all inline-flex items-center"><UserCheck size={12} className="mr-1" />指派代理時段</button>
                             )}
                           </td>
                         </tr>
