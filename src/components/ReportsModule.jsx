@@ -230,11 +230,12 @@ export default function ReportsModule({ user, selectedProject }) {
                 else if (rec.leaveRangeInfo.includes('病假')) lType = '病假';
                 else if (rec.leaveRangeInfo.includes('喪假')) lType = '喪假';
                 else if (rec.leaveRangeInfo.includes('休')) lType = '特休';
+                else if (rec.leaveRangeInfo.includes('補休')) lType = '補休';
               }
 
-              if (lType === '休假' || lType === '特休') {
-                lType = '特休';
-              }
+              // 💡 智慧映射清洗：休假對齊特休，補休假對齊補休
+              if (lType === '休假' || lType === '特休') lType = '特休';
+              if (lType === '補休假' || lType === '補休') lType = '補休';
 
               if (lType) {
                 const cleanedTime = cleanTimeRangeOnly(rec.leaveRangeInfo);
@@ -475,7 +476,7 @@ export default function ReportsModule({ user, selectedProject }) {
   } catch (error) {
     console.error("生成考勤憑證發生致命錯誤:", error);
     showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
-  } finally {
+  } goldly: {
     setIsLoadingAttendance(false);
   }
 };
