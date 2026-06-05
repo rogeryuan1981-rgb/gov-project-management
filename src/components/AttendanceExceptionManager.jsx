@@ -39,7 +39,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const calendarSnap = await getDoc(calendarDocRef);
       const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
 
-      // B. 讀取打卡流水號 (💡 這裡會精準隨 targetMonth 動態向 Firebase 重新索取特定月份資料)
+      // B. 讀取打卡流水號 (精準隨 targetMonth 動態向 Firebase 重新索取特定月份資料)
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', targetMonth));
       const querySnapshot = await getDocs(q);
@@ -155,13 +155,13 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
         leaveRangeInfo: editForm.leaveRangeInfo,
         leaveType: editForm.leaveType,
         recordType: 'MANUAL_MAINTAINED',
-        isManualMaintained: true, // 同步注入特赦金鑰，永久鎖定不可被覆蓋！
+        isManualMaintained: true, // 手動修訂直接注入特赦令
         updatedAt: new Date().getTime()
       };
 
       await setDoc(doc(attendanceRef, r.realDocId), updatedData, { merge: true });
       setEditingId(null);
-      fetchExceptions(); // 實時重算，修復完成的案件會動態滑出異常清單！
+      fetchExceptions(); 
     } catch (e) {
       alert("儲存維護失敗");
     }
@@ -191,7 +191,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           <button onClick={() => setExceptionFilter('ALL_EXCEPTIONS')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:border-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>全部異常 ({records.length})</button>
           <button onClick={() => setExceptionFilter('ABSENT')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>曠職 ({records.filter(r=>r.statusType==='ABSENT').length})</button>
           <button onClick={() => setExceptionFilter('MISSING_CLOCK')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>缺打卡 ({records.filter(r=>r.statusType==='MISSING_CLOCK').length})</button>
-          <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-50 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
+          <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
         </div>
         
         <div className="relative w-full sm:w-64">
@@ -205,7 +205,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2"><Loader2 size={32} className="animate-spin text-indigo-500" /><span className="text-xs text-slate-400">正在橫向調閱名冊，清洗抽取全月異常件...</span></div>
         ) : filteredRecords.length === 0 ? (
-          <div className="text-center py-16"><CheckCircle className="mx-auto text-emerald-500 mb-2" size={40} /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">本月份目前查無 any 考勤異常件，配置完全合規！</p></div>
+          <div className="text-center py-16"><CheckCircle className="mx-auto text-emerald-500 mb-2" size={40} /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">本月份目前查無 考勤異常件，配置完全合規！</p></div>
         ) : (
           <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-2xs">
             <table className="w-full text-left border-collapse text-xs font-medium">
@@ -257,7 +257,31 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                             r.statusType === 'ABSENT' ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20' : 
                             (r.statusType === 'MISSING_CLOCK' ? 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-500/10 dark:text-orange-400 dark:border-orange-500/20' : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20')
                           }`}>{r.statusText}</span>
-                          {r.isManualMaintained && <span className="px-1.5 py-0.5 bg-emerald-600 text-white rounded text-[9px] font-extrabold shadow-3xs">🔒 已特赦鎖定</span>}
+                          
+                          {/* 💡 方案 B：升級鎖定標籤為「高度互動型一鍵解鎖按鈕」 */}
+                          {r.isManualMaintained && (
+                            <button
+                              type="button"
+                              title="🔒 點擊此處可將特赦令解鎖釋出，重開覆蓋權限"
+                              onClick={async () => {
+                                if (window.confirm(`確定要解鎖並釋出【${r.name}】在 ${r.date} 的防覆蓋狀態嗎？\n解鎖後，下次重新匯入考勤 CSV 將會直接覆蓋本條數據。`)) {
+                                  try {
+                                    const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
+                                    // 將 isManualMaintained 實時設為 false 降級
+                                    await setDoc(doc(attendanceRef, r.realDocId), { isManualMaintained: false }, { merge: true });
+                                    alert("🔓 成功解除特赦鎖定令！下次匯入即可自動覆蓋。");
+                                    fetchExceptions(); // 實時重算刷新
+                                  } catch (err) {
+                                    alert("解鎖失敗，請檢查權限。");
+                                  }
+                                }
+                              }}
+                              className="px-1.5 py-0.5 bg-emerald-600 hover:bg-red-600 text-white rounded text-[9px] font-extrabold shadow-3xs transition-colors group flex items-center space-x-0.5 cursor-pointer"
+                            >
+                              <span className="group-hover:hidden">🔒 已特赦鎖定</span>
+                              <span className="hidden group-hover:inline">🔓 點擊解除鎖定</span>
+                            </button>
+                          )}
                         </div>
                       </td>
 
