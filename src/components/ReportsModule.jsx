@@ -257,7 +257,6 @@ export default function ReportsModule({ user, selectedProject }) {
           } else {
             totalDutyDays++; 
             
-            // 💡 修正重構：優先處理請假工時扣薪，防止因打卡欄位真空而被攔截為曠職
             if (primaryLeaveType) {
               finalStatusText = `已請假 (${primaryLeaveType})`;
               
@@ -268,7 +267,6 @@ export default function ReportsModule({ user, selectedProject }) {
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
                 
-                // 💡 鋼鐵防爆解析：確保 parts 結構與內部時間標籤完全隔離，絕不拋錯
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
                   if (parts.length >= 2 && parts[0] && parts[1]) {
@@ -287,10 +285,8 @@ export default function ReportsModule({ user, selectedProject }) {
                   currentDayLeaveHours = 8;
                 }
 
-                if (!leaveHoursSummary.hasOwnProperty(lRow.type)) {
-                  leaveHoursSummary[lRow.type] = 0;
-                }
-                leaveHoursSummary[lRow.type] += currentDayLeaveHours;
+                const targetType = leaveHoursSummary.hasOwnProperty(lRow.type) ? lRow.type : '其他';
+                leaveHoursSummary[targetType] += currentDayLeaveHours;
 
                 let deductionWeight = 0;
                 if (lRow.type === '事假') {
@@ -622,7 +618,7 @@ export default function ReportsModule({ user, selectedProject }) {
                     table2Html += `<tr class="${rowClasses.join(' ')}">`;
                     if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center font-bold">${slot.posIndex}</td>`;
                     if (rIdx === 0 && sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${uGroup.rowSpan}">${uGroup.unit}</td>`;
-                    if (sIdx === 0 && eIdx === 0) table2Html += `<td rowspan="${rGroup.rowSpan}">${rGroup.role}</td>`;
+                    if (sIdx === 0 && eIdx === 0) table2Hex += `<td rowspan="${rGroup.rowSpan}">${rGroup.role}</td>`;
                     if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center">${slot.label}</td>`;
                     if (event.isEmpty) { table2Html += `<td colspan="3" style="color:#94a3b8; text-align:center;">(此員額於期間內全段空缺)</td>`; }
                     else if (event.isVacancy) { table2Html += `<td class="highlight font-bold">空缺</td><td class="highlight font-mono">${event.startStr}</td><td class="highlight font-mono">${event.endStr}</td>`; }
