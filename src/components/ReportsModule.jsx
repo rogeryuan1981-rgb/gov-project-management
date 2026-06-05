@@ -46,13 +46,13 @@ export default function ReportsModule({ user, selectedProject }) {
   useEffect(() => {
     if (!user || !selectedProject) return;
 
-    const projectRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'projects');
-    const unsubProject = onSnapshot(projectRef, (snapshot) => {
-      const currentProj = snapshot.docs.map(d => ({id: d.id, ...d.data()})).find(p => p.id === selectedProject);
-      if (currentProj) {
-        setProjectName(currentProj.name);
-        setProjectStartDate(currentProj.startDate || '');
-        setProjectEndDate(currentProj.endDate || '');
+    const projectRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'projects', selectedProject);
+    const unsubProject = onSnapshot(projectRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setProjectName(data.name || '');
+        setProjectStartDate(data.startDate || '');
+        setProjectEndDate(data.endDate || '');
       }
     });
 
@@ -114,7 +114,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return rangeStr.replace(/\s+/g, '');
   };
 
-  // 完全動態推導目前專案名冊中所有不重複的計畫單位清單，不再寫死
+  // 完全動態推導目前專案名冊中所有不重複的計畫單位清單
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
   
   const getUnitColorClass = (unitName) => {
@@ -257,7 +257,7 @@ export default function ReportsModule({ user, selectedProject }) {
           } else {
             totalDutyDays++; 
             
-            // 💡 【核心重構：翻轉優先權】：只要當天有請假紀錄，優先進入請假工時交叉，杜絕空打卡被攔截為曠職
+            // 💡 修正重構：優先處理請假工時扣薪，防止因打卡欄位真空而被攔截為曠職
             if (primaryLeaveType) {
               finalStatusText = `已請假 (${primaryLeaveType})`;
               
@@ -268,6 +268,7 @@ export default function ReportsModule({ user, selectedProject }) {
               dailyLeaveRows.forEach(lRow => {
                 let currentDayLeaveHours = 8;
                 
+                // 💡 鋼鐵防爆解析：確保 parts 結構與內部時間標籤完全隔離，絕不拋錯
                 if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
                   const parts = lRow.cleanTime.split('~');
                   if (parts.length >= 2 && parts[0] && parts[1]) {
@@ -486,7 +487,7 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     } catch (error) {
       console.error("生成考勤憑證發生致命錯誤:", error);
-      showMessage('error', '⚠️ 報表精算核心執行中斷，請回報系統承辦人員。');
+      showMessage('error', '⚠️ 報表精算核心執行中斷，請聯絡系統管理人員。');
     } finally {
       setIsLoadingAttendance(false);
     }
@@ -726,7 +727,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
-      <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm bg-white dark:bg-slate-800">
+      <div className="p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm bg-white dark:bg-slate-800">
         <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
           <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業與報表中心
         </h2>
@@ -743,7 +744,7 @@ export default function ReportsModule({ user, selectedProject }) {
           
           <div className="space-y-2.5 mb-5 mt-auto">
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
+              <span className="text-xs font-bold text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
               <input 
                 type="month" 
                 value={attendanceYearMonth} 
@@ -752,7 +753,7 @@ export default function ReportsModule({ user, selectedProject }) {
               />
             </div>
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
+              <span className="text-xs font-bold text-slate-400 flex items-center">計畫單位</span>
               <select 
                 value={attendanceSelectedUnit} 
                 onChange={(e) => setAttendanceSelectedUnit(e.target.value)} 
