@@ -70,10 +70,30 @@ export default function ReportsModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubTasks(); };
   }, [user, selectedProject]);
 
+  // 時間轉分鐘輔助函數
   const timeToMinutes = (timeStr) => {
-    if (!timeStr || !timeStr.includes(':')) return null;
+    if (!timeStr || !timeStr.includes(':')) return 0;
     const parts = timeStr.split(':');
-    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+    return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+  };
+
+  // 實時精算扣除「12:30 - 13:30」中午休息工時之有效分鐘數函數
+  const getEffectiveMinutes = (startStr, endStr) => {
+    const startM = timeToMinutes(startStr);
+    const endM = timeToMinutes(endStr);
+    if (endM <= startM) return 0;
+
+    let totalMinutes = endM - startM;
+    const breakStart = 12 * 60 + 30; // 750 分鐘
+    const breakEnd = 13 * 60 + 30;   // 810 分鐘
+
+    const overlapStart = Math.max(startM, breakStart);
+    const overlapEnd = Math.min(endM, breakEnd);
+
+    if (overlapEnd > overlapStart) {
+      totalMinutes -= (overlapEnd - overlapStart);
+    }
+    return totalMinutes;
   };
 
   // 動態推導目前專案名冊中所有不重複的計畫單位清單
@@ -181,6 +201,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
           let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
+          let proxySegments = [];
 
           if (dayRecords.length > 0) {
             const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '');
@@ -190,6 +211,9 @@ export default function ReportsModule({ user, selectedProject }) {
             checkOut = validOut ? validOut.checkOut : (dayRecords[0].checkOut || "");
             leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0].leaveRangeInfo || "");
             leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
+            
+            // 💡 獲取該天已維護的多重分段代理人歷程
+            proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
           }
 
           let dailyComment = "";
@@ -236,9 +260,14 @@ export default function ReportsModule({ user, selectedProject }) {
               const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
-              let currentDayLeaveHours = 8;
               
-              if (leaveRangeInfo && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
+              // 💡 調用精準中午休息時間扣除函數推導請假時數
+              let currentDayLeaveHours = 8;
+              if (leaveRangeInfo && leaveRangeInfo.includes('~')) {
+                const parts = leaveRangeInfo.split('~');
+                const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
+                currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+              } else if (leaveRangeInfo && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
                 currentDayLeaveHours = 4;
               }
 
@@ -253,8 +282,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 deductionWeight = 1.0;
               } else if (leaveType === '病假') {
                 deductionWeight = 0.5;
-              } else {
-                deductionWeight = 0.0;
               }
 
               const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
@@ -284,13 +311,23 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
+          // 💡 智慧拼接分段代理人資訊輸出進 A4 紙張表格
+          let dailyProxyDisplay = "--";
+          if (proxySegments.length > 0) {
+            dailyProxyDisplay = proxySegments
+              .map(seg => `${seg.proxyName} (${seg.startHour}~${seg.endHour})`)
+              .join('<br/>');
+          } else if (dayRecords.length > 0 && dayRecords[0].proxyName) {
+            dailyProxyDisplay = dayRecords[0].proxyName; // 相容舊有純文字數據
+          }
+
           dailyRowsHtml += `
             <tr style="${rowBgStyle}">
               <td style="text-align: center; font-weight: bold;">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
               <td style="text-align: center; font-family: monospace;">${checkIn || '--'}</td>
               <td style="text-align: center; font-family: monospace;">${checkOut || '--'}</td>
-              <td style="text-align: center;">${leaveType ? `${leaveType} ${leaveRangeInfo}` : '--'}</td>
-              <td style="text-align: center; color: #94a3b8;">--</td>
+              <td style="text-align: center;">${leaveType ? `${leaveType}<br/><span style="font-size:9px; color:#64748b;">${leaveRangeInfo}</span>` : '--'}</td>
+              <td style="text-align: center; font-size: 10px; font-weight: 600; color: #312e81;">${dailyProxyDisplay}</td>
               <td><span style="font-size: 11px; font-weight: bold;">${finalStatusText}</span></td>
               <td style="font-size: 10px; color: #475569;">${dailyComment || '--'}</td>
             </tr>
@@ -349,8 +386,8 @@ export default function ReportsModule({ user, selectedProject }) {
                   <th style="width: 70px; text-align: center;">上班時間 (M)</th>
                   <th style="width: 70px; text-align: center;">下班時間 (O)</th>
                   <th style="width: 110px; text-align: center;">請假時間 (Z)</th>
-                  <th style="width: 75px; text-align: center;">職務代理人</th>
-                  <th style="width: 130px;">工時交叉結果</th>
+                  <th style="width: 115px; text-align: center;">職務代理人</th>
+                  <th style="width: 120px;">工時交叉結果</th>
                   <th>異動與事件備註</th>
                 </tr>
               </thead>
@@ -661,7 +698,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
       </div>
 
-      {/* 區塊分流：重構為雙卡片左右對稱或並排佈局 */}
+      {/* 區塊分流 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
         
         {/* 1. 人員考勤表卡片 */}
@@ -707,7 +744,7 @@ export default function ReportsModule({ user, selectedProject }) {
           </button>
         </div>
 
-        {/* 2. 異動與空缺紀錄表 (💥 核心重構：內聚日期區間過濾器，全新改版為完全內聚獨立的作業面板) */}
+        {/* 2. 異動與空缺紀錄表 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核</div>
           <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><Users className="text-emerald-600" size={28} /></div>
@@ -715,7 +752,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
           <p className="text-xs text-slate-400 leading-relaxed mb-4">按員額 Slot 獨立精算在職與空缺區間，產出作為政府機關核減扣款依據之正式附件憑證。</p>
           
-          {/* 💥 智慧内聚：原外部共享區間列，完美精準移入卡片內部，美化為內嵌式微調器堆疊 */}
+          {/* 日期區間過濾 */}
           <div className="space-y-2.5 mb-5 mt-auto">
             <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
