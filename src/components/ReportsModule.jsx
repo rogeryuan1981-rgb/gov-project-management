@@ -16,7 +16,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
 
-  // 💡 動態假別別名映射池狀態 (預設同步考勤模組核心字典)
+  // 動態假別別名映射池狀態 (預設同步考勤模組核心字典)
   const [leaveAliasMapping, setLeaveAliasMapping] = useState([
     { alias: '休假', official: '特休' },
     { alias: '補休假', official: '補休' }
@@ -113,7 +113,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return rangeStr.replace(/\s+/g, '');
   };
 
-  // 💡 【活化1】：從人員名冊中完全動態推導目前專案中所有不重複的計畫單位清單，不再寫死
+  // 從人員名冊中完全動態推導目前專案中所有不重複的計畫單位清單，不再寫死
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
   
   const getUnitColorClass = (unitName) => {
@@ -233,7 +233,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 else if (rec.leaveRangeInfo.includes('補休')) lType = '補休';
               }
 
-              // 💡 【活化2】：對齊調用自訂的假別映射字典，不再寫死
               const matchedMap = leaveAliasMapping.find(m => m.alias === lType);
               if (matchedMap) {
                 lType = matchedMap.official;
@@ -257,7 +256,6 @@ export default function ReportsModule({ user, selectedProject }) {
             if (primaryLeaveType) {
               finalStatusText = `已請假 (${primaryLeaveType})`;
               
-              // 💡 【活化3】：動態比對當下組別與核定職缺獲取標準核銷時薪，絕不寫死
               const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
@@ -319,7 +317,6 @@ export default function ReportsModule({ user, selectedProject }) {
             }).join('');
           }
 
-          // 💡 【活化4】：完全動態衍生所有同仁的時間軸備註事件軌跡，封印任何Hardcode姓名日期邏輯
           let finalCommentsArray = [];
           if (person.hireDate && person.hireDate === dateStr) finalCommentsArray.push("ℹ️ 今日到職起聘。");
           if (person.contractEnd && person.contractEnd === dateStr) finalCommentsArray.push("⚠️ 離職最後工作日。");
@@ -441,11 +438,11 @@ export default function ReportsModule({ user, selectedProject }) {
             body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
-            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; border: 2px solid #0f172a; table-layout: fixed; }
-            .info-table td { padding: 4px 5px; border: 1px solid #cbd5e1; vertical-align: middle; }
+            .info-table { border: 2px solid #0f172a; table-layout: fixed; width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+            .info-table td { border: 1px solid #cbd5e1; padding: 4px 5px; vertical-align: middle; }
             .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 10.5px; }
             .info-value { width: 37%; font-size: 10.5px; }
-            .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
+            .data-table { border: 2px solid #0f172a; table-layout: fixed; width: 100%; border-collapse: collapse; }
             .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; word-wrap: break-word; font-size: 9.5px; }
             .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10px; border-bottom: 2px solid #0f172a; padding: 4px 5px; text-align: center; }
             .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
@@ -486,7 +483,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
     if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
 
-    // 💡 【活化5】：完全取消硬編碼的權重。改由合約數據庫需求直接提取，動態進行權重組裝
     const activePersonnelChanges = [];
     personnel.forEach(p => {
       const pOnboardMs = p.hireDate ? new Date(p.hireDate).getTime() : 0;
@@ -515,7 +511,6 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     });
 
-    // 動態按字母或單位自然分組排序，徹底移除寫死字典
     activePersonnelChanges.sort((a, b) => a.unit.localeCompare(b.unit) || a.role.localeCompare(b.role));
 
     const roleGroups = {};
@@ -708,43 +703,94 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
+      {/* 💡 頂部主面板：補上正確的深色模式白字 text-slate-800 dark:text-white */}
       <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">核銷作業報表中心</h2>
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
+          <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業與報表中心
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之 A4 法定附件憑證。</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+        
+        {/* 1. 人員考勤表卡片 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
-          <h3 className="text-lg font-bold mb-1">1. 人員考勤匯總表</h3>
+          <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
+          <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
+          
+          {/* 💡 標題與內文：全面補上 dark:text-white / dark:text-slate-300 */}
+          <h3 className="text-lg font-bold mb-1 text-slate-800 dark:text-white">1. 人員考勤匯總表</h3>
+          <p className="text-xs text-slate-400 dark:text-slate-300 leading-relaxed mb-4">按日追蹤全月異動軌跡與彈性工時，一鍵篩選出特定組別之 A4 法定核銷憑證。</p>
+          
           <div className="space-y-2.5 mb-5 mt-auto">
-            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400">結算月份</span>
-              <input type="month" value={attendanceYearMonth} onChange={(e) => setAttendanceYearMonth(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer" />
+            {/* 月份選取 */}
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
+              {/* 💡 輸入框：精準強制深色模式下維持白字 text-slate-700 dark:text-white */}
+              <input 
+                type="month" 
+                value={attendanceYearMonth} 
+                onChange={(e) => setAttendanceYearMonth(e.target.value)} 
+                className="bg-transparent text-xs font-bold text-slate-700 dark:text-white outline-none cursor-pointer dark:[&::-webkit-calendar-picker-indicator]:invert" 
+              />
             </div>
-            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400">計畫單位</span>
-              <select value={attendanceSelectedUnit} onChange={(e) => setAttendanceSelectedUnit(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer">
-                <option value="ALL">全部單位 (ALL)</option>
-                {allExistingUnits.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+            {/* 單位過濾 */}
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400 dark:text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
+              {/* 💡 下拉選單：修正深色模式黑底黑字選不到的問題 text-slate-800 dark:text-white */}
+              <select 
+                value={attendanceSelectedUnit} 
+                onChange={(e) => setAttendanceSelectedUnit(e.target.value)} 
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer text-right max-w-[150px] truncate"
+              >
+                <option value="ALL" className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">全部單位 (ALL)</option>
+                {allExistingUnits.map(unit => (
+                  <option key={unit} value={unit} className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">
+                    {unit}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
-          <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 A4 憑證 PDF</span></button>
+          <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center shadow-sm"><span>匯出 A4 憑證 PDF</span></button>
         </div>
 
+        {/* 2. 異動與空缺紀錄表 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
-          <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
+          <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核</div>
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><Users className="text-emerald-600" size={28} /></div>
+          
+          <h3 className="text-lg font-bold mb-1 text-slate-800 dark:text-white">2. 異動與空缺紀錄表</h3>
+          <p className="text-xs text-slate-400 dark:text-slate-300 leading-relaxed mb-4">按員額 Slot 獨立精算在職與空缺區間，產出作為政府機關核減扣款依據之正式附件憑證。</p>
+          
           <div className="space-y-2.5 mb-5 mt-auto">
-            <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <span className="text-xs font-bold text-orange-600">精算起始日</span>
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
+            <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
+                <Calendar size={12} className="mr-1" />精算起始日
+              </span>
+              <input 
+                type="date" 
+                value={startDate} 
+                onChange={(e) => setStartDate(e.target.value)} 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-white" 
+              />
             </div>
-            <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <span className="text-xs font-bold text-orange-600">精算結束日</span>
-              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
+            
+            <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
+                <Calendar size={12} className="mr-1" />精算結束日
+              </span>
+              <input 
+                type="date" 
+                value={endDate} 
+                onChange={(e) => setEndDate(e.target.value)} 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-white" 
+              />
             </div>
           </div>
-          <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 PDF (精算明細版)</span></button>
+          <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center shadow-sm"><span>匯出 PDF (精算明細版)</span></button>
         </div>
+
       </div>
     </div>
   );
