@@ -84,8 +84,8 @@ export default function ReportsModule({ user, selectedProject }) {
     if (endM <= startM) return 0;
 
     let totalMinutes = endM - startM;
-    const breakStart = 12 * 60 + 30; // 750 分鐘
-    const breakEnd = 13 * 60 + 30;   // 810 分鐘
+    const breakStart = 12 * 60 + 30; 
+    const breakEnd = 13 * 60 + 30;   
 
     const overlapStart = Math.max(startM, breakStart);
     const overlapEnd = Math.min(endM, breakEnd);
@@ -212,41 +212,10 @@ export default function ReportsModule({ user, selectedProject }) {
             leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0].leaveRangeInfo || "");
             leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
             
-            // 💡 獲取該天已維護的多重分段代理人歷程
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
           }
 
-          let dailyComment = "";
-          if (person.hireDate && person.hireDate === dateStr) dailyComment += "ℹ️ 今日到職起聘。 ";
-          if (person.contractEnd && person.contractEnd === dateStr) dailyComment += "⚠️ 離職最後工作日。 ";
-          
-          if (sortedHistory.length > 0 && currentDayHistoryIdx !== -1) {
-            const currentPeriod = sortedHistory[currentDayHistoryIdx];
-            
-            if (dateStr === currentPeriod.startDate && currentDayHistoryIdx > 0) {
-              const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
-              const prevRoleName = prevPeriod.role || prevPeriod.position || '未指定職缺';
-              dailyComment += `✨ 轉調首個工作日 (前屬單位職缺：${prevPeriod.unit}-${prevRoleName})。 `;
-            }
-            
-            if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
-              const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
-              const nextRoleName = nextPeriod.role || nextPeriod.position || '未指定職缺';
-              const nextStartFormated = nextPeriod.startDate ? nextPeriod.startDate.substring(5).replace('-', '/') : '';
-              dailyComment += `🔄 轉調前最後工作日 (預計於 ${nextStartFormated} 轉調至 ${nextPeriod.unit}-${nextRoleName}職缺)。 `;
-            }
-          } else {
-            if (person.name === '于家源') {
-              if (dateStr === '2025-03-11') dailyComment += "ℹ️ 今日到職起聘。 ";
-              if (dateStr === '2025-12-31') dailyComment += "🔄 轉調前最後工作日 (預計於 01/01 轉調至 專案辦公室-專案小組長職缺)。 ";
-              if (dateStr === '2026-01-01') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案主任)。 ";
-              if (dateStr === '2026-04-30') dailyComment += "🔄 轉調前最後工作日 (預計於 05/01 轉調至 企劃組-專案主任職缺)。 ";
-              if (dateStr === '2026-05-01') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：專案辦公室-專案小組長)。 ";
-              if (dateStr === '2026-05-17') dailyComment += "🔄 轉調前最後工作日 (預計於 05/18 轉調至 企劃組-專案助理職缺)。 ";
-              if (dateStr === '2026-05-18') dailyComment += "✨ 轉調首個工作日 (前屬單位職缺：企劃組-專案助理)。 "; 
-            }
-          }
-
+          // D. 工時核心合規與統計
           let finalStatusText = "--"; let rowBgStyle = "";
 
           if (isOffDay) {
@@ -261,7 +230,6 @@ export default function ReportsModule({ user, selectedProject }) {
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
               
-              // 💡 調用精準中午休息時間扣除函數推導請假時數
               let currentDayLeaveHours = 8;
               if (leaveRangeInfo && leaveRangeInfo.includes('~')) {
                 const parts = leaveRangeInfo.split('~');
@@ -304,32 +272,60 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (isEarlyLeave) { totalEarlyLeaveCount++; totalEarlyLeaveMinutes += earlyLeaveMinutes; }
 
                 if (isLate && isEarlyLeave) { finalStatusText = `遲到 ${lateMinutes} 分 / 早退 ${earlyLeaveMinutes} 分`; rowBgStyle = "background-color: #fef2f2;"; }
-                else if (isLate) { finalStatusText = `遲到 ${lateMinutes} 分鐘`; rowBgStyle = "background-color: #fff7ed;"; }
-                else if (isEarlyLeave) { finalStatusText = `早退 ${earlyLeaveMinutes} 分鐘`; rowBgStyle = "background-color: #fff7ed;"; }
+                else if (isLate) { finalStatusText = `遲到 ${lateMinutes} 分`; rowBgStyle = "background-color: #fff7ed;"; }
+                else if (isEarlyLeave) { finalStatusText = `早退 ${earlyLeaveMinutes} 分`; rowBgStyle = "background-color: #fff7ed;"; }
                 else { finalStatusText = "正常出勤"; }
               }
             }
           }
 
-          // 💡 智慧拼接分段代理人資訊輸出進 A4 紙張表格
-          let dailyProxyDisplay = "--";
-          if (proxySegments.length > 0) {
-            dailyProxyDisplay = proxySegments
-              .map(seg => `${seg.proxyName} (${seg.startHour}~${seg.endHour})`)
-              .join('<br/>');
-          } else if (dayRecords.length > 0 && dayRecords[0].proxyName) {
-            dailyProxyDisplay = dayRecords[0].proxyName; // 相容舊有純文字數據
+          // 💡 智慧事件備註線組裝 (整合轉調事件、到職事件與歷史分段代理人數據)
+          let finalCommentsArray = [];
+          
+          if (person.hireDate && person.hireDate === dateStr) finalCommentsArray.push("ℹ️ 今日到職起聘。");
+          if (person.contractEnd && person.contractEnd === dateStr) finalCommentsArray.push("⚠️ 離職最後工作日。");
+          
+          if (sortedHistory.length > 0 && currentDayHistoryIdx !== -1) {
+            const currentPeriod = sortedHistory[currentDayHistoryIdx];
+            if (dateStr === currentPeriod.startDate && currentDayHistoryIdx > 0) {
+              const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
+              finalCommentsArray.push(`✨ 轉調首日 (前屬：${prevPeriod.unit}-${prevPeriod.role || prevPeriod.position || '未指定'})。`);
+            }
+            if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
+              const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
+              finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || nextPeriod.position || '未指定'})。`);
+            }
+          } else {
+            if (person.name === '于家源') {
+              if (dateStr === '2025-03-11') finalCommentsArray.push("ℹ️ 今日到職起聘。");
+              if (dateStr === '2025-12-31') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
+              if (dateStr === '2026-01-01') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案主任)。");
+              if (dateStr === '2026-04-30') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：企劃組-專案主任)。");
+              if (dateStr === '2026-05-01') finalCommentsArray.push("✨ 轉調首日 (前屬：專案辦公室-專案小組長)。");
+              if (dateStr === '2026-05-17') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
+              if (dateStr === '2026-05-18') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案助理)。"); 
+            }
           }
+
+          // 💡 修正2：將職務代理人時段拼串合併納入備註中
+          if (proxySegments.length > 0) {
+            const proxyString = proxySegments.map(seg => `${seg.proxyName}(${seg.startHour}-${seg.endHour})`).join(', ');
+            finalCommentsArray.push(`[職務代理] ${proxyString}`);
+          } else if (dayRecords.length > 0 && dayRecords[0].proxyName) {
+            finalCommentsArray.push(`[職務代理] ${dayRecords[0].proxyName}`);
+          }
+
+          // 💡 修正3：非上班日（例假日/放假日）字體一律設定為紅色警示顏色
+          const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
+          const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
           dailyRowsHtml += `
             <tr style="${rowBgStyle}">
-              <td style="text-align: center; font-weight: bold;">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
+              <td style="text-align: center; font-weight: bold; ${dateTextStyle}">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
               <td style="text-align: center; font-family: monospace;">${checkIn || '--'}</td>
               <td style="text-align: center; font-family: monospace;">${checkOut || '--'}</td>
-              <td style="text-align: center;">${leaveType ? `${leaveType}<br/><span style="font-size:9px; color:#64748b;">${leaveRangeInfo}</span>` : '--'}</td>
-              <td style="text-align: center; font-size: 10px; font-weight: 600; color: #312e81;">${dailyProxyDisplay}</td>
-              <td><span style="font-size: 11px; font-weight: bold;">${finalStatusText}</span></td>
-              <td style="font-size: 10px; color: #475569;">${dailyComment || '--'}</td>
+              <td style="text-align: center; white-space: nowrap;">${leaveType ? `${leaveType} ${leaveRangeInfo}` : '--'}</td>
+              <td style="font-size: 10px; color: #475569; padding: 4px 8px; word-break: break-all;">${commentDisplayStr}</td>
             </tr>
           `;
         }
@@ -346,18 +342,18 @@ export default function ReportsModule({ user, selectedProject }) {
 
         pdfPagesHtml += `
           <div class="a4-page">
-            <div style="text-align: center; font-size: 22px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
-            <div style="text-align: center; font-size: 16px; font-weight: bold; color: #475569; margin-bottom: 15px;">人員法定考勤暨差假核銷簽核憑證</div>
+            <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
+            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人員法定考勤暨差假核銷簽核憑證</div>
             
             <table class="info-table">
               <tr>
                 <td class="info-label">結算年月</td><td class="info-value font-bold">${year} 年 ${String(month).padStart(2, '0')} 月</td>
-                <td class="info-label">同仁姓名</td><td class="info-value font-bold" style="font-size: 15px; color: #1e293b;">${person.name}</td>
+                <td class="info-label">同仁姓名</td><td class="info-value font-bold" style="font-size: 14px; color: #1e293b;">${person.name}</td>
               </tr>
               <tr>
                 <td class="info-label">過濾群組</td>
                 <td class="info-value">
-                  <span style="padding: 2px 8px; border-radius: 4px; border: 1px solid; font-size: 11px; font-weight: bold; ${getUnitColorClass(attendanceSelectedUnit === 'ALL' ? person.unit : attendanceSelectedUnit)}">
+                  <span style="padding: 1px 6px; border-radius: 4px; border: 1px solid; font-size: 11px; font-weight: bold; ${getUnitColorClass(attendanceSelectedUnit === 'ALL' ? person.unit : attendanceSelectedUnit)}">
                     ${attendanceSelectedUnit === 'ALL' ? '全部檢視 (ALL)' : attendanceSelectedUnit}
                   </span>
                 </td>
@@ -366,14 +362,14 @@ export default function ReportsModule({ user, selectedProject }) {
               <tr>
                 <td class="info-label">篩選區間應到</td><td class="info-value font-mono" style="font-weight: bold; color: #4f46e5;">${totalDutyDays} 天</td>
                 <td class="info-label" style="background: #fdf2f8; color: #be185d;">本區間彙總統計</td>
-                <td class="info-value" style="font-size: 11px; line-height: 1.45; background: #fffdfd;">
+                <td class="info-value" style="font-size: 11px; line-height: 1.4; background: #fffdfd;">
                   正常到工：<span class="text-emerald">${totalActualWorkDays} 天</span> | 
                   判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold' : ''}">${totalAbsentCount} 天</span><br/>
                   累計遲到：<span>${totalLateCount} 次 (${totalLateMinutes} 分)</span> | 
                   累計早退：<span>${totalEarlyLeaveCount} 次 (${totalEarlyLeaveMinutes} 分)</span><br/>
-                  <div style="margin-top: 4px; padding-top: 4px; border-top: 1px dashed #e2e8f0;">
+                  <div style="margin-top: 2px; padding-top: 2px; border-top: 1px dashed #e2e8f0;">
                     <strong>各假別時數統計：</strong> <span style="color: #4f46e5; font-weight: 600;">${leaveDetailsText}</span><br/>
-                    <strong>勞基法請假扣款：</strong> <span class="${totalLeaveDeduction > 0 ? 'text-danger font-black font-mono text-sm' : 'text-emerald font-bold'}" style="font-size: 12px;">$${Math.round(totalLeaveDeduction).toLocaleString()} 元</span>
+                    <strong>勞基法請假扣款：</strong> <span class="${totalLeaveDeduction > 0 ? 'text-danger font-black font-mono text-sm' : 'text-emerald font-bold'}" style="font-size: 11px;">$${Math.round(totalLeaveDeduction).toLocaleString()} 元</span>
                   </div>
                 </td>
               </tr>
@@ -382,20 +378,18 @@ export default function ReportsModule({ user, selectedProject }) {
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width: 75px; text-align: center;">打卡日期</th>
-                  <th style="width: 70px; text-align: center;">上班時間 (M)</th>
-                  <th style="width: 70px; text-align: center;">下班時間 (O)</th>
-                  <th style="width: 110px; text-align: center;">請假時間 (Z)</th>
-                  <th style="width: 115px; text-align: center;">職務代理人</th>
-                  <th style="width: 120px;">工時交叉結果</th>
-                  <th>異動與事件備註</th>
+                  <th style="width: 80px; text-align: center;">日期</th>
+                  <th style="width: 85px; text-align: center;">上班時間 (M)</th>
+                  <th style="width: 85px; text-align: center;">下班時間 (O)</th>
+                  <th style="width: 145px; text-align: center;">請假時間 (Z)</th>
+                  <th>異動與事件備註 (含職務代理資訊)</th>
                 </tr>
               </thead>
               <tbody>
                 ${dailyRowsHtml}
               </tbody>
             </table>
-            <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 5px;">列印日期：${getLocalTodayStr()} | 專案唯一稽核ID: ${selectedProject}_${person.name}</div>
+            <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 4px;">列印日期：${getLocalTodayStr()} | 專案唯一稽核ID: ${selectedProject}_${person.name}</div>
           </div>
         </div>
       `;
@@ -413,20 +407,20 @@ export default function ReportsModule({ user, selectedProject }) {
           <meta charset="UTF-8">
           <title>計畫人員考勤明細月核銷憑證</title>
           <style>
-            @page { size: A4 portrait; margin: 12mm 10mm 12mm 10mm; }
-            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.25; background: #fff; padding: 0; margin: 0; }
+            @page { size: A4 portrait; margin: 8mm 8mm 8mm 8mm; }
+            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
-            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; border: 2px solid #0f172a; table-layout: fixed; }
-            .info-table td { padding: 5px 8px; border: 1px solid #cbd5e1; vertical-align: middle; }
+            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 2px solid #0f172a; table-layout: fixed; }
+            .info-table td { padding: 4px 6px; border: 1px solid #cbd5e1; vertical-align: middle; }
             .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 11px; }
             .info-value { width: 37%; font-size: 11px; }
             .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
-            .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; word-wrap: break-word; font-size: 10.5px; }
-            .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 11px; border-bottom: 2px solid #0f172a; }
+            .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 5px; text-align: left; word-wrap: break-word; font-size: 10px; }
+            .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10.5px; border-bottom: 2px solid #0f172a; padding: 5px; }
             .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
-            .no-print-bar { text-align: center; background: #e0e7ff; padding: 12px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
-            .print-btn { padding: 8px 24px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 13px; }
+            .no-print-bar { text-align: center; background: #e0e7ff; padding: 10px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
+            .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
             @media print { .no-print-bar { display: none !important; } }
           </style>
         </head>
@@ -442,7 +436,7 @@ export default function ReportsModule({ user, selectedProject }) {
       const printWindow = window.open('', '', 'width=1100,height=850');
       printWindow.document.write(printContent); printWindow.document.close();
       setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並導出共 ${printedTargetCount} 位人員之 A4 核銷憑證。`);
+      showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出 A4 核銷憑證。`);
     } catch (error) {
       console.error("生成考勤憑證發生致命錯誤:", error);
       showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
@@ -702,7 +696,7 @@ export default function ReportsModule({ user, selectedProject }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
         
         {/* 1. 人員考勤表卡片 */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden">
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
           <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
           <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
           
