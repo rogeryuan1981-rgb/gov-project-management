@@ -233,7 +233,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 else if (rec.leaveRangeInfo.includes('補休')) lType = '補休';
               }
 
-              // 💡 智慧映射清洗：休假對齊特休，補休假對齊補休
               if (lType === '休假' || lType === '特休') lType = '特休';
               if (lType === '補休假' || lType === '補休') lType = '補休';
 
@@ -272,7 +271,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (leaveHoursSummary.hasOwnProperty(lRow.type)) {
                   leaveHoursSummary[lRow.type] += currentDayLeaveHours;
                 } else {
-                  leaveHoursSummary['其他'] += currentDayLeaveHours;
+                  leaveHoursSummary['反常屬性'] += currentDayLeaveHours;
                 }
 
                 let deductionWeight = 0;
@@ -476,7 +475,7 @@ export default function ReportsModule({ user, selectedProject }) {
   } catch (error) {
     console.error("生成考勤憑證發生致命錯誤:", error);
     showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
-  } goldly: {
+  } finally {
     setIsLoadingAttendance(false);
   }
 };
