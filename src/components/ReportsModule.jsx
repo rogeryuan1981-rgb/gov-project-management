@@ -96,19 +96,6 @@ export default function ReportsModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 💡 【全新引入】：智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格
-  const cleanTimeRangeOnly = (rangeStr) => {
-    if (!rangeStr) return '';
-    // 匹配如 115/04/08 08:30 或 2026-04-08 08:30 夾帶的時間段落
-    const timePattern = /(\d{2}:\d{2})/g;
-    const matches = rangeStr.match(timePattern);
-    if (matches && matches.length >= 2) {
-      return `${matches[0]} ~ ${matches[1]}`;
-    }
-    // 如果原本就是單純的時間範圍，直接處理空格
-    return rangeStr.replace(/\s+/g, '');
-  };
-
   // 動態推導目前專案名冊中所有不重複的計畫單位清單
   const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
   
@@ -124,7 +111,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return 'color: #475569; background: #f8fafc; border-color: #e2e8f0;';
   };
 
-  // ================= 功能：1. 人員考勤匯總表 =================
+  // ================= 功能：1. 人員考勤匯總表 (動態歷史編制核銷凭证版) =================
   const exportAttendancePDF = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!attendanceYearMonth) return showMessage('error', '請選擇考勤匯總月份。');
@@ -213,85 +200,60 @@ export default function ReportsModule({ user, selectedProject }) {
           hasValidUnitDayInMonth = true;
 
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
-          
-          // 💡 支援多假別聚合桶
-          let dailyLeaveRows = [];
-
-          let checkIn = ""; let checkOut = ""; 
+          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
           let proxySegments = [];
 
           if (dayRecords.length > 0) {
             const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '');
             const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '');
+            const validLeave = dayRecords.find(r => r.leaveType && r.leaveType !== '');
             checkIn = validIn ? validIn.checkIn : (dayRecords[0].checkIn || "");
             checkOut = validOut ? validOut.checkOut : (dayRecords[0].checkOut || "");
+            leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0].leaveRangeInfo || "");
+            leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
             
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
-
-            // 遍歷當日所有流水號，收集所有有效的請假事件
-            dayRecords.forEach(rec => {
-              let lType = rec.leaveType || "";
-              if (!lType && rec.leaveRangeInfo && (rec.leaveRangeInfo.includes('假') || rec.leaveRangeInfo.includes('休'))) {
-                // 嘗試從範圍字串中還原假別
-                if (rec.leaveRangeInfo.includes('事假')) lType = '事假';
-                else if (rec.leaveRangeInfo.includes('病假')) lType = '病假';
-                else if (rec.leaveRangeInfo.includes('喪假')) lType = '喪假';
-                else if (rec.leaveRangeInfo.includes('休')) lType = '特休';
-              }
-
-              // 💡 修正3：不論資料源是「休假」還是「特休」，一律清洗映射對齊為「特休」
-              if (lType === '休假' || lType === '特休') {
-                lType = '特休';
-              }
-
-              if (lType) {
-                const cleanedTime = cleanTimeRangeOnly(rec.leaveRangeInfo);
-                dailyLeaveRows.push({ type: lType, rawTime: rec.leaveRangeInfo, cleanTime: cleanedTime });
-              }
-            });
           }
 
-          // 處理工時合規與扣薪計算
+          // D. 工時核心合規與統計
           let finalStatusText = "--"; let rowBgStyle = "";
-          let primaryLeaveType = dailyLeaveRows.length > 0 ? dailyLeaveRows[0].type : "";
 
           if (isOffDay) {
             if (checkIn || checkOut) finalStatusText = "假日加班";
             else finalStatusText = "例假日/放假";
           } else {
             totalDutyDays++; 
-            if (primaryLeaveType) {
-              finalStatusText = `已請假 (${primaryLeaveType})`;
+            if (leaveType) {
+              finalStatusText = `已請假 (${leaveType})`;
               
               const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
+              
+              let currentDayLeaveHours = 8;
+              if (leaveRangeInfo && leaveRangeInfo.includes('~')) {
+                const parts = leaveRangeInfo.split('~');
+                const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
+                currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+              } else if (leaveRangeInfo && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
+                currentDayLeaveHours = 4;
+              }
 
-              // 逐筆加總當日所有請假事件的扣薪時數
-              dailyLeaveRows.forEach(lRow => {
-                let currentLeaveHours = 8;
-                if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
-                  const parts = lRow.cleanTime.split('~');
-                  const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                  currentLeaveHours = Math.ceil(effectiveMins / 60);
-                } else if (lRow.rawTime && (lRow.rawTime.includes('4小時') || lRow.rawTime.includes('半天'))) {
-                  currentLeaveHours = 4;
-                }
+              if (leaveHoursSummary.hasOwnProperty(leaveType)) {
+                leaveHoursSummary[leaveType] += currentDayLeaveHours;
+              } else {
+                leaveHoursSummary['其他'] += currentDayLeaveHours;
+              }
 
-                if (leaveHoursSummary.hasOwnProperty(lRow.type)) {
-                  leaveHoursSummary[lRow.type] += currentLeaveHours;
-                } else {
-                  leaveHoursSummary['其他'] += currentLeaveHours;
-                }
+              let deductionWeight = 0;
+              if (leaveType === '事假') {
+                deductionWeight = 1.0;
+              } else if (leaveType === '病假') {
+                deductionWeight = 0.5;
+              }
 
-                let deductionWeight = 0;
-                if (lRow.type === '事假') {
-                  deductionWeight = 1.0;
-                } else if (lRow.type === '病假') {
-                  deductionWeight = 0.5;
-                }
-                totalLeaveDeduction += (currentLeaveHours * hourlyWage * deductionWeight);
-              });
+              const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
+              totalLeaveDeduction += currentDeduction;
 
             } else if (!checkIn && !checkOut) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
@@ -317,19 +279,9 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 修正1 & 修正2：處理請假時間的多假別一行呈現與換行排版
-          let leaveCellHtml = "--";
-          if (dailyLeaveRows.length > 0) {
-            // 💡 修正2：若當天有請兩種假再請換行呈現，如：事假 08:30 ~ 12:30 \n 特休 13:30 ~ 17:30
-            // 💡 修正1：假別和時間保持在同一行不拆散
-            leaveCellHtml = dailyLeaveRows.map(lRow => {
-              const displayTime = lRow.cleanTime || lRow.rawTime;
-              return `<div style="white-space: nowrap; line-height: 1.3;">${lRow.type} ${displayTime}</div>`;
-            }).join('');
-          }
-
-          // 智慧事件與代理同仁整合串接備註
+          // 💡 智慧事件備註線組裝 (整合轉調事件、到職事件與歷史分段代理人數據)
           let finalCommentsArray = [];
+          
           if (person.hireDate && person.hireDate === dateStr) finalCommentsArray.push("ℹ️ 今日到職起聘。");
           if (person.contractEnd && person.contractEnd === dateStr) finalCommentsArray.push("⚠️ 離職最後工作日。");
           
@@ -337,11 +289,11 @@ export default function ReportsModule({ user, selectedProject }) {
             const currentPeriod = sortedHistory[currentDayHistoryIdx];
             if (dateStr === currentPeriod.startDate && currentDayHistoryIdx > 0) {
               const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
-              finalCommentsArray.push(`✨ 轉調首日 (前屬：${prevPeriod.unit}-${prevPeriod.role || '未指定'})。`);
+              finalCommentsArray.push(`✨ 轉調首日 (前屬：${prevPeriod.unit}-${prevPeriod.role || prevPeriod.position || '未指定'})。`);
             }
             if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
               const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
-              finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || '未指定'})。`);
+              finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || nextPeriod.position || '未指定'})。`);
             }
           } else {
             if (person.name === '于家源') {
@@ -355,7 +307,7 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 修正2：取消代理人獨立欄位，若有代理人資訊，一律打包格式化納入備註中展示
+          // 💡 修正2：將職務代理人時段拼串合併納入備註中
           if (proxySegments.length > 0) {
             const proxyString = proxySegments.map(seg => `${seg.proxyName}(${seg.startHour}-${seg.endHour})`).join(', ');
             finalCommentsArray.push(`[職務代理] ${proxyString}`);
@@ -363,12 +315,8 @@ export default function ReportsModule({ user, selectedProject }) {
             finalCommentsArray.push(`[職務代理] ${dayRecords[0].proxyName}`);
           }
 
-          // 加上工時交叉結果的狀態備註，確保審計數據留存
-          if (finalStatusText !== "--" && finalStatusText !== "正常出勤" && !finalStatusText.includes("已請假")) {
-            finalCommentsArray.push(`[出勤判定] ${finalStatusText}`);
-          }
-
-          const dateTextStyle = isOffDay ? "color: #ef4444;" : "";
+          // 💡 修正3：非上班日（例假日/放假日）字體一律設定為紅色警示顏色
+          const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
           dailyRowsHtml += `
@@ -376,7 +324,7 @@ export default function ReportsModule({ user, selectedProject }) {
               <td style="text-align: center; font-weight: bold; ${dateTextStyle}">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
               <td style="text-align: center; font-family: monospace;">${checkIn || '--'}</td>
               <td style="text-align: center; font-family: monospace;">${checkOut || '--'}</td>
-              <td style="padding: 4px 6px;">${leaveCellHtml}</td>
+              <td style="text-align: center; white-space: nowrap;">${leaveType ? `${leaveType} ${leaveRangeInfo}` : '--'}</td>
               <td style="font-size: 10px; color: #475569; padding: 4px 8px; word-break: break-all;">${commentDisplayStr}</td>
             </tr>
           `;
@@ -394,8 +342,8 @@ export default function ReportsModule({ user, selectedProject }) {
 
         pdfPagesHtml += `
           <div class="a4-page">
-            <div style="text-align: center; font-size: 19px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
-            <div style="text-align: center; font-size: 14px; font-weight: bold; color: #475569; margin-bottom: 10px;">人員法定考勤暨差假核銷簽核憑證</div>
+            <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
+            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人員法定考勤暨差假核銷簽核憑證</div>
             
             <table class="info-table">
               <tr>
@@ -430,11 +378,11 @@ export default function ReportsModule({ user, selectedProject }) {
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width: 75px; text-align: center;">日期</th>
-                  <th style="width: 80px; text-align: center;">上班時間 (M)</th>
-                  <th style="width: 80px; text-align: center;">下班時間 (O)</th>
-                  <th style="width: 150px; text-align: center;">請假時間 (Z)</th>
-                  <th>異動與事件備註 (含職務代理與出勤判定資訊)</th>
+                  <th style="width: 80px; text-align: center;">日期</th>
+                  <th style="width: 85px; text-align: center;">上班時間 (M)</th>
+                  <th style="width: 85px; text-align: center;">下班時間 (O)</th>
+                  <th style="width: 145px; text-align: center;">請假時間 (Z)</th>
+                  <th>異動與事件備註 (含職務代理資訊)</th>
                 </tr>
               </thead>
               <tbody>
@@ -459,17 +407,17 @@ export default function ReportsModule({ user, selectedProject }) {
           <meta charset="UTF-8">
           <title>計畫人員考勤明細月核銷憑證</title>
           <style>
-            @page { size: A4 portrait; margin: 6mm 6mm 6mm 6mm; }
+            @page { size: A4 portrait; margin: 8mm 8mm 8mm 8mm; }
             body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
-            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; border: 2px solid #0f172a; table-layout: fixed; }
-            .info-table td { padding: 4px 5px; border: 1px solid #cbd5e1; vertical-align: middle; }
-            .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 10.5px; }
-            .info-value { width: 37%; font-size: 10.5px; }
+            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 2px solid #0f172a; table-layout: fixed; }
+            .info-table td { padding: 4px 6px; border: 1px solid #cbd5e1; vertical-align: middle; }
+            .info-label { background: #f1f5f9; color: #334155; font-weight: bold; width: 13%; text-align: center; font-size: 11px; }
+            .info-value { width: 37%; font-size: 11px; }
             .data-table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px solid #0f172a; }
-            .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; word-wrap: break-word; font-size: 9.5px; }
-            .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10px; border-bottom: 2px solid #0f172a; padding: 4px 5px; text-align: center; }
+            .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3px 5px; text-align: left; word-wrap: break-word; font-size: 10px; }
+            .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10.5px; border-bottom: 2px solid #0f172a; padding: 5px; }
             .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
             .no-print-bar { text-align: center; background: #e0e7ff; padding: 10px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
             .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
@@ -478,7 +426,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </head>
         <body>
           <div class="no-print-bar">
-            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】憑證</button>
+            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份 A4 憑證</button>
           </div>
           ${pdfPagesHtml}
         </body>
@@ -488,7 +436,7 @@ export default function ReportsModule({ user, selectedProject }) {
       const printWindow = window.open('', '', 'width=1100,height=850');
       printWindow.document.write(printContent); printWindow.document.close();
       setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', `✅ 已成功優化 A4 核銷憑證，解決跨天字串溢出。`);
+      showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出 A4 核銷憑證。`);
     } catch (error) {
       console.error("生成考勤憑證發生致命錯誤:", error);
       showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
@@ -680,51 +628,157 @@ export default function ReportsModule({ user, selectedProject }) {
     }
     table3Html += `</table>`;
 
-    return (
-      // JSX layout
-      <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-300">
-        {message && (
-          <div className={`p-4 rounded-xl border flex items-start shadow-sm animate-in slide-in-from-top-2 ${message.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
-            <span className="text-sm font-bold">{message.text}</span>
-          </div>
-        )}
-        <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">核銷作業報表中心</h2>
+    const printContent = `
+      <!DOCTYPE html>
+      <html lang="zh-TW">
+      <head>
+        <meta charset="UTF-8">
+        <title>人事異動與空缺紀錄表</title>
+        <style>
+          body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #333; line-height: 1.4; padding: 20px; }
+          h1 { text-align: center; color: #1e293b; margin-bottom: 5px; }
+          h2 { font-size: 18px; color: #4f46e5; border-bottom: 2px solid #e0e7ff; padding-bottom: 5px; margin-top: 30px; }
+          .meta { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 30px; }
+          table { border-collapse: collapse; margin-bottom: 20px; width: 100%; font-size: 13px; table-layout: fixed; border: 1px solid #cbd5e1; }
+          th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; word-wrap: break-word; }
+          th { background-color: #f8fafc; color: #475569; font-weight: bold; }
+          .text-center { text-align: center; } .text-right { text-align: right; } .font-bold { font-weight: bold; } .font-mono { font-family: monospace; } .highlight { color: #ef4444; } .grace { color: #10b981; font-weight: bold; }
+          .unit-top-border td { border-top: 2px solid #1e293b !important; }
+          .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; border-radius: 5px; font-weight: bold; cursor: pointer; border:none; }
+          @media print { .no-print { display: none !important; } body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="no-print" style="text-align:center; background:#f0fdf4; padding:15px; border-radius:8px;"><button class="print-btn" onclick="window.print()">列印 / 儲存為 PDF</button></div>
+        <h1>【${projectName}】人事異動與空缺紀錄表</h1>
+        <div class="meta">報表統計區間：${startDate} 至 ${endDate} | 產出日期：${getLocalTodayStr()}</div>
+        <h2 style="margin-top: 0;">一、 期間內人事異動軌跡</h2>
+        <table>
+          <colgroup><col style="width: 120px;"><col></colgroup>
+          <tr><th>姓名</th><th>計劃期間異動軌跡</th></tr>
+          ${activePersonnelChanges.map(ap => `<tr><td><strong>${ap.name}</strong></td><td>${ap.events.map(e => `<div>${e}</div>`).join('')}</td></tr>`).join('')}
+        </table>
+        ${table2Html}
+        ${table3Html}
+        <div style="margin-top: 40px; display: flex; justify-content: space-between; padding: 0 40px;">
+          <div>承辦人：<br/><br/><br/>________________</div>
+          <div>計畫主持人：<br/><br/><br/>________________</div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
-            <h3 className="text-lg font-bold mb-1">1. 人員考勤匯總表</h3>
-            <div className="space-y-2.5 mb-5 mt-auto">
-              <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400">結算月份</span>
-                <input type="month" value={attendanceYearMonth} onChange={(e) => setAttendanceYearMonth(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer" />
-              </div>
-              <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400">計畫單位</span>
-                <select value={attendanceSelectedUnit} onChange={(e) => setAttendanceSelectedUnit(e.target.value)} className="bg-transparent text-xs font-bold outline-none cursor-pointer">
-                  <option value="ALL">全部單位 (ALL)</option>
-                  {allExistingUnits.map(unit => <option key={unit} value={unit}>{unit}</option>)}
-                </select>
-              </div>
-            </div>
-            <button onClick={exportAttendancePDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 A4 憑證 PDF</span></button>
-          </div>
-          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
-            <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
-            <div className="space-y-2.5 mb-5 mt-auto">
-              <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-orange-600">精算起始日</span>
-                <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
-              </div>
-              <div className="p-2.5 bg-orange-50/20 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-orange-600">精算結束日</span>
-                <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-white text-xs font-bold rounded-xl px-2.5 py-1" />
-              </div>
-            </div>
-            <button onClick={exportVacancyReportPDF} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex justify-center items-center"><span>匯出 PDF (精算明細版)</span></button>
-          </div>
-        </div>
-      </div>
-    );
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '', 'width=1000,height=800');
+    printWindow.document.write(printContent); printWindow.document.close();
+    setTimeout(() => printWindow.focus(), 500); showMessage('success', '✅ 異動與空缺紀錄表已產出。');
   };
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-300">
+      {message && (
+        <div className={`p-4 rounded-xl border flex items-start shadow-sm animate-in slide-in-from-top-2 ${
+          message.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+        }`}>
+          {message.type === 'error' ? <AlertCircle size={20} className="mr-3 shrink-0 mt-0.5" /> : <CheckCircle2 size={20} className="mr-3 shrink-0 mt-0.5" />}
+          <span className="text-sm font-bold">{message.text}</span>
+        </div>
+      )}
+
+      {/* 頂部純粹標題說明區 */}
+      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
+          <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業報表中心
+        </h2>
+        <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
+      </div>
+
+      {/* 區塊分流 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+        
+        {/* 1. 人員考勤表卡片 */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm flex flex-col group hover:border-indigo-400 transition-colors relative overflow-hidden h-full">
+          <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">憑證中心</div>
+          <div className="p-4 bg-blue-50 dark:bg-blue-500/10 rounded-2xl w-fit mb-4"><FileText className="text-blue-600" size={28} /></div>
+          
+          <h3 className="text-lg font-bold mb-1">1. 人員考勤匯總表</h3>
+          <p className="text-xs text-slate-400 leading-relaxed mb-4">按日追蹤全月異動軌跡與彈性工時，一鍵篩選出特定組別之 A4 法定核銷憑證。</p>
+          
+          {/* 行內雙過濾器堆疊區 */}
+          <div className="space-y-2.5 mb-5 mt-auto">
+            {/* A. 月份選取 */}
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-indigo-500" />結算月份</span>
+              <input 
+                type="month" 
+                value={attendanceYearMonth} 
+                onChange={(e) => setAttendanceYearMonth(e.target.value)} 
+                className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer dark:[&::-webkit-calendar-picker-indicator]:invert" 
+              />
+            </div>
+            {/* 單位過濾 */}
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
+              <select 
+                value={attendanceSelectedUnit} 
+                onChange={(e) => setAttendanceSelectedUnit(e.target.value)} 
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-slate-100 outline-none cursor-pointer text-right max-w-[150px] truncate"
+              >
+                <option value="ALL" className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">全部單位 (ALL)</option>
+                {allExistingUnits.map(unit => (
+                  <option key={unit} value={unit} className="text-slate-800 bg-white dark:bg-slate-800 dark:text-slate-100">
+                    {unit}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <button onClick={exportAttendancePDF} disabled={!isDataLoaded || isLoadingAttendance} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm flex justify-center items-center space-x-2">
+            {isDataLoaded && !isLoadingAttendance ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}<span>匯出 A4 憑證 PDF</span>
+          </button>
+        </div>
+
+        {/* 2. 異動與空缺紀錄表 */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200 dark:border-orange-500/30 shadow-sm flex flex-col group hover:border-orange-400 transition-colors relative overflow-hidden">
+          <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">核心稽核</div>
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><Users className="text-emerald-600" size={28} /></div>
+          
+          <h3 className="text-lg font-bold mb-1">2. 異動與空缺紀錄表</h3>
+          <p className="text-xs text-slate-400 leading-relaxed mb-4">按員額 Slot 獨立精算在職與空缺區間，產出作為政府機關核減扣款依據之正式附件憑證。</p>
+          
+          {/* 日期區間過濾 */}
+          <div className="space-y-2.5 mb-5 mt-auto">
+            <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
+                <Calendar size={12} className="mr-1" />精算起始日
+              </span>
+              <input 
+                type="date" 
+                value={startDate} 
+                onChange={(e) => setStartDate(e.target.value)} 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
+              />
+            </div>
+            
+            <div className="p-2.5 bg-orange-50/20 dark:bg-orange-950/10 rounded-2xl border border-orange-100/50 dark:border-orange-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center">
+                <Calendar size={12} className="mr-1" />精算結束日
+              </span>
+              <input 
+                type="date" 
+                value={endDate} 
+                onChange={(e) => setEndDate(e.target.value)} 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
+              />
+            </div>
+          </div>
+
+          <button onClick={exportVacancyReportPDF} disabled={!isDataLoaded} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm flex justify-center items-center space-x-2">
+            {isDataLoaded ? <Download size={16} /> : <Loader2 size={16} className="animate-spin" />}<span>匯出 PDF (精算明細版)</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
 }
