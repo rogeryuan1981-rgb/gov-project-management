@@ -72,13 +72,14 @@ export default function ReportsModule({ user, selectedProject }) {
 
   // 時間轉分鐘輔助函數
   const timeToMinutes = (timeStr) => {
-    if (!timeStr || !timeStr.includes(':')) return 0;
+    if (!timeStr || typeof timeStr !== 'string' || !timeStr.includes(':')) return 0;
     const parts = timeStr.split(':');
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
   // 實時精算扣除「12:30 - 13:30」中午休息工時之有效分鐘數函數
   const getEffectiveMinutes = (startStr, endStr) => {
+    if (!startStr || !endStr) return 0;
     const startM = timeToMinutes(startStr);
     const endM = timeToMinutes(endStr);
     if (endM <= startM) return 0;
@@ -94,6 +95,17 @@ export default function ReportsModule({ user, selectedProject }) {
       totalMinutes -= (overlapEnd - overlapStart);
     }
     return totalMinutes;
+  };
+
+  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格
+  const cleanTimeRangeOnly = (rangeStr) => {
+    if (!rangeStr || typeof rangeStr !== 'string') return '';
+    const timePattern = /(\d{2}:\d{2})/g;
+    const matches = rangeStr.match(timePattern);
+    if (matches && matches.length >= 2) {
+      return `${matches[0]} ~ ${matches[1]}`;
+    }
+    return rangeStr.replace(/\s+/g, '');
   };
 
   // 動態推導目前專案名冊中所有不重複的計畫單位清單
@@ -186,11 +198,6 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayRole = sortedHistory[matchedIdx].role || sortedHistory[matchedIdx].position || currentDayRole;
               currentDayHistoryIdx = matchedIdx;
             }
-          } else {
-            if (person.name === 'A' || person.name === '于家源') {
-              if (dateStr <= '2026-05-17') { currentDayUnit = '企劃組'; currentDayRole = '專案助理'; }
-              else { currentDayUnit = '專案辦公室'; currentDayRole = person.role || '專案小組長'; }
-            }
           }
 
           if (attendanceSelectedUnit !== 'ALL' && currentDayUnit !== attendanceSelectedUnit) {
@@ -200,68 +207,102 @@ export default function ReportsModule({ user, selectedProject }) {
           hasValidUnitDayInMonth = true;
 
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
-          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
+          
+          // 💡 建立當日請假多假別陣列聚合容器
+          let dailyLeaveRows = [];
+          let checkIn = ""; let checkOut = ""; 
           let proxySegments = [];
 
           if (dayRecords.length > 0) {
-            const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '');
-            const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '');
-            const validLeave = dayRecords.find(r => r.leaveType && r.leaveType !== '');
-            checkIn = validIn ? validIn.checkIn : (dayRecords[0].checkIn || "");
-            checkOut = validOut ? validOut.checkOut : (dayRecords[0].checkOut || "");
-            leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0].leaveRangeInfo || "");
-            leaveType = validLeave ? validLeave.leaveType : (dayRecords[0].leaveType || "");
+            const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '' && r.checkIn !== '--');
+            const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '' && r.checkOut !== '--');
+            checkIn = validIn ? validIn.checkIn : "";
+            checkOut = validOut ? validOut.checkOut : "";
             
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
+
+            dayRecords.forEach(rec => {
+              let lType = rec.leaveType || "";
+              if (!lType && rec.leaveRangeInfo && (rec.leaveRangeInfo.includes('假') || rec.leaveRangeInfo.includes('休'))) {
+                if (rec.leaveRangeInfo.includes('事假')) lType = '事假';
+                else if (rec.leaveRangeInfo.includes('病假')) lType = '病假';
+                else if (rec.leaveRangeInfo.includes('喪假')) lType = '喪假';
+                else if (rec.leaveRangeInfo.includes('休')) lType = '特休';
+                else if (rec.leaveRangeInfo.includes('補休')) lType = '補休';
+              }
+
+              // 💡 智慧映射歸納：休假對齊特休，補休假對齊補休
+              if (lType === '休假' || lType === '特休') lType = '特休';
+              if (lType === '補休假' || lType === '補休') lType = '補休';
+
+              if (lType) {
+                const cleanedTime = cleanTimeRangeOnly(rec.leaveRangeInfo);
+                if (!dailyLeaveRows.some(item => item.type === lType && item.cleanTime === cleanedTime)) {
+                  dailyLeaveRows.push({ type: lType, rawTime: rec.leaveRangeInfo, cleanTime: cleanedTime });
+                }
+              }
+            });
           }
 
-          // D. 工時核心合規與統計
           let finalStatusText = "--"; let rowBgStyle = "";
+          let primaryLeaveType = dailyLeaveRows.length > 0 ? dailyLeaveRows[0].type : "";
 
           if (isOffDay) {
             if (checkIn || checkOut) finalStatusText = "假日加班";
             else finalStatusText = "例假日/放假";
           } else {
             totalDutyDays++; 
-            if (leaveType) {
-              finalStatusText = `已請假 (${leaveType})`;
+            
+            // 💡 修正順序：優先處理請假工時扣薪，防止因打卡欄位真空而被攔截為曠職
+            if (primaryLeaveType) {
+              finalStatusText = `已請假 (${primaryLeaveType})`;
               
               const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
-              
-              let currentDayLeaveHours = 8;
-              if (leaveRangeInfo && leaveRangeInfo.includes('~')) {
-                const parts = leaveRangeInfo.split('~');
-                const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                currentDayLeaveHours = Math.ceil(effectiveMins / 60);
-              } else if (leaveRangeInfo && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
-                currentDayLeaveHours = 4;
-              }
 
-              if (leaveHoursSummary.hasOwnProperty(leaveType)) {
-                leaveHoursSummary[leaveType] += currentDayLeaveHours;
-              } else {
-                leaveHoursSummary['其他'] += currentDayLeaveHours;
-              }
+              dailyLeaveRows.forEach(lRow => {
+                let currentDayLeaveHours = 8;
+                
+                if (lRow.cleanTime && lRow.cleanTime.includes('~')) {
+                  const parts = lRow.cleanTime.split('~');
+                  if (parts.length >= 2 && parts[0] && parts[1]) {
+                    const startToken = parts[0].trim();
+                    const endToken = parts[1].trim();
+                    if (startToken.includes(':') && endToken.includes(':')) {
+                      const effectiveMins = getEffectiveMinutes(startToken, endToken);
+                      currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                    }
+                  }
+                } else if (lRow.rawTime && (lRow.rawTime.includes('4小時') || lRow.rawTime.includes('半天'))) {
+                  currentDayLeaveHours = 4;
+                }
 
-              let deductionWeight = 0;
-              if (leaveType === '事假') {
-                deductionWeight = 1.0;
-              } else if (leaveType === '病假') {
-                deductionWeight = 0.5;
-              }
+                if (currentDayLeaveHours > 8 || currentDayLeaveHours <= 0) {
+                  currentDayLeaveHours = 8;
+                }
 
-              const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
-              totalLeaveDeduction += currentDeduction;
+                if (!leaveHoursSummary.hasOwnProperty(lRow.type)) {
+                  leaveHoursSummary[lRow.type] = 0;
+                }
+                leaveHoursSummary[lRow.type] += currentDayLeaveHours;
 
-            } else if (!checkIn && !checkOut) {
+                let deductionWeight = 0;
+                if (lRow.type === '事假') {
+                  deductionWeight = 1.0;
+                } else if (lRow.type === '病假') {
+                  deductionWeight = 0.5;
+                }
+                totalLeaveDeduction += (currentDayLeaveHours * hourlyWage * deductionWeight);
+              });
+
+            } else if ((!checkIn || checkIn === "") && (!checkOut || checkOut === "")) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
             } else if (!checkIn || !checkOut) {
               finalStatusText = "異常: 缺打卡"; rowBgStyle = "background-color: #fff7ed;"; 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
-              if (inMins !== null && outMins !== null) {
+              if (inMins > 0 && outMins > 0) {
                 totalActualWorkDays++;
                 const maxStartMins = 9 * 60; 
                 let isLate = inMins > maxStartMins; let lateMinutes = isLate ? inMins - maxStartMins : 0;
@@ -279,9 +320,15 @@ export default function ReportsModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 智慧事件備註線組裝 (整合轉調事件、到職事件與歷史分段代理人數據)
+          let leaveCellHtml = "--";
+          if (dailyLeaveRows.length > 0) {
+            leaveCellHtml = dailyLeaveRows.map(lRow => {
+              const displayTime = lRow.cleanTime || lRow.rawTime;
+              return `<div style="white-space: nowrap; line-height: 1.3;">${lRow.type} ${displayTime}</div>`;
+            }).join('');
+          }
+
           let finalCommentsArray = [];
-          
           if (person.hireDate && person.hireDate === dateStr) finalCommentsArray.push("ℹ️ 今日到職起聘。");
           if (person.contractEnd && person.contractEnd === dateStr) finalCommentsArray.push("⚠️ 離職最後工作日。");
           
@@ -295,19 +342,9 @@ export default function ReportsModule({ user, selectedProject }) {
               const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
               finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || nextPeriod.position || '未指定'})。`);
             }
-          } else {
-            if (person.name === '于家源') {
-              if (dateStr === '2025-03-11') finalCommentsArray.push("ℹ️ 今日到職起聘。");
-              if (dateStr === '2025-12-31') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-01-01') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案主任)。");
-              if (dateStr === '2026-04-30') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：企劃組-專案主任)。");
-              if (dateStr === '2026-05-01') finalCommentsArray.push("✨ 轉調首日 (前屬：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-05-17') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-05-18') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案助理)。"); 
-            }
           }
 
-          // 💡 修正2：將職務代理人時段拼串合併納入備註中
+          // 💡 修正：職務代理人納入備註欄展示
           if (proxySegments.length > 0) {
             const proxyString = proxySegments.map(seg => `${seg.proxyName}(${seg.startHour}-${seg.endHour})`).join(', ');
             finalCommentsArray.push(`[職務代理] ${proxyString}`);
@@ -315,8 +352,11 @@ export default function ReportsModule({ user, selectedProject }) {
             finalCommentsArray.push(`[職務代理] ${dayRecords[0].proxyName}`);
           }
 
-          // 💡 修正3：非上班日（例假日/放假日）字體一律設定為紅色警示顏色
-          const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
+          if (finalStatusText !== "--" && finalStatusText !== "正常出勤" && !finalStatusText.includes("已請假")) {
+            finalCommentsArray.push(`[出勤判定] ${finalStatusText}`);
+          }
+
+          const dateTextStyle = isOffDay ? "color: #ef4444;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
           dailyRowsHtml += `
@@ -324,7 +364,7 @@ export default function ReportsModule({ user, selectedProject }) {
               <td style="text-align: center; font-weight: bold; ${dateTextStyle}">${month}/${String(d).padStart(2, '0')} (${weekdayStr})</td>
               <td style="text-align: center; font-family: monospace;">${checkIn || '--'}</td>
               <td style="text-align: center; font-family: monospace;">${checkOut || '--'}</td>
-              <td style="text-align: center; white-space: nowrap;">${leaveType ? `${leaveType} ${leaveRangeInfo}` : '--'}</td>
+              <td style="padding: 4px 6px;">${leaveCellHtml}</td>
               <td style="font-size: 10px; color: #475569; padding: 4px 8px; word-break: break-all;">${commentDisplayStr}</td>
             </tr>
           `;
@@ -333,8 +373,7 @@ export default function ReportsModule({ user, selectedProject }) {
         if (!hasValidUnitDayInMonth) return;
         printedTargetCount++;
 
-        const displayRoleHeader = person.name === 'Yuan Roger' || person.name === '于家源' ? (attendanceSelectedUnit === '企劃組' ? '專案助理' : person.role || '專案小組長') : (person.role || '未指定');
-
+        const displayRoleHeader = sortedHistory.length > 0 && currentDayHistoryIdx !== -1 ? (sortedHistory[currentDayHistoryIdx].role || person.role) : (person.role || '未指定');
         const leaveDetailsText = Object.entries(leaveHoursSummary)
           .filter(([_, hrs]) => hrs > 0)
           .map(([type, hrs]) => `${type} ${hrs}H`)
@@ -378,10 +417,10 @@ export default function ReportsModule({ user, selectedProject }) {
             <table class="data-table">
               <thead>
                 <tr>
-                  <th style="width: 80px; text-align: center;">日期</th>
-                  <th style="width: 85px; text-align: center;">上班時間 (M)</th>
-                  <th style="width: 85px; text-align: center;">下班時間 (O)</th>
-                  <th style="width: 145px; text-align: center;">請假時間 (Z)</th>
+                  <th style="width: 75px; text-align: center;">日期</th>
+                  <th style="width: 80px; text-align: center;">上班時間 (M)</th>
+                  <th style="width: 80px; text-align: center;">下班時間 (O)</th>
+                  <th style="width: 150px; text-align: center;">請假時間 (Z)</th>
                   <th>異動與事件備註 (含職務代理資訊)</th>
                 </tr>
               </thead>
@@ -434,12 +473,17 @@ export default function ReportsModule({ user, selectedProject }) {
       `;
 
       const printWindow = window.open('', '', 'width=1100,height=850');
-      printWindow.document.write(printContent); printWindow.document.close();
-      setTimeout(() => printWindow.focus(), 500);
-      showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出 A4 核銷憑證。`);
+      if (printWindow) {
+        printWindow.document.write(printContent);
+        printWindow.document.close();
+        setTimeout(() => printWindow.focus(), 500);
+        showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出 A4 核銷憑證。`);
+      } else {
+        showMessage('error', '彈窗被瀏覽器攔截，請允許開啟彈窗以檢視憑證。');
+      }
     } catch (error) {
       console.error("生成考勤憑證發生致命錯誤:", error);
-      showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
+      showMessage('error', '考勤憑證生成失敗，請聯絡系統管理人員。');
     } finally {
       setIsLoadingAttendance(false);
     }
@@ -669,8 +713,11 @@ export default function ReportsModule({ user, selectedProject }) {
     `;
 
     const printWindow = window.open('', '', 'width=1000,height=800');
-    printWindow.document.write(printContent); printWindow.document.close();
-    setTimeout(() => printWindow.focus(), 500); showMessage('success', '✅ 異動與空缺紀錄表已產出。');
+    if (printWindow) {
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+      setTimeout(() => printWindow.focus(), 500); showMessage('success', '✅ 異動與空缺紀錄表已產出。');
+    }
   };
 
   return (
@@ -689,7 +736,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
           <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業報表中心
         </h2>
-        <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
+        <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之 A4 法定附件憑證。</p>
       </div>
 
       {/* 區塊分流 */}
