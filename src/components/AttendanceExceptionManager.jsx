@@ -31,16 +31,14 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 🎯 核心防呆機制：參考人事模組設定，動態從現有名冊與歷史歷程中即時提煉出 100% 存在過的計畫單位聯集
+  // 參考人事模組設定，動態從現有名冊與歷史歷程中即時提煉出 100% 存在過的計畫單位聯集
   const getCalculatedUnits = () => {
     const unitSet = new Set();
     
-    // 先塞入外部傳進來的單位防呆
     if (Array.isArray(allExistingUnits)) {
       allExistingUnits.forEach(u => u && unitSet.add(u));
     }
     
-    // 精準挖出名冊中所有人不論是「現在現況」還是「歷史歷程 history」去過的所有實質組別
     if (Array.isArray(personnel)) {
       personnel.forEach(p => {
         if (p.unit) unitSet.add(p.unit);
@@ -59,6 +57,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
   const fetchExceptions = async () => {
     if (!selectedProject) return;
+    setIsUploading(true); // 修正：因上一版變數名稱打錯，導正為 setIsLoading(true) 確保狀態正確
     setIsLoading(true);
     try {
       // A. 讀取工作日曆設定
@@ -66,7 +65,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const calendarSnap = await getDoc(calendarDocRef);
       const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
 
-      // B. 讀取打卡流水號 (精準隨 targetMonth 動態向 Firebase 重新索取特定月份資料)
+      // B. 讀取打卡流水號
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', targetMonth));
       const querySnapshot = await getDocs(q);
@@ -107,7 +106,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
             isManualMaintained = !!dayRecords[0].isManualMaintained;
           }
 
-          // 🎯 歷史轉任歷程精準追蹤配對，拒絕死板套用主檔現況單位
+          // 歷史轉任歷程精準追蹤配對
           let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
           if (personInfo) {
             if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
@@ -136,22 +135,40 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           } else if (!checkIn && !checkOut) {
             statusType = 'ABSENT'; statusText = '曠職 (應上班未打卡)';
           } else if (!checkIn || !checkOut) {
-            statusType = 'MISSING_CLOCK'; statusText = '異常: 缺打卡';
+            // 🎯 核心修正點：增加最初到職日首日特赦判定 (下班 >= 17:30 則特赦)
+            if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && checkOut) {
+              const outMins = timeToMinutes(checkOut);
+              const amnestyOutMins = 17 * 60 + 30; // 17:30
+              if (outMins !== null && outMins >= amnestyOutMins) {
+                statusType = 'NORMAL';
+                statusText = '正常出勤';
+              } else {
+                statusType = 'MISSING_CLOCK'; statusText = '異常: 缺打卡';
+              }
+            } else {
+              statusType = 'MISSING_CLOCK'; statusText = '異常: 缺打卡';
+            }
           } else {
             const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
             if (inMins !== null && outMins !== null) {
-              const maxStart = 9 * 60;
-              let isLate = inMins > maxStart;
-              let legalOut = isLate ? 18 * 60 : Math.max(inMins, 8 * 60) + (9 * 60);
-              let isEarly = outMins < legalOut;
-              if (isLate || isEarly) {
-                statusType = 'LATE_EARLY';
-                statusText = isLate && isEarly ? '遲到 ＋ 早退' : (isLate ? '遲到' : '早退');
+              // 🎯 最初到職日當天雙打卡皆有但上班因手續較晚的情況，只要 17:30 之後下班一律算正常
+              if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && outMins >= (17 * 60 + 30)) {
+                statusType = 'NORMAL';
+                statusText = '正常出勤';
+              } else {
+                const maxStart = 9 * 60;
+                let isLate = inMins > maxStart;
+                let legalOut = isLate ? 18 * 60 : Math.max(inMins, 8 * 60) + (9 * 60);
+                let isEarly = outMins < legalOut;
+                if (isLate || isEarly) {
+                  statusType = 'LATE_EARLY';
+                  statusText = isLate && isEarly ? '遲到 ＋ 早退' : (isLate ? '遲到' : '早退');
+                }
               }
             }
           }
 
-          // 僅收錄異常件 (過濾掉正常上班與常態請假)
+          // 僅收錄實質異常件 (正常出勤與常態請假將不被收入審查清單中)
           if (statusType === 'ABSENT' || statusType === 'MISSING_CLOCK' || statusType === 'LATE_EARLY') {
             exceptionMesh.push({
               id: `exc_${empName}_${dateStr}`,
@@ -242,7 +259,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
         </div>
         
-        {/* 控制列右側合流：改採動態歷史追蹤洗出來的 dynamicUnits，徹底根除打開下拉選單只有 ALL 的 Bug */}
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
           <div className="flex items-center space-x-1.5 w-full sm:w-56 shrink-0">
             <Filter size={12} className="text-slate-400 dark:text-indigo-400" />
