@@ -27,7 +27,7 @@ export default function ReportsModule({ user, selectedProject }) {
     return new Date(d - tzOffset).toISOString().split('T')[0];
   };
 
-  // 2. 異動與空缺紀錄表專用統計區間狀態 (已內聚至卡片內)
+  // 2. 異動與空缺紀錄表專用統計區間狀態
   const [startDate, setStartDate] = useState(`${currentYear}-01-01`);
   const [endDate, setEndDate] = useState(getLocalTodayStr());
   const [message, setMessage] = useState(null); 
@@ -160,7 +160,8 @@ export default function ReportsModule({ user, selectedProject }) {
         let totalEarlyLeaveMinutes = 0;
         let totalAbsentCount = 0;
 
-        let leaveHoursSummary = { '特休': 0, '事假': 0, '病假': 0, '喪假': 0, '公出': 0, '補休': 0, '其他': 0 };
+        // 🎯 核心修正 2：初始化空字典，消滅模糊的「其他」歸類，直接以真實假別作為 Key 的統計地圖
+        let leaveHoursSummary = {}; 
         let totalLeaveDeduction = 0;
 
         const rawHistoryList = person.assignmentHistory || person.history || [];
@@ -168,7 +169,6 @@ export default function ReportsModule({ user, selectedProject }) {
           .filter(h => h.unit && h.startDate)
           .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
-        // 推導出同仁在該月份最後一天所屬的單位組別，作為彙總表的基底編制單位
         let personFinalUnit = person.unit || '未指定單位';
 
         for (let d = 1; d <= daysInMonth; d++) {
@@ -239,23 +239,28 @@ export default function ReportsModule({ user, selectedProject }) {
               
               let currentDayLeaveHours = 8;
               if (leaveRangeInfo && typeof leaveRangeInfo === 'string' && leaveRangeInfo.includes('~')) {
-                const parts = leaveRangeInfo.split('~');
-                const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                // 🎯 修正 3：對請假時間字串進行徹底日期剔除優化，全面消除日期尾贅，只准保存純時間
+                const cleanRangeOnly = leaveRangeInfo.replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
+                const parts = cleanRangeOnly.split('~');
+                if (parts.length === 2 && parts[0] && parts[1]) {
+                  const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
+                  currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                }
               } else if (leaveRangeInfo && typeof leaveRangeInfo === 'string' && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
                 currentDayLeaveHours = 4;
               }
 
-              if (leaveHoursSummary.hasOwnProperty(leaveType)) {
-                leaveHoursSummary[leaveType] += currentDayLeaveHours;
-              } else {
-                leaveHoursSummary['其他'] += currentDayLeaveHours;
+              // 🎯 修正 2：動態累積該原始假別，完全不使用「其他」
+              if (!leaveHoursSummary[leaveType]) {
+                leaveHoursSummary[leaveType] = 0;
               }
+              leaveHoursSummary[leaveType] += currentDayLeaveHours;
 
+              // 🎯 修正 1：生理假視為病假扣半薪 (權重 0.5)；事假扣全薪 (權重 1.0)
               let deductionWeight = 0;
               if (leaveType === '事假') {
                 deductionWeight = 1.0;
-              } else if (leaveType === '病假') {
+              } else if (leaveType === '病假' || leaveType === '生理假') {
                 deductionWeight = 0.5;
               }
 
@@ -324,10 +329,12 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正一：請假區間去日期化。只留下純時間，防止超出 A4 寬度
+          // 🎯 修正 3：請假時間去日期化。清除重複的當天日期，只秀時間區間如 `16:38~17:38`
           let cleanLeaveRangeText = '--';
           if (leaveType) {
-            cleanLeaveRangeText = `${leaveType} ` + leaveRangeInfo.replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
+            const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}|\\d{3}/\\d{2}/\\d{2}`, 'g');
+            const cleanRange = leaveRangeInfo.replace(datePattern, '').replace(/\s+/g, '');
+            cleanLeaveRangeText = `${leaveType} ${cleanRange}`;
           }
 
           dailyRowsHtml += `
@@ -351,11 +358,12 @@ export default function ReportsModule({ user, selectedProject }) {
           .map(([type, hrs]) => `${type} ${hrs}H`)
           .join(', ') || '無請假紀錄';
 
-        // 同步紀錄至彙總表暫存字典中
+        // 將完整清洗後的歷史假別地圖物件完整同步記錄至彙總表暫存器
         deductionSummaryMap[person.name] = {
           name: person.name,
           unit: personFinalUnit,
           leaveSummaryText: leaveDetailsText,
+          leavesObj: leaveHoursSummary, 
           totalLeaveHours: Object.values(leaveHoursSummary).reduce((a, b) => a + b, 0),
           deductionAmount: Math.round(totalLeaveDeduction)
         };
@@ -363,7 +371,7 @@ export default function ReportsModule({ user, selectedProject }) {
         pdfPagesHtml += `
           <div class="a4-page">
             <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
-            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人員法定考勤暨差假核銷簽核憑證</div>
+            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人员法定考勤暨差假核销签核凭证</div>
             
             <table class="info-table">
               <tr>
@@ -420,9 +428,9 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬 or 轉調至【${attendanceSelectedUnit}】。`);
       }
 
-      // 🎯 修正二：建立最末頁獨立頁面「當月請假扣薪彙總表」HTML 結構與同單位 RowSpan 合併計算
+      // 建立最末頁獨立頁面「當月請假扣薪彙總表」HTML 結構與同單位 RowSpan 合併計算
       const summaryList = Object.values(deductionSummaryMap);
-      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); // 排序
+      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); 
 
       let lastPageRowsHtml = "";
       let currentUnitName = null;
@@ -449,7 +457,10 @@ export default function ReportsModule({ user, selectedProject }) {
 
         let leaveDisplayBlock = "";
         if (row.totalLeaveHours > 0) {
-          leaveDisplayBlock = `<span style="color: #b45309; font-weight: bold;">${row.leaveSummaryText}</span>`;
+          // 🎯 修正 2：逐一展開真實假別（生理假、特休、公出），消滅模糊的「其他」文字
+          leaveDisplayBlock = Object.entries(row.leavesObj)
+            .map(([lType, hrs]) => `<span style="padding: 1px 5px; background: #fff7ed; border: 1px solid #ffedd5; border-radius: 4px; color: #c2410c; margin-right:4px; font-weight:bold; white-space:nowrap;">${lType} ${hrs}H</span>`)
+            .join(' ');
         } else {
           leaveDisplayBlock = `<span style="color: #94a3b8; font-style: italic;">當月無請假紀錄</span>`;
         }
@@ -464,20 +475,21 @@ export default function ReportsModule({ user, selectedProject }) {
         lastPageRowsHtml += `
           <tr>
             ${unitCellHtml}
-            <td style="font-weight: bold; text-align: center; font-size: 11px; color: #1e293b; padding: 6px 8px;">${row.name}</td>
-            <td style="padding: 6px 10px; font-size: 11px;">${leaveDisplayBlock}</td>
-            <td style="text-align: right; font-weight: bold; padding-right: 15px; font-size: 11px;">${salaryDisplayBlock}</td>
+            <td style="font-weight: bold; text-align: center; font-size: 11px; color: #1e293b; padding: 8px 6px;">${row.name}</td>
+            <td style="padding: 6px 10px; font-size: 11px; line-height: 1.5;">${leaveDisplayBlock}</td>
+            <td style="text-align: right; font-weight: bold; padding-right: 20px; font-size: 11px;">${salaryDisplayBlock}</td>
           </tr>
         `;
       });
 
+      // 🎯 修正 4：完整移除下方那兩格過時核章框線（承辦人、主持人簽核），使其回歸乾淨報表大表
       pdfPagesHtml += `
         <div class="a4-page" style="page-break-before: always;">
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
           <div style="text-align: center; font-size: 15px; font-weight: bold; color: #dc2626; margin-bottom: 20px;">各群組人員當月請假扣薪核銷彙總大表</div>
           
           <div style="font-size: 10px; background: #fffbeb; border: 1px solid #fef3c7; color: #b45309; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold; line-height: 1.4;">
-            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假扣除 0.5 半薪，其餘假別依法不予扣薪。
+            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假及生理假扣除 0.5 半薪，其餘特休、喪假、公出、補休依法不予扣薪。
           </div>
 
           <table class="data-table" style="border: 2px solid #0f172a; width: 100%; border-collapse: collapse;">
@@ -486,17 +498,13 @@ export default function ReportsModule({ user, selectedProject }) {
                 <th style="width: 180px; text-align: center; font-size: 11px; padding: 8px; font-weight: bold; background-color: #f8fafc;">計畫單位</th>
                 <th style="width: 110px; text-align: center; font-size: 11px; font-weight: bold; background-color: #f8fafc;">姓名</th>
                 <th style="font-size: 11px; text-align: center; font-weight: bold; background-color: #f8fafc;">假別累計時數 (若無假呈無紀錄)</th>
-                <th style="width: 140px; text-align: right; font-size: 11px; font-weight: bold; background-color: #f8fafc; padding-right: 15px;">當月合計應扣薪資</th>
+                <th style="width: 140px; text-align: right; font-size: 11px; font-weight: bold; background-color: #f8fafc; padding-right: 20px;">當月合計應扣薪資</th>
               </tr>
             </thead>
             <tbody>
               ${lastPageRowsHtml}
             </tbody>
           </table>
-          <div style="margin-top: 60px; display: flex; justify-content: space-between; padding: 0 40px; font-size: 11px; font-weight: bold;">
-            <div>經辦出納簽章：<br/><br/><br/>________________</div>
-            <div>計畫主持人覆核：<br/><br/><br/>________________</div>
-          </div>
           <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 40px; border-top: 1px dashed #cbd5e1; padding-top: 4px;">報表生成月份：${attendanceYearMonth} | 產出時間：${getLocalTodayStr()}</div>
         </div>
       `;
@@ -631,7 +639,6 @@ export default function ReportsModule({ user, selectedProject }) {
             }
         });
 
-        // 🎯 修正二：將舊版 slots.concat 修正為完備的 slots 變數遍歷，防止 ReferenceError
         const allCombinedSlots = slots.concat(overstaffSlots);
         allCombinedSlots.forEach(slot => {
             const finalTimeline = []; let currentTime = groupStartLimitMs;
