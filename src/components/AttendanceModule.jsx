@@ -5,7 +5,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
-// 🎯 核心整併：我們只留下 AttendanceViewModal 這一個檔案作為統一判斷的核心，不再引用已不需要的 AttendanceExceptionManager
+// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心 facts，徹底刪除舊的引用
 import AttendanceViewModal from './AttendanceViewModal';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
@@ -21,13 +21,13 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [dbError, setDbError] = useState(null);
 
-  // 預設將子頁籤設為考勤控制總覽切換
+  // 考勤控制總覽切換狀態
   const [attendanceSubTab, setAttendanceSubTab] = useState('exception');
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
 
-  // 🎯 新增控制狀態：當打開同一個覆核大視窗時，用來指定要進入的初始檢視模式
+  // 🎯 核心控制通道：用來指定開啟同一個覆核大視窗時的初始檢視模式
   const [initialViewMode, setInitialViewMode] = useState('ALL_STATUS'); 
 
   // 防呆設定面板開窗狀態
@@ -43,7 +43,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [exemptLeaveTypes, setExemptLeaveTypes] = useState(['特休', '補休']);
   const [exemptUnits, setExemptUnits] = useState([]);
 
-  // 💡 【全新擴充狀態】：使用者可自行定義擴充的假別對齊字典別名物件
+  // 使用者可自行定義擴充的假別對齊字典別名物件
   const [leaveAliasMapping, setLeaveAliasMapping] = useState([
     { alias: '休假', official: '特休' },
     { alias: '補休假', official: '補休' }
@@ -93,7 +93,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間，防爆表格並相容 C 表民國曆
+  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間
   const cleanTimeRangeOnly = (rangeStr) => {
     if (!rangeStr) return '';
     const timePattern = /(\d{2}:\d{2})/g;
@@ -144,7 +144,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubAtt(); unsubCalendar(); };
   }, [user, selectedProject]);
 
-  // 提煉所有人現況單位加上歷史歷程 history 的單位組別全專案聯集陣列
+  // 完美清洗提煉：整合現況與歷程 history 中去過的所有單位聯集
   const getGlobalCalculatedUnits = () => {
     const unitSet = new Set();
     if (Array.isArray(personnel)) {
@@ -459,24 +459,24 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      {/* 🎯 母面板控制優化：一體化呼叫大覆核視窗的快速通道 */}
-      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs">
+      {/* 🎯 母面板控制一體化：完全對齊一體化視窗參數通道，點選後依據不同情境將 initialMode 發給同一個判斷核心組件 */}
+      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs border-slate-200/60">
         <div className="space-y-1">
-          <h4 className="font-extrabold text-slate-800 dark:text-white text-sm">進入數據覆核與異常管理中心</h4>
-          <p className="text-xs text-slate-400">底層邏輯全面打通，提供新進首日特赦、歷史轉任組別配對及全局匯入狀態判定。</p>
+          <h4 className="font-extrabold text-slate-800 dark:text-white text-sm">考勤明細審查與維護數據中心</h4>
+          <p className="text-xs text-slate-400">底層判定規則全面打通，落實首日到職特赦、轉任歷程比對與全計畫過濾功能。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button 
             onClick={() => { setInitialViewMode('EXCEPTIONS_ONLY'); setIsAttendanceViewOpen(true); }} 
             className="px-4 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-black rounded-xl transition-all flex items-center shadow-2xs border border-red-200/40"
           >
-            <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 開啟考勤異常審查與維護中心
+            <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 進入考勤異常審查與維護中心
           </button>
           <button 
             onClick={() => { setInitialViewMode('ALL_STATUS'); setIsAttendanceViewOpen(true); }} 
             className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-extrabold rounded-xl transition-all flex items-center border"
           >
-            <CalendarDays size={14} className="mr-1.5 text-indigo-500" /> 📅 開啟全月考勤總覽大表
+            <CalendarDays size={14} className="mr-1.5 text-indigo-500" /> 📅 進入全月考勤總覽大表
           </button>
         </div>
       </div>
@@ -678,7 +678,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       <AttendanceImportModal isOpen={isAttendanceImportOpen} onClose={() => setIsAttendanceImportOpen(false)} selectedProject={selectedProject} projectName={projectName} />
       
-      {/* 🎯 子元件通訊升級：傳入由一體化洗出來的 globalExistingUnits，並且將 initialMode 發給視窗 */}
+      {/* 🎯 子元件通訊整併打通：傳入由一體化洗出來的全局現況與歷史聯集 units 大陣列 */}
       <AttendanceViewModal 
         isOpen={isAttendanceViewOpen} 
         onClose={() => setIsAttendanceViewOpen(false)} 
