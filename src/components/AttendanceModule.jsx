@@ -5,8 +5,8 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
+// 🎯 核心整併：我們只留下 AttendanceViewModal 這一個檔案作為統一判斷的核心，不再引用已不需要的 AttendanceExceptionManager
 import AttendanceViewModal from './AttendanceViewModal';
-import AttendanceExceptionManager from './AttendanceExceptionManager';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -21,10 +21,14 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [dbError, setDbError] = useState(null);
 
+  // 預設將子頁籤設為考勤控制總覽切換
   const [attendanceSubTab, setAttendanceSubTab] = useState('exception');
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
+
+  // 🎯 新增控制狀態：當打開同一個覆核大視窗時，用來指定要進入的初始檢視模式
+  const [initialViewMode, setInitialViewMode] = useState('ALL_STATUS'); 
 
   // 防呆設定面板開窗狀態
   const [isProxySettingsModalOpen, setIsProxySettingsModalOpen] = useState(false);
@@ -140,10 +144,26 @@ export default function AttendanceModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubAtt(); unsubCalendar(); };
   }, [user, selectedProject]);
 
-  const allExistingUnits = [...new Set(personnel.map(p => p.unit).filter(Boolean))];
+  // 提煉所有人現況單位加上歷史歷程 history 的單位組別全專案聯集陣列
+  const getGlobalCalculatedUnits = () => {
+    const unitSet = new Set();
+    if (Array.isArray(personnel)) {
+      personnel.forEach(p => {
+        if (p.unit) unitSet.add(p.unit);
+        if (p.history && Array.isArray(p.history)) {
+          p.history.forEach(h => {
+            if (h.unit) unitSet.add(h.unit);
+          });
+        }
+      });
+    }
+    return [...unitSet].filter(Boolean);
+  };
+
+  const globalExistingUnits = getGlobalCalculatedUnits();
 
   // =========================================================================
-  // 🧠 核心重構：動態自訂假別別名歸納對齊之代理異常精算引擎
+  // 🧠 核心精算：動態自訂假別別名歸納對齊之代理異常精算引擎
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -182,10 +202,9 @@ export default function AttendanceModule({ user, selectedProject }) {
             }
           }
 
-          // 💡 智慧動態清洗字典對齊線線：根據使用者在畫面上設定的 Mapping 動態對齊
           const matchedMapping = leaveAliasMapping.find(m => m.alias === lType);
           if (matchedMapping) {
-            lType = matchedMapping.official; // 動態映射為官方核心假別 (如 補休假 -> 補休)
+            lType = matchedMapping.official; 
           }
 
           monthLeaveMap[d] = lType || null;
@@ -310,7 +329,14 @@ export default function AttendanceModule({ user, selectedProject }) {
     setLeaveAliasMapping(leaveAliasMapping.filter(m => m.alias !== alias));
   };
 
-  // 新增代理時段
+  const handleToggleExemptLeave = (type) => {
+    setExemptLeaveTypes(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]);
+  };
+
+  const handleToggleExemptUnit = (unit) => {
+    setExemptUnits(prev => prev.includes(unit) ? prev.filter(u => u !== unit) : [...prev, unit]);
+  };
+
   const handleSaveProxyAssignment = async (item) => {
     if (!assignForm.proxyName.trim()) { alert("請填寫代理人姓名！"); return; }
     const startM = timeToMinutes(assignForm.startHour);
@@ -350,7 +376,6 @@ export default function AttendanceModule({ user, selectedProject }) {
     } catch (e) { alert("指派代理失敗"); }
   };
 
-  // 修改分段代理人
   const handleUpdateSubSegment = async (item, subIdx) => {
     if (!subEditForm.proxyName.trim()) { alert("代理人名不可為空！"); return; }
     try {
@@ -369,7 +394,6 @@ export default function AttendanceModule({ user, selectedProject }) {
     } catch (e) { console.error(e); }
   };
 
-  // 刪除分段代理人
   const handleDeleteSubSegment = async (item, subIdx) => {
     if (!confirm("確定要刪除這段代理嗎？")) return;
     try {
@@ -435,18 +459,26 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      <div className="flex border-b border-slate-200 dark:border-slate-700 space-x-1 p-1 rounded-xl w-fit bg-slate-100/60 dark:bg-slate-900/40">
-        <button onClick={() => setAttendanceSubTab('exception')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center ${attendanceSubTab === 'exception' ? 'bg-white dark:bg-slate-800 text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><ShieldAlert size={14} className="inline mr-1" />⚠️ 異常維護面板</button>
-        <button onClick={() => setAttendanceSubTab('full_calendar')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center ${attendanceSubTab === 'full_calendar' ? 'bg-white dark:bg-slate-800 text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><CalendarDays size={14} className="inline mr-1" />📅 全月日曆總覽</button>
-      </div>
-
-      <div className="attendance-sub-tab-content">
-        {attendanceSubTab === 'exception' ? <AttendanceExceptionManager selectedProject={selectedProject} personnel={personnel} /> : (
-          <div className="bg-white dark:bg-slate-800 p-8 text-center rounded-2xl border dark:border-slate-700">
-             <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">您可以一鍵展開包含特赦鎖定狀態的差假總覽：</p>
-             <button onClick={() => setIsAttendanceViewOpen(true)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-xl transition-all">🔍 開啟全月覆核大彈窗</button>
-          </div>
-        )}
+      {/* 🎯 母面板控制優化：一體化呼叫大覆核視窗的快速通道 */}
+      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs">
+        <div className="space-y-1">
+          <h4 className="font-extrabold text-slate-800 dark:text-white text-sm">進入數據覆核與異常管理中心</h4>
+          <p className="text-xs text-slate-400">底層邏輯全面打通，提供新進首日特赦、歷史轉任組別配對及全局匯入狀態判定。</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button 
+            onClick={() => { setInitialViewMode('EXCEPTIONS_ONLY'); setIsAttendanceViewOpen(true); }} 
+            className="px-4 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-black rounded-xl transition-all flex items-center shadow-2xs border border-red-200/40"
+          >
+            <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 開啟考勤異常審查與維護中心
+          </button>
+          <button 
+            onClick={() => { setInitialViewMode('ALL_STATUS'); setIsAttendanceViewOpen(true); }} 
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-extrabold rounded-xl transition-all flex items-center border"
+          >
+            <CalendarDays size={14} className="mr-1.5 text-indigo-500" /> 📅 開啟全月考勤總覽大表
+          </button>
+        </div>
       </div>
 
       {/* 代理異常案件維護彈窗 */}
@@ -590,7 +622,6 @@ export default function AttendanceModule({ user, selectedProject }) {
                 </div>
               </div>
 
-              {/* 💡 5. 【自訂需要被歸納定義的假別別名（如：補休假=補休）管理控制台】 */}
               <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border space-y-4">
                 <label className="block text-xs font-bold text-slate-500 mb-1">
                   5. 假別別名歸納定義管理 (💡 用於清洗 CSV 不一致文字，如：輸入「補休假」自動歸納為官方「補休」)
@@ -628,7 +659,7 @@ export default function AttendanceModule({ user, selectedProject }) {
               <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border">
                 <label className="block text-xs font-bold text-slate-500 mb-2.5">6. 免除代理之計畫單位設定</label>
                 <div className="grid grid-cols-2 gap-2 bg-slate-50 p-4 rounded-2xl border">
-                  {allExistingUnits.map(unitName => {
+                  {globalExistingUnits.map(unitName => {
                     const isUnitExempt = exemptUnits.includes(unitName);
                     return (
                       <label key={unitName} className={`flex items-center space-x-3 p-2.5 rounded-xl border cursor-pointer text-xs font-bold ${isUnitExempt ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-slate-500'}`}>
@@ -646,7 +677,17 @@ export default function AttendanceModule({ user, selectedProject }) {
       )}
 
       <AttendanceImportModal isOpen={isAttendanceImportOpen} onClose={() => setIsAttendanceImportOpen(false)} selectedProject={selectedProject} projectName={projectName} />
-      <AttendanceViewModal isOpen={isAttendanceViewOpen} onClose={() => setIsAttendanceViewOpen(false)} selectedProject={selectedProject} personnel={personnel} allExistingUnits={[...new Set(personnel.map(p => p.unit))]} />
+      
+      {/* 🎯 子元件通訊升級：傳入由一體化洗出來的 globalExistingUnits，並且將 initialMode 發給視窗 */}
+      <AttendanceViewModal 
+        isOpen={isAttendanceViewOpen} 
+        onClose={() => setIsAttendanceViewOpen(false)} 
+        selectedProject={selectedProject} 
+        personnel={personnel} 
+        allExistingUnits={globalExistingUnits} 
+        initialMode={initialViewMode} 
+      />
+      
       <WorkCalendarSettingsModal isOpen={isCalendarSettingsOpen} onClose={() => setIsCalendarSettingsOpen(false)} selectedProject={selectedProject} />
     </div>
   );
