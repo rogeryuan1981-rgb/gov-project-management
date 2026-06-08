@@ -70,20 +70,26 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 💡 預設採用現況主檔單位
-            let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
+            let currentDayUnit = '已匯入人員';
 
-            // 🎯 核心修正點：比對跟人事模組完全同步的真實動態歷史轉任歷程欄位 history 
-            if (personInfo && personInfo.history && Array.isArray(personInfo.history)) {
-              // 尋找該段歷史中，其開始日與結束日剛好完整包含當天渲染日期（dateStr）的專案單位
-              const matchedHistory = personInfo.history.find(h => {
-                const startValid = !h.startDate || dateStr >= h.startDate;
-                const endValid = !h.endDate || dateStr <= h.endDate;
-                return startValid && endValid;
-              });
-              // 若成功找到歷史重疊交集區段，則即時校正該日曆儲存格格子的所屬計畫單位
-              if (matchedHistory && matchedHistory.unit) {
-                currentDayUnit = matchedHistory.unit;
+            if (personInfo) {
+              // 🎯 核心演算邏輯升級：依據人事模組轉任歷程 history 精準判定當天單位
+              if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
+                const matchedHistory = personInfo.history.find(h => {
+                  const startValid = !h.startDate || dateStr >= h.startDate;
+                  const endValid = !h.endDate || dateStr <= h.endDate;
+                  return startValid && endValid;
+                });
+
+                if (matchedHistory && matchedHistory.unit) {
+                  currentDayUnit = matchedHistory.unit;
+                } else {
+                  // 🎯 核心優化：若歷史歷程陣列完全沒有任何一段涵蓋到當前日期，直接提出警示標記！
+                  currentDayUnit = '⚠️ 歷程未涵蓋此日期';
+                }
+              } else {
+                // 如果這個在職人員完全沒有填寫任何歷程，也直接提出警告
+                currentDayUnit = '⚠️ 歷程未涵蓋此日期';
               }
             }
 
@@ -234,6 +240,9 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   };
 
   const getUnitBadgeStyle = (unitName) => {
+    if (unitName.includes('⚠️')) {
+      return 'bg-rose-50 text-rose-600 border-rose-200 dark:bg-rose-950/30 dark:text-rose-400 dark:border-rose-500/30 font-extrabold animate-pulse';
+    }
     const unitIndex = allExistingUnits.indexOf(unitName);
     const colorSpecs = [
       'bg-indigo-50 text-indigo-600 border-indigo-100 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20',  
@@ -317,8 +326,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                     const isRowEditing = editingRowId === r.id;
                     let rowBg = "hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors";
                     if (isRowEditing) rowBg = "bg-indigo-50/40 dark:bg-indigo-950/20 text-slate-900 dark:text-white transition-all font-semibold";
-                    // 修正條件，確保離職日過後不再狂亮紅標（曠職）
-                    else if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut && r.unit !== '未指定單位') rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-red-950 dark:text-red-300";
+                    else if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut && !r.unit.includes('⚠️')) rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-red-950 dark:text-red-300";
+                    else if (r.unit.includes('⚠️')) rowBg = "bg-rose-50/20 hover:bg-rose-50/40 dark:bg-rose-950/10 text-rose-950 dark:text-rose-300 font-medium";
                     else if (r.isOffDay) rowBg = "bg-slate-50/40 text-slate-400 dark:bg-slate-900/10";
 
                     return (
@@ -344,23 +353,4 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                         <td className="py-3.5 px-4">{renderStatusBadge(r)}</td>
                         <td className="py-3.5 px-4 text-right">
                           {isRowEditing ? (
-                            <div className="flex items-center justify-end space-x-1.5"><button type="button" onClick={() => setEditingRowId(null)} className="px-2.5 py-1 text-slate-500 hover:bg-slate-100 text-[11px] font-bold rounded-lg">取消</button><button type="button" onClick={() => handleSaveRowChange(r)} className="px-2.5 py-1 bg-indigo-600 text-white text-[11px] font-bold rounded-lg flex items-center shadow-xs"><Save size={12} className="mr-1" />儲存</button></div>
-                          ) : <button type="button" onClick={() => startEditingRow(r)} className="text-indigo-600 hover:bg-indigo-50 px-2.5 py-1 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/10 text-[11px] font-bold flex items-center justify-end ml-auto"><Edit2 size={12} className="mr-1" />維護修訂</button>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
-          <button onClick={onClose} className="px-6 py-2 bg-slate-100 text-slate-700 dark:text-white font-bold text-sm rounded-xl">關閉視窗</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+                            <div className="flex items-center justify
