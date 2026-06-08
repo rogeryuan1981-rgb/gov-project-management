@@ -19,14 +19,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   const [searchName, setSearchName] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('ALL');
   
-  // 🎯 一體化核心控制狀態：大版功能切換與異常子過濾器
-  const [viewMode, setViewMode] = useState('ALL_STATUS'); 
+  // 🎯 一體化核心控制狀態
+  const [viewMode, setViewMode] = useState('ALL_STATUS'); // 'ALL_STATUS' (全月總覽) | 'EXCEPTIONS_ONLY' (異常中心)
   const [exceptionSubFilter, setExceptionSubFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
 
   const [records, setRecords] = useState([]);
   const [offDays, setOffDays] = useState({}); 
   const [isLoading, setIsLoading] = useState(false);
-  const [isMonthEmpty, setIsMonthEmpty] = useState(false); // 全局月份未匯入偵測狀態
+  const [isMonthEmpty, setIsMonthEmpty] = useState(false); // 全局月份未匯入偵測
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'asc' });
 
   const [editingRowId, setEditingRowId] = useState(null);
@@ -40,7 +40,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 🎯 接收母元件傳來的模式，點開按鈕時動態切換大表或異常中心視圖
+  // 🎯 母元件控制通道聯動
   useEffect(() => {
     if (isOpen && initialMode) {
       setViewMode(initialMode);
@@ -53,6 +53,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     if (!selectedProject) return;
     setIsLoading(true);
     try {
+      // 1. 讀取工作日曆
       const calendarDocRef = doc(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'calendars', selectedProject);
       const calendarSnap = await getDoc(calendarDocRef);
       let currentOffDays = {};
@@ -61,13 +62,14 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         setOffDays(currentOffDays);
       }
 
+      // 2. 讀取打卡流水號
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', viewMonth));
       
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 🎯 全局月份匯入狀態檢測：只要當月有任何單位的資料進來，全局防禦網就全面啟動
+      // 🎯 全局月份匯入狀態防禦：只要當月有任何一筆打卡進來，就代表該月份已經開始匯入
       let globalMonthEmpty = importedRecords.length === 0;
       setIsMonthEmpty(globalMonthEmpty);
 
@@ -75,6 +77,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const month = parseInt(viewMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
+      // 3. 過濾本月 active 人員
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd !== '至今' && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
@@ -90,14 +93,12 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       if (uniqueEmployeeNames.length > 0) {
         uniqueEmployeeNames.forEach(empName => {
           const personInfo = personnel.find(p => cleanName(p.name) === cleanName(empName));
-          const employeeMonthRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName));
-          const hasImportedDataThisMonth = employeeMonthRecords.length > 0;
 
           for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 🎯 共享規則一：比對歷史轉任歷程 history，若「歷程未包含」當前日期，代表當天不需要出勤，不報異常、直接跳過！
+            // 🎯 歷史轉任歷程比對：若歷程未包含當前日期，代表當天不需要出勤，不報異常、直接跳過！
             let currentDayUnit = '已匯入人員';
             if (personInfo) {
               if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
@@ -132,7 +133,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               isManualMaintained = !!dayRecords[0].isManualMaintained;
             }
 
-            // 🎯 共享工時狀態判定
+            // 🎯 全局統一工時評判機制
             let statusType = 'NORMAL';
             if (isOffDay) {
               statusType = (checkIn || checkOut) ? 'OVERTIME' : 'OFFDAY';
@@ -141,7 +142,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             } else if (!checkIn && !checkOut) {
               statusType = globalMonthEmpty ? 'NORMAL' : 'ABSENT';
             } else if (!checkIn || !checkOut) {
-              // 最初到職日首日特赦放行判定 (下班 >= 17:30 則放行免責)
+              // 最初到職日首日特赦判定 (下班 >= 17:30 則放行免責)
               if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && checkOut && timeToMinutes(checkOut) >= (17 * 60 + 30)) {
                 statusType = 'NORMAL';
               } else {
@@ -150,6 +151,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
               if (inMins !== null && outMins !== null) {
+                // 最初到職日當天雙打卡皆有但上班較晚的情況，只要 17:30 之後下班一律算正常
                 if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && outMins >= (17 * 60 + 30)) {
                   statusType = 'NORMAL';
                 } else {
@@ -182,7 +184,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       }
       setRecords(finalMeshRecords);
     } catch (error) {
-      console.error("一體化覆核中心交叉運算失敗:", error);
+      console.error("覆核大視窗交叉運算失敗:", error);
     } finally {
       setIsLoading(false);
     }
@@ -235,7 +237,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 text-xs font-bold rounded-lg border border-emerald-200 dark:border-emerald-500/30">正常出勤</span>;
   };
 
-  // 🎯 一體化前端複合過濾聯動
+  // 🎯 前端多維複合過濾聯動
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
@@ -314,6 +316,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600';
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
       <div className="bg-white dark:bg-slate-800 w-full max-w-6xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-[88vh]">
@@ -352,7 +356,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           {/* 僅在異常模式下，動態顯示子分類按鈕 */}
           {viewMode === 'EXCEPTIONS_ONLY' && !isMonthEmpty && (
             <div className="flex flex-wrap items-center gap-1 animate-in slide-in-from-left-2 duration-200">
-              <button onClick={() => setExceptionSubFilter('ALL_EXCEPTIONS')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>全部異常 ({records.length})</button>
+              <button onClick={() => setExceptionSubFilter('ALL_EXCEPTIONS')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>全部異常 ({filteredRecords.length})</button>
               <button onClick={() => setExceptionSubFilter('ABSENT')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>曠職 ({records.filter(r=>r.statusType==='ABSENT').length})</button>
               <button onClick={() => setExceptionSubFilter('MISSING_CLOCK')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>缺打卡 ({records.filter(r=>r.statusType==='MISSING_CLOCK').length})</button>
               <button onClick={() => setExceptionSubFilter('LATE_EARLY')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
@@ -397,7 +401,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <FileWarning className="mx-auto text-amber-500 mb-2 animate-bounce" size={44} />
               <p className="text-sm font-extrabold text-amber-600 dark:text-amber-400">🚨 偵測提示：本月份之計畫出勤紀錄尚未匯入！</p>
-              <p className="text-xs text-slate-400 mt-1.5">請先點擊上方按鈕關閉視窗，並透過「匯入出勤紀錄」功能上傳對應的 Excel 報表。</p>
+              <p className="text-xs text-slate-400 mt-1.5">請先點擊下方按鈕關閉視窗，並透過「匯入出勤紀錄」功能上傳對應的 Excel 報表。</p>
             </div>
           ) : sortedRecords.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12"><CheckCircle2 size={44} className="text-emerald-500 mb-3" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">{viewMode === 'ALL_STATUS' ? '目前查無符合條件之考勤紀錄' : '本月份目前查無任何考勤異常件，配置完全合規！'}</p></div>
