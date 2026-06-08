@@ -160,7 +160,6 @@ export default function ReportsModule({ user, selectedProject }) {
         let totalEarlyLeaveMinutes = 0;
         let totalAbsentCount = 0;
 
-        // 🎯 核心修正 2：初始化空字典，消滅模糊的「其他」歸類，直接以真實假別作為 Key 的統計地圖
         let leaveHoursSummary = {}; 
         let totalLeaveDeduction = 0;
 
@@ -237,26 +236,32 @@ export default function ReportsModule({ user, selectedProject }) {
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
               
-              let currentDayLeaveHours = 8;
-              if (leaveRangeInfo && typeof leaveRangeInfo === 'string' && leaveRangeInfo.includes('~')) {
-                // 🎯 修正 3：對請假時間字串進行徹底日期剔除優化，全面消除日期尾贅，只准保存純時間
-                const cleanRangeOnly = leaveRangeInfo.replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
-                const parts = cleanRangeOnly.split('~');
-                if (parts.length === 2 && parts[0] && parts[1]) {
-                  const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                  currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+              let currentDayLeaveHours = 0; // 🎯 導正：預設為 0，精算出來多少就是多少
+
+              if (leaveRangeInfo && typeof leaveRangeInfo === 'string') {
+                // 🎯 核心優化：將連接符 `-` 在精算前全自動替換為波浪號 `~`，並徹底去除日期贅字與空格
+                const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
+                
+                if (formattedRange.includes('~')) {
+                  const parts = formattedRange.split('~');
+                  if (parts.length === 2 && parts[0] && parts[1]) {
+                    const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
+                    currentDayLeaveHours = Math.ceil(effectiveMins / 60);
+                  }
+                } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
+                  currentDayLeaveHours = 4;
+                } else if (formattedRange.includes('8小時') || formattedRange === '全天' || formattedRange === '') {
+                  // 只有當明確代表全天、或確實請假但未標時間時才給 8 小時
+                  currentDayLeaveHours = 8;
                 }
-              } else if (leaveRangeInfo && typeof leaveRangeInfo === 'string' && (leaveRangeInfo.includes('4小時') || leaveRangeInfo.includes('半天'))) {
-                currentDayLeaveHours = 4;
               }
 
-              // 🎯 修正 2：動態累積該原始假別，完全不使用「其他」
               if (!leaveHoursSummary[leaveType]) {
                 leaveHoursSummary[leaveType] = 0;
               }
               leaveHoursSummary[leaveType] += currentDayLeaveHours;
 
-              // 🎯 修正 1：生理假視為病假扣半薪 (權重 0.5)；事假扣全薪 (權重 1.0)
+              // 生理假視為病假扣半薪 (權重 0.5)；事假扣全薪 (權重 1.0)
               let deductionWeight = 0;
               if (leaveType === '事假') {
                 deductionWeight = 1.0;
@@ -329,11 +334,12 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正 3：請假時間去日期化。清除重複的當天日期，只秀時間區間如 `16:38~17:38`
+          // 🎯 修正一：去日期化呈現。將橫槓全自動轉成標準區間符，並斬斷日期字串
           let cleanLeaveRangeText = '--';
           if (leaveType) {
+            const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
             const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}|\\d{3}/\\d{2}/\\d{2}`, 'g');
-            const cleanRange = leaveRangeInfo.replace(datePattern, '').replace(/\s+/g, '');
+            const cleanRange = formattedRange.replace(datePattern, '');
             cleanLeaveRangeText = `${leaveType} ${cleanRange}`;
           }
 
@@ -358,7 +364,7 @@ export default function ReportsModule({ user, selectedProject }) {
           .map(([type, hrs]) => `${type} ${hrs}H`)
           .join(', ') || '無請假紀錄';
 
-        // 將完整清洗後的歷史假別地圖物件完整同步記錄至彙總表暫存器
+        // 同步紀錄至彙總表暫存字典
         deductionSummaryMap[person.name] = {
           name: person.name,
           unit: personFinalUnit,
@@ -371,7 +377,7 @@ export default function ReportsModule({ user, selectedProject }) {
         pdfPagesHtml += `
           <div class="a4-page">
             <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
-            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人员法定考勤暨差假核销签核凭证</div>
+            <div style="text-align: center; font-size: 15px; font-weight: bold; color: #475569; margin-bottom: 12px;">人員法定考勤暨差假核銷簽核憑證</div>
             
             <table class="info-table">
               <tr>
@@ -457,7 +463,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
         let leaveDisplayBlock = "";
         if (row.totalLeaveHours > 0) {
-          // 🎯 修正 2：逐一展開真實假別（生理假、特休、公出），消滅模糊的「其他」文字
           leaveDisplayBlock = Object.entries(row.leavesObj)
             .map(([lType, hrs]) => `<span style="padding: 1px 5px; background: #fff7ed; border: 1px solid #ffedd5; border-radius: 4px; color: #c2410c; margin-right:4px; font-weight:bold; white-space:nowrap;">${lType} ${hrs}H</span>`)
             .join(' ');
@@ -482,7 +487,7 @@ export default function ReportsModule({ user, selectedProject }) {
         `;
       });
 
-      // 🎯 修正 4：完整移除下方那兩格過時核章框線（承辦人、主持人簽核），使其回歸乾淨報表大表
+      // 🎯 修正四：完全移除了原先最底下的簽核核章區塊 (出納簽章、主持人覆核)
       pdfPagesHtml += `
         <div class="a4-page" style="page-break-before: always;">
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
