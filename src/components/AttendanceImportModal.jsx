@@ -14,7 +14,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
   if (!isOpen) return null;
 
-  // ================= 1. 下載範本功能 (同步美化範本預期導出檔名) =================
+  // ================= 1. 下載範本功能 (同步美化範本預期導出檔名與格式說明) =================
   const handleDownloadTemplate = () => {
     let csvContent = "";
     let fileName = "";
@@ -141,7 +141,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位) - 修正完畢
+      // 【分流 C】考勤表 C (駐點單位多人員歷程比對與過濾)
       // ----------------------------------------------------
       else if (importType === 'C') {
         let currentEmployeeName = "";
@@ -282,7 +282,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       console.error("考勤匯入發生錯誤:", error);
       setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
-    } fileRef: {
+    } finally {
       setIsUploading(false);
       if (e && e.target) {
         e.target.value = '';
@@ -344,8 +344,9 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           <div>
             <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1.5">選擇檔案上傳</label>
+            {/* 💡 修正處：將原本的 accept=".csv" 修改為 accept=".xlsx, .xls" 以引導彈出 Excel 檔案格式選擇 */}
             <label className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-2xl cursor-pointer transition-colors text-center ${isUploading ? 'bg-slate-50 border-slate-300 dark:bg-slate-900/30' : 'bg-white border-indigo-200 hover:border-indigo-400 dark:bg-slate-800/50 dark:border-slate-700 dark:hover:border-slate-500'}`}>
-              <input type="file" accept=".csv" className="hidden" onChange={handleFileChange} disabled={isUploading} />
+              <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileChange} disabled={isUploading} />
               
               {isUploading ? (
                 <div className="flex flex-col items-center space-y-2">
@@ -355,8 +356,8 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               ) : (
                 <div className="flex flex-col items-center space-y-1.5">
                   <div className="p-3 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><Upload size={20} /></div>
-                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">點擊選擇或拖放對應 CSV 報表</span>
-                  <span className="text-[10px] text-slate-400">系統將全自動繞過並特赦保護人工維護欄位</span>
+                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">點擊選擇或拖放對應 Excel (.xlsx) 報表</span>
+                  <span className="text-[10px] text-slate-400">系統將支援多頁籤人員識別並特赦保護人工欄位</span>
                 </div>
               )}
             </label>
