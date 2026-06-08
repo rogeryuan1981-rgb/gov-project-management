@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Upload, CalendarDays, ShieldAlert, AlertCircle, ChevronRight, CheckCircle2, Sliders, ToggleLeft, ToggleRight, Check, X, UserCheck, Save, Calendar, Trash2, Edit2, Plus } from 'lucide-react';
+import { Clock, Upload, CalendarDays, ShieldAlert, AlertCircle, ChevronRight, CheckCircle2, Sliders, ToggleLeft, ToggleRight, Check, X, UserCheck, Save, Calendar, Trash2, Edit2, Plus, FileText } from 'lucide-react';
 import { collection, onSnapshot, doc, getFirestore, query, where, updateDoc, setDoc, getDoc } from 'firebase/firestore'; 
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
-// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心，徹底相容雙維度面板切換
 import AttendanceViewModal from './AttendanceViewModal';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
@@ -21,28 +20,21 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [dbError, setDbError] = useState(null);
 
-  // 考勤控制大視窗開窗狀態
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
 
-  // 🎯 核心控制通道：用來指定開啟同一個大視窗覆核中心時的初始檢視模式
   const [initialViewMode, setInitialViewMode] = useState('ALL_STATUS'); 
 
-  // 防呆設定面板開窗狀態
   const [isProxySettingsModalOpen, setIsProxySettingsModalOpen] = useState(false);
-  
-  // 點選「代理異常卡片」後彈出的明細與多重排代維護大視窗
   const [isProxyExceptionDetailsOpen, setIsProxyExceptionDetailsOpen] = useState(false);
 
-  // 代理篩選規則狀態定義
   const [proxyThresholdDays, setProxyThresholdDays] = useState(2); 
   const [includeHolidays, setIncludeHolidays] = useState(false); 
   const [monthlyThresholdDays, setMonthlyThresholdDays] = useState(5); 
   const [exemptLeaveTypes, setExemptLeaveTypes] = useState(['特休', '補休']);
   const [exemptUnits, setExemptUnits] = useState([]);
 
-  // 使用者可自行定義擴充的假別對齊字典別名物件
   const [leaveAliasMapping, setLeaveAliasMapping] = useState([
     { alias: '休假', official: '特休' },
     { alias: '補休假', official: '補休' }
@@ -52,11 +44,9 @@ export default function AttendanceModule({ user, selectedProject }) {
 
   const ALL_LEAVE_TYPES = ['特休', '事假', '病假', '喪假', '公出', '補休'];
 
-  // 控制特定派代明細列的手動新表單展開狀態
   const [assigningId, setAssigningId] = useState(null);
   const [assignForm, setAssignForm] = useState({ proxyName: '', startHour: '08:30', endHour: '17:30' });
 
-  // 歷史代理時段就地編輯控制狀態
   const [editingSubRecordIdx, setEditingSubRecordIdx] = useState(null);
   const [subEditForm, setSubEditForm] = useState({ proxyName: '', startHour: '08:30', endHour: '17:30' });
 
@@ -66,14 +56,12 @@ export default function AttendanceModule({ user, selectedProject }) {
   const today = new Date().toISOString().split('T')[0];
   const todayYearMonth = today.substring(0, 7);
 
-  // 時間轉分鐘輔助函數
   const timeToMinutes = (timeStr) => {
     if (!timeStr || !timeStr.includes(':')) return 0;
     const parts = timeStr.split(':');
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
-  // 實時精算扣除中午休息工時之有效分鐘數函數
   const getEffectiveMinutes = (startStr, endStr) => {
     const startM = timeToMinutes(startStr);
     const endM = timeToMinutes(endStr);
@@ -92,7 +80,6 @@ export default function AttendanceModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 智慧清洗時間字串
   const cleanTimeRangeOnly = (rangeStr) => {
     if (!rangeStr) return '';
     const timePattern = /(\d{2}:\d{2})/g;
@@ -143,7 +130,6 @@ export default function AttendanceModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubAtt(); unsubCalendar(); };
   }, [user, selectedProject]);
 
-  // 提煉所有人現況單位加上歷史歷程 history 的單位組別全專案聯集陣列
   const getGlobalCalculatedUnits = () => {
     const unitSet = new Set();
     if (Array.isArray(personnel)) {
@@ -161,9 +147,6 @@ export default function AttendanceModule({ user, selectedProject }) {
 
   const globalExistingUnits = getGlobalCalculatedUnits();
 
-  // =========================================================================
-  // 🧠 核心精算代理異常引擎
-  // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
     const exceptionDetailsList = [];
@@ -222,7 +205,6 @@ export default function AttendanceModule({ user, selectedProject }) {
 
         if (isOffDay) {
           if (includeHolidays) {
-            // 假日不切斷連續請假鏈條
           } else {
             continuousLeaveChain = 0;
           }
@@ -435,7 +417,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         
         <div onClick={() => setIsCalendarSettingsOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與法定假別設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定應上班日曆與假期</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -443,7 +425,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
         <div onClick={() => setIsProxySettingsModalOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理與合規防呆設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定連續與累計請假天數</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -458,33 +440,32 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      {/* 🎯 控制列一體化大中樞 */}
+      {/* 🎯 核心重構點一：將主畫面的進入方塊順序調整為「左藍大表，右紅異常」，完美鏡像對齊彈窗 */}
       <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm border-slate-200/70">
         <div className="space-y-1.5">
           <h4 className="font-black text-slate-800 dark:text-white text-base flex items-center">
-            <CheckCircle2 size={18} className="mr-2 text-emerald-500" /> 考勤明細審查與維護數據中心 已就緒
+            <CheckCircle2 size={18} className="mr-2 text-indigo-500" /> 考勤明細審查與維護數據中心 已就緒
           </h4>
           <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
-            子系統已將「全月日曆大表」與「異常審查中心」一體化收攏。點選下方對應按鈕，即可開啟統一的大型覆核視窗，底層終身共享首日到職特赦放行、全局月份防禦、與轉任歷程比對規則。
+            子系統已將「全月日曆大表」與「異常審查中心」一體化收攏。底層全面共享首日到職特赦、全局月份防禦、與轉任歷程比對規則。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button 
-            onClick={() => { setInitialViewMode('EXCEPTIONS_ONLY'); setIsAttendanceViewOpen(true); }} 
-            className="px-5 py-3 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl transition-all flex items-center shadow-2xs border border-rose-200"
-          >
-            <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 進入考勤異常審查與維護中心
-          </button>
           <button 
             onClick={() => { setInitialViewMode('ALL_STATUS'); setIsAttendanceViewOpen(true); }} 
             className="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-all flex items-center shadow-md shadow-indigo-600/10"
           >
             <CalendarDays size={14} className="mr-1.5" /> 📅 進入全月考勤總覽大表
           </button>
+          <button 
+            onClick={() => { setInitialViewMode('EXCEPTIONS_ONLY'); setIsAttendanceViewOpen(true); }} 
+            className="px-5 py-3 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl transition-all flex items-center border border-rose-200 shadow-2xs"
+          >
+            <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 進入考勤異常審查與維護中心
+          </button>
         </div>
       </div>
 
-      {/* 代理異常案件維護彈窗 */}
       {isProxyExceptionDetailsOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[85vh]">
@@ -576,7 +557,6 @@ export default function AttendanceModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* 2. 規政代理與合規防呆設定視窗 */}
       {isProxySettingsModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
@@ -627,7 +607,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
               <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border space-y-4">
                 <label className="block text-xs font-bold text-slate-500 mb-1">
-                  5. 假別別名歸納定義管理 (💡 用於清洗 CSV 不一致文字，如：輸入「補休假」自動歸納為官方「補休」)
+                  5. 假別別名歸納定義管理
                 </label>
                 
                 <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-2xl border">
@@ -681,7 +661,6 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       <AttendanceImportModal isOpen={isAttendanceImportOpen} onClose={() => setIsAttendanceImportOpen(false)} selectedProject={selectedProject} projectName={projectName} />
       
-      {/* 🎯 子元件通訊整併打通：將洗出來的聯集單位大陣列，與點擊按鈕後產生的模式傳入大彈窗 */}
       <AttendanceViewModal 
         isOpen={isAttendanceViewOpen} 
         onClose={() => setIsAttendanceViewOpen(false)} 
