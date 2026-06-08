@@ -168,9 +168,9 @@ export default function ReportsModule({ user, selectedProject }) {
           .filter(h => h.unit && h.startDate)
           .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
-        // 先推導出當前人員在當月份最後一天所屬的單位組別，供扣薪表基底儲存
+        // 推導出同仁在該月份最後一天所屬的單位組別，作為彙總表的基底編制單位
         let personFinalUnit = person.unit || '未指定單位';
-        
+
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
           const isOffDay = !!currentOffDays[dateStr];
@@ -191,7 +191,7 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayUnit = sortedHistory[matchedIdx].unit;
               currentDayRole = sortedHistory[matchedIdx].role || sortedHistory[matchedIdx].position || currentDayRole;
               currentDayHistoryIdx = matchedIdx;
-              personFinalUnit = currentDayUnit; // 滾動更新最終編制單位
+              personFinalUnit = currentDayUnit; // 滾動更新最終單位
             }
           } else {
             if (person.name === 'A' || person.name === '于家源') {
@@ -222,7 +222,7 @@ export default function ReportsModule({ user, selectedProject }) {
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
           }
 
-          // D. 工時核心合規與統計
+          // 工時核心合規與統計
           let finalStatusText = "--"; let rowBgStyle = "";
 
           if (isOffDay) {
@@ -324,7 +324,7 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正 1：去日期化邏輯。如果請假區間包含當日日期，予以清除精簡，防止超出 A4 寬度
+          // 🎯 修正一：請假區間去日期化。如果請假區間包含當日日期，予以清除精簡，防止超出表格範圍
           let cleanLeaveRangeText = '--';
           if (leaveType) {
             cleanLeaveRangeText = `${leaveType} ` + leaveRangeInfo.replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
@@ -351,7 +351,7 @@ export default function ReportsModule({ user, selectedProject }) {
           .map(([type, hrs]) => `${type} ${hrs}H`)
           .join(', ') || '無請假紀錄';
 
-        // 🎯 隨時同步紀錄至彙總表字典中，不分開跑兩次迴圈
+        // 🎯 隨時同步紀錄至彙總表暫存字典中
         deductionSummaryMap[person.name] = {
           name: person.name,
           unit: personFinalUnit,
@@ -417,26 +417,26 @@ export default function ReportsModule({ user, selectedProject }) {
 
       if (printedTargetCount === 0) {
         setIsLoadingAttendance(false);
-        return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬或轉調至【${attendanceSelectedUnit}】。`);
+        return showMessage('error', `⚠️ 於選定月份內，查無 any 同仁隸屬 or 轉調至【${attendanceSelectedUnit}】。`);
       }
 
-      // 🎯 修正 2：建立最末頁獨立的「當月請假扣薪彙總表」HTML 結構與同單位 RowSpan 合併計算
+      // 🎯 修正二：建立最末頁獨立頁面「當月請假扣薪彙總表」HTML 結構與同單位 RowSpan 合併計算
       const summaryList = Object.values(deductionSummaryMap);
-      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); // 必須依單位分組排序才能正確合併
+      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); // 必須先依單位排序才能正確合併
 
       let lastPageRowsHtml = "";
-      let currentUnit = null;
+      let currentUnitName = null;
       let currentUnitStartIndex = 0;
       const rowSpanMap = {};
 
       summaryList.forEach((item, index) => {
-        if (item.unit !== currentUnit) {
-          currentUnit = item.unit;
+        if (item.unit !== currentUnitName) {
+          currentUnitName = item.unit;
           currentUnitStartIndex = index;
           rowSpanMap[currentUnitStartIndex] = 1;
         } else {
           rowSpanMap[currentUnitStartIndex] += 1;
-          rowSpanMap[index] = 0; 
+          rowSpanMap[index] = 0; // 被合併的行，設為 0 不渲染 <td>
         }
       });
 
@@ -444,7 +444,7 @@ export default function ReportsModule({ user, selectedProject }) {
         const uSpan = rowSpanMap[index];
         let unitCellHtml = "";
         if (uSpan > 0) {
-          unitCellHtml = `<td rowspan="${uSpan}" style="font-weight: bold; background: #f8fafc; text-align: center; border-right: 2px solid #0f172a; vertical-align: middle;">${row.unit}</td>`;
+          unitCellHtml = `<td rowspan="${uSpan}" style="font-weight: bold; background: #f8fafc; text-align: center; border-right: 2px solid #0f172a; vertical-align: middle; font-size: 11px;">${row.unit}</td>`;
         }
 
         let leaveDisplayBlock = "";
@@ -464,9 +464,9 @@ export default function ReportsModule({ user, selectedProject }) {
         lastPageRowsHtml += `
           <tr>
             ${unitCellHtml}
-            <td style="font-weight: bold; text-align: center; font-size: 12px; color: #1e293b;">${row.name}</td>
-            <td style="padding: 6px 10px;">${leaveDisplayBlock}</td>
-            <td style="text-align: right; font-weight: bold; padding-right: 15px; font-size: 12px;">${salaryDisplayBlock}</td>
+            <td style="font-weight: bold; text-align: center; font-size: 11px; color: #1e293b; padding: 6px 8px;">${row.name}</td>
+            <td style="padding: 6px 10px; font-size: 11px;">${leaveDisplayBlock}</td>
+            <td style="text-align: right; font-weight: bold; padding-right: 15px; font-size: 11px;">${salaryDisplayBlock}</td>
           </tr>
         `;
       });
@@ -476,28 +476,28 @@ export default function ReportsModule({ user, selectedProject }) {
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
           <div style="text-align: center; font-size: 15px; font-weight: bold; color: #dc2626; margin-bottom: 20px;">各群組人員當月請假扣薪核銷彙總大表</div>
           
-          <div style="font-size: 11px; background: #fffbeb; border: 1px solid #fef3c7; color: #b45309; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold;">
-            💡 稽核提示：本表已自動完成同計畫單位（Group）之縱向儲存格合併排版，請事假扣除 1.0 全薪、病假扣除 0.5 半薪，其餘假別不予扣薪。
+          <div style="font-size: 10px; background: #fffbeb; border: 1px solid #fef3c7; color: #b45309; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold; line-height: 1.4;">
+            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假扣除 0.5 半薪，其餘假別依法不予扣薪。
           </div>
 
-          <table class="data-table" style="border: 2px solid #0f172a;">
+          <table class="data-table" style="border: 2px solid #0f172a; width: 100%; border-collapse: collapse;">
             <thead>
               <tr style="background: #f1f5f9; border-bottom: 2px solid #0f172a;">
-                <th style="width: 180px; text-align: center; font-size: 11px; padding: 8px;">計畫單位</th>
-                <th style="width: 110px; text-align: center; font-size: 11px;">姓名</th>
-                <th style="font-size: 11px; text-align: center;">假別累計時數 (若無假呈無紀錄)</th>
-                <th style="width: 140px; text-align: right; pr: 15px; font-size: 11px;">當月合計應扣薪資</th>
+                <th style="width: 180px; text-align: center; font-size: 11px; padding: 8px; font-weight: bold; background-color: #f8fafc;">計畫單位</th>
+                <th style="width: 110px; text-align: center; font-size: 11px; font-weight: bold; background-color: #f8fafc;">姓名</th>
+                <th style="font-size: 11px; text-align: center; font-weight: bold; background-color: #f8fafc;">假別累計時數 (若無假呈無紀錄)</th>
+                <th style="width: 140px; text-align: right; font-size: 11px; font-weight: bold; background-color: #f8fafc; padding-right: 15px;">當月合計應扣薪資</th>
               </tr>
             </thead>
-            <tbody style="font-size: 11px;">
+            <tbody>
               ${lastPageRowsHtml}
             </tbody>
           </table>
-          <div style="margin-top: 50px; display: flex; justify-content: space-between; padding: 0 40px; font-size: 12px; font-weight: bold;">
+          <div style="margin-top: 60px; display: flex; justify-content: space-between; padding: 0 40px; font-size: 11px; font-weight: bold;">
             <div>經辦出納簽章：<br/><br/><br/>________________</div>
             <div>計畫主持人覆核：<br/><br/><br/>________________</div>
           </div>
-          <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 30px; border-top: 1px dashed #cbd5e1; padding-top: 4px;">報表生成月份：${attendanceYearMonth} | 產出時間：${getLocalTodayStr()}</div>
+          <div style="text-align: right; font-size: 9px; color: #94a3b8; margin-top: 40px; border-top: 1px dashed #cbd5e1; padding-top: 4px;">報表生成月份：${attendanceYearMonth} | 產出時間：${getLocalTodayStr()}</div>
         </div>
       `;
 
@@ -527,7 +527,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </head>
         <body>
           <div class="no-print-bar">
-            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 1 頁扣薪彙總表</button>
+            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 末頁扣薪彙總表</button>
           </div>
           ${pdfPagesHtml}
         </body>
@@ -539,7 +539,7 @@ export default function ReportsModule({ user, selectedProject }) {
         printWindow.document.write(printContent);
         printWindow.document.close();
         setTimeout(() => printWindow.focus(), 500);
-        showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並加開末頁同單位合併之請假扣薪大表。`);
+        showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出去日期化凭证與扣薪大表。`);
       } else {
         showMessage('error', '彈窗被瀏覽器攔截，請允許開啟彈窗以檢視憑證。');
       }
@@ -593,7 +593,6 @@ export default function ReportsModule({ user, selectedProject }) {
       }
     });
 
-    p.contractEnd ? p.contractEnd : '至今';
     activePersonnelChanges.sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role)));
 
     const roleGroups = {};
@@ -631,7 +630,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (!assigned) overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
             }
         });
-        [slots, ...overstaffSlots].forEach(slot => {
+        slots.concat(overstaffSlots).forEach(slot => {
             const finalTimeline = []; let currentTime = groupStartLimitMs;
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             sortedOccs.forEach(occ => {
@@ -749,7 +748,7 @@ export default function ReportsModule({ user, selectedProject }) {
           th { background-color: #f8fafc; color: #475569; font-weight: bold; }
           .text-center { text-align: center; } .text-right { text-align: right; } .font-bold { font-weight: bold; } .font-mono { font-family: monospace; } .highlight { color: #ef4444; } .grace { color: #10b981; font-weight: bold; }
           .unit-top-border td { border-top: 2px solid #1e293b !important; }
-          .print-btn { block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; border-radius: 5px; font-weight: bold; cursor: pointer; border:none; }
+          .print-btn { display: block; width: 200px; margin: 20px auto; padding: 10px; background: #4f46e5; color: white; text-align: center; border-radius: 5px; font-weight: bold; cursor: pointer; border:none; }
           @media print { .no-print { display: none !important; } body { padding: 0; } }
         </style>
       </head>
