@@ -176,6 +176,11 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateObj = new Date(dateStr);
           const weekdayStr = ['日', '一', '二', '三', '四', '五', '六'][dateObj.getDay()];
 
+          // 🎯 核心過濾修正一：最初到職日首日防線！早於同仁到職日的日期一律直接 continue 跳過，不計入上班天數，更不准報曠職！
+          if (person.hireDate && dateStr < person.hireDate) {
+            continue;
+          }
+
           let currentDayUnit = person.unit || '未指定單位';
           let currentDayRole = person.role || '未指定職稱';
           let currentDayHistoryIdx = -1;
@@ -221,6 +226,15 @@ export default function ReportsModule({ user, selectedProject }) {
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
           }
 
+          // 🎯 核心過濾修正二：若假別文字裡面黏著時間，精準正則擷取字首核心假別名稱
+          let normalizedLeaveType = leaveType;
+          if (leaveType) {
+            const leaveMatch = leaveType.match(/^(特休|事假|病假|生理假|喪假|公出|補休)/);
+            if (leaveMatch) {
+              normalizedLeaveType = leaveMatch[1];
+            }
+          }
+
           // 工時核心合規與統計
           let finalStatusText = "--"; let rowBgStyle = "";
 
@@ -229,17 +243,16 @@ export default function ReportsModule({ user, selectedProject }) {
             else finalStatusText = "例假日/放假";
           } else {
             totalDutyDays++; 
-            if (leaveType) {
-              finalStatusText = `已請假 (${leaveType})`;
+            if (normalizedLeaveType) {
+              finalStatusText = `已請假 (${normalizedLeaveType})`;
               
               const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
               const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
               const hourlyWage = approvedSalary / 240;
               
-              let currentDayLeaveHours = 0; // 🎯 導正：預設為 0，精算出來多少就是多少
+              let currentDayLeaveHours = 0; 
 
               if (leaveRangeInfo && typeof leaveRangeInfo === 'string') {
-                // 🎯 核心優化：將連接符 `-` 在精算前全自動替換為波浪號 `~`，並徹底去除日期贅字與空格
                 const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
                 
                 if (formattedRange.includes('~')) {
@@ -251,21 +264,20 @@ export default function ReportsModule({ user, selectedProject }) {
                 } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
                   currentDayLeaveHours = 4;
                 } else if (formattedRange.includes('8小時') || formattedRange === '全天' || formattedRange === '') {
-                  // 只有當明確代表全天、或確實請假但未標時間時才給 8 小時
                   currentDayLeaveHours = 8;
                 }
               }
 
-              if (!leaveHoursSummary[leaveType]) {
-                leaveHoursSummary[leaveType] = 0;
+              if (!leaveHoursSummary[normalizedLeaveType]) {
+                leaveHoursSummary[normalizedLeaveType] = 0;
               }
-              leaveHoursSummary[leaveType] += currentDayLeaveHours;
+              leaveHoursSummary[normalizedLeaveType] += currentDayLeaveHours;
 
-              // 生理假視為病假扣半薪 (權重 0.5)；事假扣全薪 (權重 1.0)
+              // 生理假比照病假扣半薪 (權重 0.5)
               let deductionWeight = 0;
-              if (leaveType === '事假') {
+              if (normalizedLeaveType === '事假') {
                 deductionWeight = 1.0;
-              } else if (leaveType === '病假' || leaveType === '生理假') {
+              } else if (normalizedLeaveType === '病假' || normalizedLeaveType === '生理假') {
                 deductionWeight = 0.5;
               }
 
@@ -334,13 +346,13 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正一：去日期化呈現。將橫槓全自動轉成標準區間符，並斬斷日期字串
+          // 🎯 修正三：請假區間去日期化呈現。不管是 `~` 還是 `-` 連接，全數清除當天日期
           let cleanLeaveRangeText = '--';
-          if (leaveType) {
+          if (normalizedLeaveType) {
             const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
             const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}|\\d{3}/\\d{2}/\\d{2}`, 'g');
             const cleanRange = formattedRange.replace(datePattern, '');
-            cleanLeaveRangeText = `${leaveType} ${cleanRange}`;
+            cleanLeaveRangeText = `${normalizedLeaveType} ${cleanRange}`;
           }
 
           dailyRowsHtml += `
@@ -487,7 +499,7 @@ export default function ReportsModule({ user, selectedProject }) {
         `;
       });
 
-      // 🎯 修正四：完全移除了原先最底下的簽核核章區塊 (出納簽章、主持人覆核)
+      // 🎯 修正四：完全移除了最底下的核章簽名區塊，讓 A4 頁面完美純淨
       pdfPagesHtml += `
         <div class="a4-page" style="page-break-before: always;">
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -522,7 +534,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <title>計畫人員考勤明細月核銷憑證</title>
           <style>
             @page { size: A4 portrait; margin: 8mm 8mm 8mm 8mm; }
-            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; }
+            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; padding-top: 45px; } /* 🎯 留白置頂按鈕寬度 */
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
             .info-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 2px solid #0f172a; table-layout: fixed; }
@@ -533,9 +545,10 @@ export default function ReportsModule({ user, selectedProject }) {
             .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; word-wrap: break-word; font-size: 10px; }
             .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10.5px; border-bottom: 2px solid #0f172a; padding: 5px; }
             .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
-            .no-print-bar { text-align: center; background: #e0e7ff; padding: 10px; border-bottom: 1px solid #c7d2fe; font-family: sans-serif; }
+            /* 🎯 修正一：凍結列印條在視窗最上方，全面鎖死固定 */
+            .no-print-bar { position: fixed; top: 0; left: 0; right: 0; text-align: center; background: #e2e8f0; padding: 10px; border-bottom: 2px solid #cbd5e1; font-family: sans-serif; z-index: 9999; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
             .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
-            @media print { .no-print-bar { display: none !important; } }
+            @media print { .no-print-bar { display: none !important; } body { padding-top: 0; } }
           </style>
         </head>
         <body>
@@ -552,7 +565,7 @@ export default function ReportsModule({ user, selectedProject }) {
         printWindow.document.write(printContent);
         printWindow.document.close();
         setTimeout(() => printWindow.focus(), 500);
-        showMessage('success', `✅ 已成功篩選【${attendanceSelectedUnit}】並優化導出去日期化凭证與扣薪大表。`);
+        showMessage('success', `✅ 已成功導出去日期化凭证與扣薪大表。`);
       } else {
         showMessage('error', '彈窗被瀏覽器攔截，請允許開啟彈窗以檢視憑證。');
       }
