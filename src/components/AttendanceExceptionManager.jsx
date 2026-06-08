@@ -14,9 +14,11 @@ const LEAVE_TYPES_CONFIG = [
   { value: '補休', label: '補休' }
 ];
 
-export default function AttendanceExceptionManager({ selectedProject, personnel = [] }) {
+// 💡 外部傳入 allExistingUnits 參數以利下拉選單動態渲染組別
+export default function AttendanceExceptionManager({ selectedProject, personnel = [], allExistingUnits = [] }) {
   const [targetMonth, setTargetMonth] = useState(new Date().toISOString().substring(0, 7));
   const [searchName, setSearchName] = useState('');
+  const [selectedUnit, setSelectedUnit] = useState('ALL'); // 🎯 新增：所選取的單位過濾狀態，預設為全部 (ALL)
   const [exceptionFilter, setExceptionFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -52,7 +54,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       // C. 人名雙向聯集組裝
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
-        if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
+        if (p.contractEnd && p.contractEnd !== '至今' && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
         return true;
       });
       const personnelNames = activePersonnel.map(p => cleanName(p.name));
@@ -78,6 +80,26 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
             leaveRangeInfo = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveRangeInfo : "";
             leaveType = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveType : "";
             isManualMaintained = !!dayRecords[0].isManualMaintained;
+          }
+
+          // 🎯 歷史轉任歷程精準追蹤配對，拒絕死板套用主檔現況單位
+          let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
+          if (personInfo) {
+            if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
+              const matchedHistory = personInfo.history.find(h => {
+                const startValid = !h.startDate || dateStr >= h.startDate;
+                const endValid = !h.endDate || dateStr <= h.endDate;
+                return startValid && endValid;
+              });
+
+              if (matchedHistory && matchedHistory.unit) {
+                currentDayUnit = matchedHistory.unit;
+              } else {
+                currentDayUnit = '⚠️ 歷程未涵蓋此日期';
+              }
+            } else {
+              currentDayUnit = '⚠️ 歷程未涵蓋此日期';
+            }
           }
 
           // 判斷異常狀態類別
@@ -110,7 +132,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               id: `exc_${empName}_${dateStr}`,
               realDocId: (dayRecords.length > 0 && dayRecords[0].id) || `${selectedProject}_${empName}_${dateStr}`,
               name: personInfo ? personInfo.name : empName,
-              unit: personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員',
+              unit: currentDayUnit, // 💡 寫入動態追蹤後的最精確歷史組別
               date: dateStr,
               checkIn, checkOut, leaveRangeInfo, leaveType, statusType, statusText, isManualMaintained
             });
@@ -130,11 +152,12 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     fetchExceptions();
   }, [targetMonth, selectedProject, personnel]);
 
-  // 前端條件過濾
+  // 🎯 前端三維複合過濾邏輯聯動 (姓名檢索 + 異常類別 + 計畫單位過濾)
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
-    if (exceptionFilter === 'ALL_EXCEPTIONS') return matchesName;
-    return matchesName && r.statusType === exceptionFilter;
+    const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
+    const matchesException = exceptionFilter === 'ALL_EXCEPTIONS' || r.statusType === exceptionFilter;
+    return matchesName && matchesUnit && matchesException;
   });
 
   const startEdit = (r) => {
@@ -186,17 +209,34 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       </div>
 
       {/* Filter Options */}
-      <div className="px-6 py-4 bg-slate-50/30 dark:bg-slate-900/10 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row items-center gap-3 justify-between">
-        <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+      <div className="px-6 py-4 bg-slate-50/30 dark:bg-slate-900/10 border-b border-slate-100 dark:border-slate-700 flex flex-col md:flex-row items-center gap-4 justify-between">
+        <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
           <button onClick={() => setExceptionFilter('ALL_EXCEPTIONS')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:border-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>全部異常 ({records.length})</button>
           <button onClick={() => setExceptionFilter('ABSENT')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>曠職 ({records.filter(r=>r.statusType==='ABSENT').length})</button>
           <button onClick={() => setExceptionFilter('MISSING_CLOCK')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>缺打卡 ({records.filter(r=>r.statusType==='MISSING_CLOCK').length})</button>
           <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
         </div>
         
-        <div className="relative w-full sm:w-64">
-          <Search size={13} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-          <input type="text" placeholder="輸入姓名快速檢索異常..." value={searchName} onChange={e => setSearchName(e.target.value)} className="w-full pl-8 pr-4 py-1.5 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-white rounded-xl text-xs outline-none focus:border-indigo-500" />
+        {/* 🎯 控制列右側合流：完美的計畫單位過濾 + 姓名快速檢索 */}
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center space-x-1.5 w-full sm:w-56 shrink-0">
+            <Filter size={12} className="text-slate-400 dark:text-indigo-400" />
+            <select 
+              value={selectedUnit} 
+              onChange={e => setSelectedUnit(e.target.value)} 
+              className="p-1.5 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-white rounded-xl text-xs font-bold w-full outline-none focus:border-indigo-500"
+            >
+              <option value="ALL">全部計畫單位 (ALL)</option>
+              {allExistingUnits.map(unit => (
+                <option key={unit} value={unit}>{unit}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="relative w-full sm:w-60">
+            <Search size={13} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+            <input type="text" placeholder="輸入姓名快速檢索異常..." value={searchName} onChange={e => setSearchName(e.target.value)} className="w-full pl-8 pr-4 py-1.5 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-white rounded-xl text-xs outline-none focus:border-indigo-500" />
+          </div>
         </div>
       </div>
 
@@ -212,7 +252,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
                 <tr>
                   <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'90px'}}>異常日期</th>
-                  <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'150px'}}>姓名/組別</th>
+                  <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'160px'}}>姓名/組別</th>
                   <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'100px'}}>上班卡 (M)</th>
                   <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'100px'}}>下班卡 (O)</th>
                   <th className="py-3 px-4 text-slate-500 dark:text-slate-400" style={{width:'130px'}}>請假區間 (Z)</th>
@@ -226,6 +266,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                   const isEditing = editingId === r.id;
                   let rowBg = "bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700/40";
                   if (isEditing) rowBg = "bg-indigo-50/50 dark:bg-indigo-950/20 font-semibold text-slate-950 dark:text-white";
+                  else if (r.unit.includes('⚠️')) rowBg = "bg-rose-50/20 hover:bg-rose-50/40 dark:bg-rose-950/10 text-rose-950 dark:text-rose-300";
                   else if (r.isManualMaintained) rowBg = "bg-emerald-50/20 dark:bg-emerald-950/10 hover:bg-emerald-50/40";
 
                   return (
@@ -234,7 +275,12 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                       <td className="py-3 px-4">
                         <div className="flex flex-col">
                           <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
-                          <span className="text-[10px] text-slate-400 font-semibold">{r.unit}</span>
+                          {/* 💡 單位 Badge 樣式優化，若包含 ⚠️ 則呈現高亮警示色 */}
+                          <span className={`text-[10px] px-1 py-0.5 border rounded w-fit mt-0.5 font-bold tracking-wide ${
+                            r.unit.includes('⚠️') 
+                              ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-500/20 font-extrabold'
+                              : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-900 dark:text-slate-400 dark:border-slate-700'
+                          }`}>{r.unit}</span>
                         </div>
                       </td>
                       
@@ -258,7 +304,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                             (r.statusType === 'MISSING_CLOCK' ? 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-500/10 dark:text-orange-400 dark:border-orange-500/20' : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20')
                           }`}>{r.statusText}</span>
                           
-                          {/* 💡 方案 B：升級鎖定標籤為「高度互動型一鍵解鎖按鈕」 */}
                           {r.isManualMaintained && (
                             <button
                               type="button"
@@ -267,10 +312,9 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                                 if (window.confirm(`確定要解鎖並釋出【${r.name}】在 ${r.date} 的防覆蓋狀態嗎？\n解鎖後，下次重新匯入考勤 CSV 將會直接覆蓋本條數據。`)) {
                                   try {
                                     const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
-                                    // 將 isManualMaintained 實時設為 false 降級
                                     await setDoc(doc(attendanceRef, r.realDocId), { isManualMaintained: false }, { merge: true });
                                     alert("🔓 成功解除特赦鎖定令！下次匯入即可自動覆蓋。");
-                                    fetchExceptions(); // 實時重算刷新
+                                    fetchExceptions(); 
                                   } catch (err) {
                                     alert("解鎖失敗，請檢查權限。");
                                   }
