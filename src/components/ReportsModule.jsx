@@ -176,7 +176,7 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateObj = new Date(dateStr);
           const weekdayStr = ['日', '一', '二', '三', '四', '五', '六'][dateObj.getDay()];
 
-          // 🎯 核心過濾修正一：最初到職日首日防線！早於同仁到職日的日期一律直接 continue 跳過，不計入上班天數，更不准報曠職！
+          // 核心過濾修正一：最初到職日首日防線！
           if (person.hireDate && dateStr < person.hireDate) {
             continue;
           }
@@ -226,13 +226,12 @@ export default function ReportsModule({ user, selectedProject }) {
             proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
           }
 
-          // 🎯 核心過濾修正二：若假別文字裡面黏著時間，精準正則擷取字首核心假別名稱
-          let normalizedLeaveType = leaveType;
-          if (leaveType) {
-            const leaveMatch = leaveType.match(/^(特休|事假|病假|生理假|喪假|公出|補休)/);
-            if (leaveMatch) {
-              normalizedLeaveType = leaveMatch[1];
-            }
+          // 🎯 核心重構：建立強固型假別雙安全防線。不論資料塞在 leaveType 還是隨打卡紀錄黏在 leaveRangeInfo，只要含假別關鍵字一律抽出！
+          let normalizedLeaveType = "";
+          const leaveTargetString = `${leaveType || ''} ${leaveRangeInfo || ''}`;
+          const leaveMatch = leaveTargetString.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
+          if (leaveMatch) {
+            normalizedLeaveType = leaveMatch[1];
           }
 
           // 工時核心合規與統計
@@ -263,7 +262,8 @@ export default function ReportsModule({ user, selectedProject }) {
                   }
                 } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
                   currentDayLeaveHours = 4;
-                } else if (formattedRange.includes('8小時') || formattedRange === '全天' || formattedRange === '') {
+                } else if (formattedRange.includes('8小時') || formattedRange.includes('全天') || formattedRange === '' || formattedRange.includes(normalizedLeaveType)) {
+                  // 🎯 防呆相容：如果含有該假別字眼且切不出特定小時，依法核定為標準單日 8 小時
                   currentDayLeaveHours = 8;
                 }
               }
@@ -346,12 +346,12 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正三：請假區間去日期化呈現。不管是 `~` 還是 `-` 連接，全數清除當天日期
+          // 請假時間去日期化呈現。
           let cleanLeaveRangeText = '--';
           if (normalizedLeaveType) {
             const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
             const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}|\\d{3}/\\d{2}/\\d{2}`, 'g');
-            const cleanRange = formattedRange.replace(datePattern, '');
+            const cleanRange = formattedRange.replace(datePattern, '').replace(new RegExp(normalizedLeaveType, 'g'), '');
             cleanLeaveRangeText = `${normalizedLeaveType} ${cleanRange}`;
           }
 
@@ -499,7 +499,7 @@ export default function ReportsModule({ user, selectedProject }) {
         `;
       });
 
-      // 🎯 修正四：完全移除了最底下的核章簽名區塊，讓 A4 頁面完美純淨
+      // 移除下方核章簽名區塊
       pdfPagesHtml += `
         <div class="a4-page" style="page-break-before: always;">
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -534,7 +534,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <title>計畫人員考勤明細月核銷憑證</title>
           <style>
             @page { size: A4 portrait; margin: 8mm 8mm 8mm 8mm; }
-            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; padding-top: 45px; } /* 🎯 留白置頂按鈕寬度 */
+            body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; color: #1e293b; line-height: 1.2; background: #fff; padding: 0; margin: 0; padding-top: 45px; } 
             .a4-page { page-break-after: always; box-sizing: border-box; font-size: 11px; }
             .a4-page:last-child { page-break-after: avoid; }
             .info-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 2px solid #0f172a; table-layout: fixed; }
@@ -545,7 +545,6 @@ export default function ReportsModule({ user, selectedProject }) {
             .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; word-wrap: break-word; font-size: 10px; }
             .data-table th { background: #f8fafc; color: #1e293b; font-weight: bold; font-size: 10.5px; border-bottom: 2px solid #0f172a; padding: 5px; }
             .text-center { text-align: center; } .text-danger { color: #dc2626; font-weight: bold; } .text-emerald { color: #059669; font-weight: bold; } .font-bold { font-weight: bold; }
-            /* 🎯 修正一：凍結列印條在視窗最上方，全面鎖死固定 */
             .no-print-bar { position: fixed; top: 0; left: 0; right: 0; text-align: center; background: #e2e8f0; padding: 10px; border-bottom: 2px solid #cbd5e1; font-family: sans-serif; z-index: 9999; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
             .print-btn { padding: 6px 20px; background: #4f46e5; color: white; border: none; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
             @media print { .no-print-bar { display: none !important; } body { padding-top: 0; } }
@@ -642,9 +641,10 @@ export default function ReportsModule({ user, selectedProject }) {
 
     const expandedSlots = []; const vacancyTables = [];
     Object.values(roleGroups).sort((a, b) => (getUnitWeight(a.unit) - getUnitWeight(b.unit)) || (getRoleWeight(a.role) - getRoleWeight(b.role))).forEach(group => {
-        let maxReqCount = 0; const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs))); const groupEndLimitMs = Math.min(endMs, Math.max(...group.reqs.map(r => r.eMs)));
-        if (groupStartLimitMs > groupEndLimitMs) return;
-        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+        let maxReqCount = 0; const groupStartLimitMs = Math.max(startMs, Math.min(...group.reqs.map(r => r.sMs))); const groupEndLimitMs = Math.min(endMs, Math.max(...group.eMs ? group.reqs.map(r => r.eMs) : [0]));
+        let validEndLimitMs = groupEndLimitMs > 0 ? groupEndLimitMs : endMs;
+        if (groupStartLimitMs > validEndLimitMs) return;
+        for (let t = groupStartLimitMs; t <= validEndLimitMs; t += 86400000) {
             let dReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) dReq += r.count; }); maxReqCount = Math.max(maxReqCount, dReq);
         }
         const slots = Array.from({length: maxReqCount}, (_, i) => ({ unit: group.unit, role: group.role, slotIndex: i + 1, label: `員額 ${i + 1}`, occupants: [] })); const overstaffSlots = [];
@@ -665,12 +665,12 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (occ.startMs > currentTime) { const vStart = currentTime; const vEnd = occ.startMs - 86400000; if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); }
                 finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr }); currentTime = occ.endMs + 86400000;
             });
-            if (currentTime <= groupEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(groupEndLimitMs).toISOString().split('T')[0] });
+            if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
             slot.timeline = finalTimeline;
         });
         expandedSlots.push(...slots, ...overstaffSlots);
         let currentVacancy = null; const vacancyPeriods = []; let totalPenaltyDays = 0; let totalGraceDays = 0;
-        for (let t = groupStartLimitMs; t <= groupEndLimitMs; t += 86400000) {
+        for (let t = groupStartLimitMs; t <= validEndLimitMs; t += 86400000) {
             let dailyReq = 0; let dailyPenaltyReq = 0; group.reqs.forEach(r => { if (t >= r.sMs && t <= r.eMs) { dailyReq += r.count; if (t >= r.pMs) dailyPenaltyReq += r.count; } });
             if (dailyReq === 0) { if (currentVacancy) { vacancyPeriods.push(currentVacancy); currentVacancy = null; } continue; }
             let activeCount = 0; group.segments.forEach(seg => { if (t >= seg.startMs && t <= seg.endMs) activeCount++; });
