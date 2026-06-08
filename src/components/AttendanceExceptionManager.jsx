@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Search, Filter, RefreshCw, Edit2, Save, X, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { ShieldAlert, Search, Filter, RefreshCw, Edit2, Save, X, CheckCircle, AlertCircle, Loader2, FileWarning } from 'lucide-react';
 import { collection, query, where, getDocs, getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
 
@@ -21,6 +21,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
   const [exceptionFilter, setExceptionFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMonthEmpty, setIsMonthEmpty] = useState(false); // 🎯 新增：標記當前選擇月份是否處於完全未匯入任何資料的狀態
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ checkIn: '', checkOut: '', leaveRangeInfo: '', leaveType: '' });
 
@@ -31,7 +32,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 參考人事模組設定，動態從現有名冊與歷史歷程中即時提煉出 100% 存在過的計畫單位聯集
+  // 提煉 100% 存在過的計畫單位聯集
   const getCalculatedUnits = () => {
     const unitSet = new Set();
     
@@ -57,7 +58,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
   const fetchExceptions = async () => {
     if (!selectedProject) return;
-    setIsUploading(true); // 修正：因上一版變數名稱打錯，導正為 setIsLoading(true) 確保狀態正確
     setIsLoading(true);
     try {
       // A. 讀取工作日曆設定
@@ -70,6 +70,13 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', targetMonth));
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // 🎯 物理檢測：如果長度為 0，代表此月份在資料庫根本沒有匯入任何明細
+      if (importedRecords.length === 0) {
+        setIsMonthEmpty(true);
+      } else {
+        setIsMonthEmpty(false);
+      }
 
       const year = parseInt(targetMonth.split('-')[0], 10);
       const month = parseInt(targetMonth.split('-')[1], 10);
@@ -89,6 +96,10 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
       uniqueNames.forEach(empName => {
         const personInfo = personnel.find(p => cleanName(p.name) === cleanName(empName));
+
+        // 檢查該人員在當前月份資料庫內到底有沒有任何一筆匯入明細
+        const employeeMonthRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName));
+        const hasImportedDataThisMonth = employeeMonthRecords.length > 0;
 
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -133,9 +144,14 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           if (leaveType) {
             statusType = 'LEAVE'; statusText = `已請假 (${leaveType})`;
           } else if (!checkIn && !checkOut) {
-            statusType = 'ABSENT'; statusText = '曠職 (應上班未打卡)';
+            if (!hasImportedDataThisMonth) {
+              statusType = 'NORMAL';
+              statusText = '正常出勤';
+            } else {
+              statusType = 'ABSENT'; statusText = '曠職 (應上班未打卡)';
+            }
           } else if (!checkIn || !checkOut) {
-            // 🎯 核心修正點：增加最初到職日首日特赦判定 (下班 >= 17:30 則特赦)
+            // 最初到職日首日特赦判定 (下班 >= 17:30 則特赦放行)
             if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && checkOut) {
               const outMins = timeToMinutes(checkOut);
               const amnestyOutMins = 17 * 60 + 30; // 17:30
@@ -151,7 +167,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           } else {
             const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
             if (inMins !== null && outMins !== null) {
-              // 🎯 最初到職日當天雙打卡皆有但上班因手續較晚的情況，只要 17:30 之後下班一律算正常
+              // 最初到職日當天雙打卡皆有但上班較晚的情況，只要 17:30 之後下班一律算正常
               if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && outMins >= (17 * 60 + 30)) {
                 statusType = 'NORMAL';
                 statusText = '正常出勤';
@@ -168,7 +184,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
             }
           }
 
-          // 僅收錄實質異常件 (正常出勤與常態請假將不被收入審查清單中)
+          // 僅收錄實質異常件 (過濾掉正常上班與常態請假)
           if (statusType === 'ABSENT' || statusType === 'MISSING_CLOCK' || statusType === 'LATE_EARLY') {
             exceptionMesh.push({
               id: `exc_${empName}_${dateStr}`,
@@ -194,7 +210,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     fetchExceptions();
   }, [targetMonth, selectedProject, personnel]);
 
-  // 前端三維複合過濾邏輯聯動 (姓名檢索 + 異常類別 + 計畫單位過濾)
+  // 前端三維複合過濾邏輯聯動
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
@@ -285,6 +301,13 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       <div className="p-6 overflow-y-auto flex-1 max-h-[50vh]">
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2"><Loader2 size={32} className="animate-spin text-indigo-500" /><span className="text-xs text-slate-400">正在橫向調閱名冊，清洗抽取全月異常件...</span></div>
+        ) : isMonthEmpty ? (
+          // 🎯 核心優化：當檢測到整月份都沒有匯入過任何打卡或請假紀錄時，主動拋出警告文字引導
+          <div className="text-center py-16">
+            <FileWarning className="mx-auto text-amber-500 mb-2 animate-bounce" size={42} />
+            <p className="text-sm font-extrabold text-amber-600 dark:text-amber-400">🚨 偵測提示：本月份之計畫出勤紀錄尚未匯入！</p>
+            <p className="text-xs text-slate-400 mt-1.5">請先至「匯入出勤紀錄」功能中上傳對應的 Excel 考勤報表進行建檔結算。</p>
+          </div>
         ) : filteredRecords.length === 0 ? (
           <div className="text-center py-16"><CheckCircle className="mx-auto text-emerald-500 mb-2" size={40} /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">本月份目前查無 考勤異常件，配置完全合規！</p></div>
         ) : (
