@@ -52,7 +52,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
 
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
-        if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
+        if (p.contractEnd && p.contractEnd !== '至今' && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
         return true;
       });
 
@@ -70,19 +70,20 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
+            // 💡 預設採用現況主檔單位
             let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
 
-            if (personInfo && personInfo.assignmentHistory && Array.isArray(personInfo.assignmentHistory)) {
-              const matchedHistory = personInfo.assignmentHistory.find(h => {
-                const startValid = !h.start || dateStr >= h.start;
-                const endValid = !h.end || dateStr <= h.end;
+            // 🎯 核心修正點：比對跟人事模組完全同步的真實動態歷史轉任歷程欄位 history 
+            if (personInfo && personInfo.history && Array.isArray(personInfo.history)) {
+              // 尋找該段歷史中，其開始日與結束日剛好完整包含當天渲染日期（dateStr）的專案單位
+              const matchedHistory = personInfo.history.find(h => {
+                const startValid = !h.startDate || dateStr >= h.startDate;
+                const endValid = !h.endDate || dateStr <= h.endDate;
                 return startValid && endValid;
               });
-              if (matchedHistory) currentDayUnit = matchedHistory.unit;
-            } else if (personInfo) {
-              if (cleanName(empName) === 'A' || cleanName(empName) === '于家源') {
-                if (dateStr <= '2026-05-17') currentDayUnit = '企劃組';
-                else currentDayUnit = '專案辦公室';
+              // 若成功找到歷史重疊交集區段，則即時校正該日曆儲存格格子的所屬計畫單位
+              if (matchedHistory && matchedHistory.unit) {
+                currentDayUnit = matchedHistory.unit;
               }
             }
 
@@ -219,7 +220,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
         leaveRangeInfo: editFormData.leaveRangeInfo,
         leaveType: editFormData.leaveType,
         recordType: 'MANUAL_MAINTAINED', 
-        isManualMaintained: true, // 💡 【核心優化點】：行內編輯儲存時，同步附帶特赦令牌
+        isManualMaintained: true, 
         updatedAt: new Date().getTime()
       };
 
@@ -316,7 +317,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                     const isRowEditing = editingRowId === r.id;
                     let rowBg = "hover:bg-slate-50/80 dark:hover:bg-slate-700/30 transition-colors";
                     if (isRowEditing) rowBg = "bg-indigo-50/40 dark:bg-indigo-950/20 text-slate-900 dark:text-white transition-all font-semibold";
-                    else if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut) rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-red-950 dark:text-red-300";
+                    // 修正條件，確保離職日過後不再狂亮紅標（曠職）
+                    else if (!r.isOffDay && !r.leaveType && !r.checkIn && !r.checkOut && r.unit !== '未指定單位') rowBg = "bg-red-50/30 hover:bg-red-50/50 dark:bg-red-950/10 dark:hover:bg-red-950/20 text-red-950 dark:text-red-300";
                     else if (r.isOffDay) rowBg = "bg-slate-50/40 text-slate-400 dark:bg-slate-900/10";
 
                     return (
