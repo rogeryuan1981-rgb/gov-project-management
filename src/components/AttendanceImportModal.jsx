@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { X, Upload, Download, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { doc, setDoc, getDoc, getFirestore, collection, getDocs } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
+// 💡 引入標準 Excel 解析套件，用來處理真正的多頁籤 .xlsx 檔案
+import * as XLSX from 'xlsx';
 
 const db = getFirestore(getApp());
 
@@ -39,7 +41,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     link.click();
   };
 
-  // ================= 2. 核心解析 CSV 引擎 (含狀態機防移位) =================
+  // ================= 2. 核心解析 CSV 引擎 (供 A 表純文字使用) =================
   const parseCSVRows = (text) => {
     const lines = text.split(/\r?\n/);
     return lines
@@ -73,23 +75,22 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     setUploadStatus(null);
 
     try {
-      const text = await file.text();
-      const rawRows = parseCSVRows(text);
-
-      if (rawRows.length <= 1) {
-        throw new Error('檔案內無足夠的資料列');
-      }
-
       const attendanceRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'attendance_records');
       let successCount = 0;
       let skippedCount = 0;
-
       const sanitizeName = (str) => str ? str.toString().replace(/\s+/g, '').trim() : '';
 
       // ----------------------------------------------------
-      // 【分流 A】新版考勤表 A (專案辦公室)
+      // 【分流 A】新版考勤表 A (專案辦公室 - 維持純文字 CSV 解析)
       // ----------------------------------------------------
       if (importType === 'A') {
+        const text = await file.text();
+        const rawRows = parseCSVRows(text);
+
+        if (rawRows.length <= 1) {
+          throw new Error('檔案內無足夠的資料列');
+        }
+
         const header = rawRows[0];
         const nameIdx = header.indexOf('姓名') !== -1 ? header.indexOf('姓名') : 1;
         const dateIdx = header.indexOf('打卡日期') !== -1 ? header.indexOf('打卡日期') : 3;
@@ -116,7 +117,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const docId = `${selectedProject}_${name}_${dateStr}`;
           const docRef = doc(attendanceRef, docId);
 
-          // 💡 【核心特赦防蓋邏輯】：寫入前先調閱文件，若含有人工維護標記，直接跳過全面保護！
           const docSnap = await getDoc(docRef);
           if (docSnap.exists() && docSnap.data().isManualMaintained === true) {
             skippedCount++;
@@ -141,78 +141,89 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位多人員歷程比對與過濾)
+      // 【分流 C】考勤表 C (駐點單位 - 升級為真正的 Excel 多頁籤讀取引擎)
       // ----------------------------------------------------
       else if (importType === 'C') {
-        let currentEmployeeName = "";
-        const importedNamesInFile = new Set(); // 記錄本檔案中有涉及考勤的人名
+        // 使用 ArrayBuffer 方式讀取二進位 Excel 檔案
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        const importedNamesInFile = new Set(); 
         let minFileDateMs = Infinity;
         let maxFileDateMs = -Infinity;
-        
-        for (let i = 0; i < rawRows.length; i++) {
-          const cols = rawRows[i];
-          if (cols.length < 2) continue;
 
-          // B欄固定姓名欄位識別
-          const nameField = cols[1] || "";
-          if (nameField.includes('名：')) {
-            currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
-            continue; 
-          }
+        // 🔄 遞迴遍歷 Excel 內所有的工作表頁籤 (每一頁代表不同人員)
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          // 將該頁籤轉為二維陣列 (格式：[ [A1, B1, C1], [A2, B2, C2] ])
+          const sheetRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          
+          let currentEmployeeName = "";
 
-          const rawDate = cols[0];
-          // 驗證 A欄是否為日期格式 115/04/01
-          if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
-            if (!currentEmployeeName) continue; 
+          for (let i = 0; i < sheetRows.length; i++) {
+            const cols = sheetRows[i];
+            if (!cols || cols.length < 2) continue;
 
-            const checkIn = cols[3] || "";   // C欄
-            const checkOut = cols[4] || "";  // D欄
-            const leaveInfo = cols[5] || "";  // E欄
-            const leaveType = cols[7] || "";  // F欄
-
-            // 🎯 當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不匯入
-            if (!checkIn.trim() && !checkOut.trim() && !leaveInfo.trim() && !leaveType.trim()) {
-              continue;
+            // 🎯 規則：姓名固定在 B2 欄位 (索引列 1, 欄 1)，或只要任何一列的 B 欄包含 '名：'
+            const nameField = cols[1] ? cols[1].toString() : "";
+            if (nameField.includes('名：')) {
+              currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
+              continue; 
             }
 
-            const dateParts = rawDate.split('/');
-            const westernYear = parseInt(dateParts[0], 10) + 1911;
-            const dateStr = `${westernYear}-${dateParts[1]}-${dateParts[2]}`;
+            const rawDate = cols[0] ? cols[0].toString().trim() : "";
+            // 驗證 A 欄是否為民國日期格式 (例如 115/04/01)
+            if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
+              if (!currentEmployeeName) continue; 
 
-            // 動態統計本次考勤表所涵蓋的實際最小與最大日期
-            const currentMs = new Date(dateStr).getTime();
-            if (currentMs < minFileDateMs) minFileDateMs = currentMs;
-            if (currentMs > maxFileDateMs) maxFileDateMs = currentMs;
+              const checkIn = cols[3] ? cols[3].toString().trim() : "";   // C欄：上班時間
+              const checkOut = cols[4] ? cols[4].toString().trim() : "";  // D欄：下班時間
+              const leaveInfo = cols[5] ? cols[5].toString().trim() : ""; // E欄：請假區間
+              const leaveType = cols[7] ? cols[7].toString().trim() : ""; // F欄：請假假別
 
-            importedNamesInFile.add(currentEmployeeName);
+              // 🎯 需求 2：當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不存入資料庫
+              if (!checkIn && !checkOut && !leaveInfo && !leaveType) {
+                continue;
+              }
 
-            const docId = `${selectedProject}_${currentEmployeeName}_${dateStr}`;
-            const docRef = doc(attendanceRef, docId);
+              const dateParts = rawDate.split('/');
+              const westernYear = parseInt(dateParts[0], 10) + 1911;
+              const dateStr = `${westernYear}-${dateParts[1]}-${dateParts[2]}`;
 
-            // 特赦防蓋邏輯
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists() && docSnap.data().isManualMaintained === true) {
-              skippedCount++;
-              continue;
+              const currentMs = new Date(dateStr).getTime();
+              if (currentMs < minFileDateMs) minFileDateMs = currentMs;
+              if (currentMs > maxFileDateMs) maxFileDateMs = currentMs;
+
+              importedNamesInFile.add(currentEmployeeName);
+
+              const docId = `${selectedProject}_${currentEmployeeName}_${dateStr}`;
+              const docRef = doc(attendanceRef, docId);
+
+              // 人工維護特赦防蓋檢查
+              const docSnap = await getDoc(docRef);
+              if (docSnap.exists() && docSnap.data().isManualMaintained === true) {
+                skippedCount++;
+                continue;
+              }
+
+              await setDoc(docRef, {
+                projectId: selectedProject,
+                month: dateStr.substring(0, 7), 
+                name: currentEmployeeName, 
+                date: dateStr,
+                checkIn,
+                checkOut,
+                leaveRangeInfo: leaveInfo, 
+                leaveType,
+                recordType: 'C_TRACK'
+              }, { merge: true });
+
+              successCount++;
             }
-
-            await setDoc(docRef, {
-              projectId: selectedProject,
-              month: dateStr.substring(0, 7), 
-              name: currentEmployeeName, 
-              date: dateStr,
-              checkIn,
-              checkOut,
-              leaveRangeInfo: leaveInfo, 
-              leaveType,
-              recordType: 'C_TRACK'
-            }, { merge: true });
-
-            successCount++;
           }
         }
 
-        // 🎯 依據人事模組存的人員職務轉任歷程，判斷缺失的考勤並提醒用戶
+        // 🎯 需求 1：比對人事模組歷程，揪出「缺了誰」與「缺少哪段區間」
         let warningMessage = "";
         try {
           const hrRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'personnel');
@@ -223,7 +234,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           const missingAlerts = [];
 
-          // 確定要比對的區間範圍
           let checkStartStr = `${selectedMonth}-01`;
           let checkEndStr = new Date(new Date(selectedMonth + "-01").getFullYear(), new Date(selectedMonth + "-01").getMonth() + 1, 0).toISOString().split('T')[0];
           
@@ -268,13 +278,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           });
 
           if (missingAlerts.length > 0) {
-            warningMessage = `\n\n【🚨 發現人員歷程空缺提示】\n系統比對人事模組歷程後，發現下列在職駐點人員完全缺少此期間之考勤資料，請確認是否漏匯：\n` + missingAlerts.join('\n');
+            warningMessage = `\n\n【🚨 發現人員歷程空缺提示】\n系統比對人事模組後，發現下列在職駐點人員完全缺少 Excel 中的考勤記錄：\n` + missingAlerts.join('\n');
           }
         } catch (hrError) {
           console.error("比對人事模組空缺時發生錯誤:", hrError);
         }
 
-        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功補充 ${successCount} 筆明細，並安全隔離保護了 ${skippedCount} 筆人工維護紀錄。${warningMessage}`);
+        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄。${warningMessage}`);
       }
 
       setUploadStatus('success');
@@ -344,7 +354,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           <div>
             <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1.5">選擇檔案上傳</label>
-            {/* 💡 修正處：將原本的 accept=".csv" 修改為 accept=".xlsx, .xls" 以引導彈出 Excel 檔案格式選擇 */}
             <label className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-2xl cursor-pointer transition-colors text-center ${isUploading ? 'bg-slate-50 border-slate-300 dark:bg-slate-900/30' : 'bg-white border-indigo-200 hover:border-indigo-400 dark:bg-slate-800/50 dark:border-slate-700 dark:hover:border-slate-500'}`}>
               <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileChange} disabled={isUploading} />
               
