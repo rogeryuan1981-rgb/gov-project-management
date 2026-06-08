@@ -71,11 +71,9 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      if (importedRecords.length === 0) {
-        setIsMonthEmpty(true);
-      } else {
-        setIsMonthEmpty(false);
-      }
+      // 🎯 核心修正：改採全局檢測！只要當月有任何一筆打卡進來，就代表該月份「已經開始執行結算匯入」
+      let globalMonthEmpty = importedRecords.length === 0;
+      setIsMonthEmpty(globalMonthEmpty);
 
       const year = parseInt(targetMonth.split('-')[0], 10);
       const month = parseInt(targetMonth.split('-')[1], 10);
@@ -95,14 +93,12 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
       uniqueNames.forEach(empName => {
         const personInfo = personnel.find(p => cleanName(p.name) === cleanName(empName));
-        const employeeMonthRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName));
-        const hasImportedDataThisMonth = employeeMonthRecords.length > 0;
 
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
           if (currentOffDays[dateStr]) continue; // 放假日排除
 
-          // 🎯 核心優化：比對人事轉任歷程 history，若「歷程未包含」當前日期，則視為當天不需在此計畫出勤，直接不報異常！
+          // 比對人事轉任歷程 history，若歷史歷程「未包含」當前日期，直接 continue 跳過不用報異常
           let currentDayUnit = "";
           if (personInfo) {
             if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
@@ -115,15 +111,12 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               if (matchedHistory && matchedHistory.unit) {
                 currentDayUnit = matchedHistory.unit;
               } else {
-                // 🎯 歷程未包含此日期，直接 continue 跳過這一天，不用報異常件！
                 continue;
               }
             } else {
-              // 人員名冊主檔存在，但完全沒有任何歷史歷程區間設定，代表完全未分派職務，直接跳過不報異常
               continue;
             }
           } else {
-            // 如果此人員是直接從 Excel 盲匯入但在系統人員模組沒有任何基本檔，則 fallback 標記
             currentDayUnit = '已匯入人員';
           }
 
@@ -146,7 +139,8 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           if (leaveType) {
             statusType = 'LEAVE'; statusText = `已請假 (${leaveType})`;
           } else if (!checkIn && !checkOut) {
-            if (!hasImportedDataThisMonth) {
+            // 💡 核心優化：如果全局完全沒匯入過任何資料才算未匯入。只要全局有任何單位檔案進來了，沒打卡的人一律判定為曠職！
+            if (globalMonthEmpty) {
               statusType = 'NORMAL';
               statusText = '正常出勤';
             } else {
