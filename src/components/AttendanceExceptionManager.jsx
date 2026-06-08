@@ -21,7 +21,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
   const [exceptionFilter, setExceptionFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isMonthEmpty, setIsMonthEmpty] = useState(false); // 🎯 新增：標記當前選擇月份是否處於完全未匯入任何資料的狀態
+  const [isMonthEmpty, setIsMonthEmpty] = useState(false); 
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ checkIn: '', checkOut: '', leaveRangeInfo: '', leaveType: '' });
 
@@ -71,7 +71,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 🎯 物理檢測：如果長度為 0，代表此月份在資料庫根本沒有匯入任何明細
       if (importedRecords.length === 0) {
         setIsMonthEmpty(true);
       } else {
@@ -85,7 +84,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
       // C. 人名雙向聯集組裝
       const activePersonnel = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
-        if (p.contractEnd && p.contractEnd !== '至今' && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
+        if (p.contractEnd && p.contractEnd !== '官方' && p.contractEnd !== '至今' && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
         return true;
       });
       const personnelNames = activePersonnel.map(p => cleanName(p.name));
@@ -96,29 +95,15 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
 
       uniqueNames.forEach(empName => {
         const personInfo = personnel.find(p => cleanName(p.name) === cleanName(empName));
-
-        // 檢查該人員在當前月份資料庫內到底有沒有任何一筆匯入明細
         const employeeMonthRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName));
         const hasImportedDataThisMonth = employeeMonthRecords.length > 0;
 
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-          if (currentOffDays[dateStr]) continue; // 放假日排除，只抓應上班日
+          if (currentOffDays[dateStr]) continue; // 放假日排除
 
-          const dayRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName) && r.date === dateStr);
-          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
-          let isManualMaintained = false;
-
-          if (dayRecords.length > 0) {
-            checkIn = dayRecords.find(r => r.checkIn)? dayRecords.find(r => r.checkIn).checkIn : (dayRecords[0].checkIn || "");
-            checkOut = dayRecords.find(r => r.checkOut)? dayRecords.find(r => r.checkOut).checkOut : (dayRecords[0].checkOut || "");
-            leaveRangeInfo = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveRangeInfo : "";
-            leaveType = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveType : "";
-            isManualMaintained = !!dayRecords[0].isManualMaintained;
-          }
-
-          // 歷史轉任歷程精準追蹤配對
-          let currentDayUnit = personInfo ? (personInfo.unit || '未指定單位') : '已匯入人員';
+          // 🎯 核心優化：比對人事轉任歷程 history，若「歷程未包含」當前日期，則視為當天不需在此計畫出勤，直接不報異常！
+          let currentDayUnit = "";
           if (personInfo) {
             if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
               const matchedHistory = personInfo.history.find(h => {
@@ -130,11 +115,28 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               if (matchedHistory && matchedHistory.unit) {
                 currentDayUnit = matchedHistory.unit;
               } else {
-                currentDayUnit = '⚠️ 歷程未涵蓋此日期';
+                // 🎯 歷程未包含此日期，直接 continue 跳過這一天，不用報異常件！
+                continue;
               }
             } else {
-              currentDayUnit = '⚠️ 歷程未涵蓋此日期';
+              // 人員名冊主檔存在，但完全沒有任何歷史歷程區間設定，代表完全未分派職務，直接跳過不報異常
+              continue;
             }
+          } else {
+            // 如果此人員是直接從 Excel 盲匯入但在系統人員模組沒有任何基本檔，則 fallback 標記
+            currentDayUnit = '已匯入人員';
+          }
+
+          const dayRecords = importedRecords.filter(r => cleanName(r.name) === cleanName(empName) && r.date === dateStr);
+          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
+          let isManualMaintained = false;
+
+          if (dayRecords.length > 0) {
+            checkIn = dayRecords.find(r => r.checkIn)? dayRecords.find(r => r.checkIn).checkIn : (dayRecords[0].checkIn || "");
+            checkOut = dayRecords.find(r => r.checkOut)? dayRecords.find(r => r.checkOut).checkOut : (dayRecords[0].checkOut || "");
+            leaveRangeInfo = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveRangeInfo : "";
+            leaveType = dayRecords.find(r => r.leaveType)? dayRecords[0].leaveType : "";
+            isManualMaintained = !!dayRecords[0].isManualMaintained;
           }
 
           // 判斷異常狀態類別
@@ -184,7 +186,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
             }
           }
 
-          // 僅收錄實質異常件 (過濾掉正常上班與常態請假)
+          // 僅收錄實質異常件
           if (statusType === 'ABSENT' || statusType === 'MISSING_CLOCK' || statusType === 'LATE_EARLY') {
             exceptionMesh.push({
               id: `exc_${empName}_${dateStr}`,
@@ -302,7 +304,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2"><Loader2 size={32} className="animate-spin text-indigo-500" /><span className="text-xs text-slate-400">正在橫向調閱名冊，清洗抽取全月異常件...</span></div>
         ) : isMonthEmpty ? (
-          // 🎯 核心優化：當檢測到整月份都沒有匯入過任何打卡或請假紀錄時，主動拋出警告文字引導
           <div className="text-center py-16">
             <FileWarning className="mx-auto text-amber-500 mb-2 animate-bounce" size={42} />
             <p className="text-sm font-extrabold text-amber-600 dark:text-amber-400">🚨 偵測提示：本月份之計畫出勤紀錄尚未匯入！</p>
@@ -330,7 +331,6 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                   const isEditing = editingId === r.id;
                   let rowBg = "bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700/40";
                   if (isEditing) rowBg = "bg-indigo-50/50 dark:bg-indigo-950/20 font-semibold text-slate-950 dark:text-white";
-                  else if (r.unit.includes('⚠️')) rowBg = "bg-rose-50/20 hover:bg-rose-50/40 dark:bg-rose-950/10 text-rose-950 dark:text-rose-300";
                   else if (r.isManualMaintained) rowBg = "bg-emerald-50/20 dark:bg-emerald-950/10 hover:bg-emerald-50/40";
 
                   return (
@@ -339,11 +339,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                       <td className="py-3 px-4">
                         <div className="flex flex-col">
                           <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
-                          <span className={`text-[10px] px-1 py-0.5 border rounded w-fit shadow-2xs mt-0.5 font-bold tracking-wide ${
-                            r.unit.includes('⚠️') 
-                              ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-500/20 font-extrabold'
-                              : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-900 dark:text-slate-400 dark:border-slate-700'
-                          }`}>{r.unit}</span>
+                          <span className="text-[10px] px-1 py-0.5 border rounded w-fit shadow-2xs mt-0.5 font-bold tracking-wide bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-900 dark:text-slate-400 dark:border-slate-700">{r.unit}</span>
                         </div>
                       </td>
                       
