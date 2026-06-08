@@ -5,9 +5,10 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
-// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心，徹底刪除舊的引用
+// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心，徹底相容雙維度面板切換
 import AttendanceViewModal from './AttendanceViewModal';
 
+// 🎯 語法導正：使用與 Sidebar.jsx 100% 相同且安全的行內環境變數初始化，徹底根除 SyntaxError 死當
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
@@ -21,12 +22,12 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [dbError, setDbError] = useState(null);
 
-  // 考勤控制開窗狀態
+  // 考勤控制大視窗開窗狀態
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
 
-  // 🎯 核心控制通道：用來指定開啟同一個覆核大視窗時的初始檢視模式
+  // 🎯 核心控制通道：用來指定開啟同一個大視窗覆核中心時的初始檢視模式
   const [initialViewMode, setInitialViewMode] = useState('ALL_STATUS'); 
 
   // 防呆設定面板開窗狀態
@@ -73,7 +74,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
   };
 
-  // 實時精算扣除「12:30 - 13:30」中午休息工時之有效分鐘數函數
+  // 實時精算扣除中午休息工時之有效分鐘數函數
   const getEffectiveMinutes = (startStr, endStr) => {
     const startM = timeToMinutes(startStr);
     const endM = timeToMinutes(endStr);
@@ -92,7 +93,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return totalMinutes;
   };
 
-  // 智慧清洗時間字串，只抓取單日 HH:MM~HH:MM 區間
+  // 智慧清洗時間字串
   const cleanTimeRangeOnly = (rangeStr) => {
     if (!rangeStr) return '';
     const timePattern = /(\d{2}:\d{2})/g;
@@ -143,7 +144,7 @@ export default function AttendanceModule({ user, selectedProject }) {
     return () => { unsubProject(); unsubHR(); unsubReq(); unsubAtt(); unsubCalendar(); };
   }, [user, selectedProject]);
 
-  // 完美清洗提煉：整合現況與歷程 history 中去過的所有單位聯集
+  // 提煉所有人現況單位加上歷史歷程 history 的單位組別全專案聯集陣列
   const getGlobalCalculatedUnits = () => {
     const unitSet = new Set();
     if (Array.isArray(personnel)) {
@@ -162,7 +163,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const globalExistingUnits = getGlobalCalculatedUnits();
 
   // =========================================================================
-  // 🧠 核心精算：動態自訂假別別名歸納對齊之代理異常精算引擎
+  // 🧠 核心精算代理異常引擎
   // =========================================================================
   const getProxyAnalysisReport = () => {
     let exceptionHours = 0;
@@ -435,7 +436,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         
         <div onClick={() => setIsCalendarSettingsOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與法定假別設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定應上班日曆與假期</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -443,7 +444,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
         <div onClick={() => setIsProxySettingsModalOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理與合規防呆設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定連續與累計請假天數</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -458,7 +459,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      {/* 🎯 母面板控制一體化大底座：徹底移除舊的 attendanceSubTab 渲染分支，改採最穩固的雙入口覆核大按鈕 */}
+      {/* 🎯 控制列一體化中樞：大面板改採極穩固、100% 共享規則的核心大方塊 */}
       <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm border-slate-200/70">
         <div className="space-y-1.5">
           <h4 className="font-black text-slate-800 dark:text-white text-base flex items-center">
