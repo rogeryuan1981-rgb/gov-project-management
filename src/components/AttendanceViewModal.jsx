@@ -19,7 +19,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
   const [searchName, setSearchName] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('ALL');
   
-  // 🎯 一體化核心控制狀態
+  // 一體化核心控制狀態
   const [viewMode, setViewMode] = useState('ALL_STATUS'); // 'ALL_STATUS' (全月總覽) | 'EXCEPTIONS_ONLY' (異常中心)
   const [exceptionSubFilter, setExceptionSubFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
 
@@ -40,7 +40,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
 
-  // 🎯 母元件控制通道聯動
+  // 母元件控制通道聯動
   useEffect(() => {
     if (isOpen && initialMode) {
       setViewMode(initialMode);
@@ -69,7 +69,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
       const querySnapshot = await getDocs(q);
       const importedRecords = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 🎯 全局月份匯入狀態防禦：只要當月有任何一筆打卡進來，就代表該月份已經開始匯入
+      // 全局月份匯入狀態防禦：當月只要有任何一筆打卡進來，就代表該月份已經開始匯入
       let globalMonthEmpty = importedRecords.length === 0;
       setIsMonthEmpty(globalMonthEmpty);
 
@@ -98,7 +98,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const isOffDay = !!currentOffDays[dateStr];
 
-            // 🎯 歷史轉任歷程比對：若歷程未包含當前日期，代表當天不需要出勤，不報異常、直接跳過！
+            // 歷史轉任歷程比對：若歷程未包含當前日期，代表當天不需要出勤，不報異常、直接跳過！
             let currentDayUnit = '已匯入人員';
             if (personInfo) {
               if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
@@ -133,7 +133,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               isManualMaintained = !!dayRecords[0].isManualMaintained;
             }
 
-            // 🎯 全局統一工時評判機制
+            // 全局統一工時評判機制
             let statusType = 'NORMAL';
             if (isOffDay) {
               statusType = (checkIn || checkOut) ? 'OVERTIME' : 'OFFDAY';
@@ -151,7 +151,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             } else {
               const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
               if (inMins !== null && outMins !== null) {
-                // 最初到職日當天雙打卡皆有但上班較晚的情況，只要 17:30 之後下班一律算正常
                 if (personInfo && personInfo.hireDate && dateStr === personInfo.hireDate && outMins >= (17 * 60 + 30)) {
                   statusType = 'NORMAL';
                 } else {
@@ -231,29 +230,38 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     const statusText = getStatusText(r);
     if (r.statusType === 'OVERTIME') return <span className="px-2.5 py-1 bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400 text-xs font-bold rounded-lg border border-amber-200 dark:border-amber-500/30">假日加班</span>;
     if (r.statusType === 'OFFDAY') return <span className="px-2.5 py-1 bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700">例假日/放假</span>;
-    if (r.statusType === 'LEAVE') return <span className="px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 text-xs font-bold rounded-lg border border-blue-200 dark:border-blue-500/30 flex items-center w-fit"><CheckCircle2 size={12} className="mr-1 text-blue-500" /> {statusText}</span>;
+    if (r.statusType === 'LEAVE') return <span className="px-2.5 py-1 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400 text-xs font-bold rounded-lg border border-indigo-200 dark:border-indigo-500/30 flex items-center w-fit"><CheckCircle2 size={12} className="mr-1 text-blue-500" /> {statusText}</span>;
     if (r.statusType === 'ABSENT') return <span className="px-2.5 py-1 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 text-xs font-bold rounded-lg border border-red-200 dark:border-red-500/30 flex items-center w-fit animate-pulse"><AlertCircle size={12} className="mr-1 text-red-500" /> {statusText}</span>;
     if (r.statusType === 'MISSING_CLOCK' || r.statusType === 'LATE_EARLY') return <span className="px-2.5 py-1 bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400 text-xs font-bold rounded-lg border border-orange-200 dark:border-orange-500/30">{statusText}</span>;
     return <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 text-xs font-bold rounded-lg border border-emerald-200 dark:border-emerald-500/30">正常出勤</span>;
   };
 
-  // 🎯 前端多維複合過濾聯動
-  const filteredRecords = records.filter(r => {
+  // 🎯 核心重構一：前端複合過濾邏輯聯動 (先將組別與人名過濾，建立基準數據網)
+  const baseFilteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
+    return matchesName && matchesUnit;
+  });
+
+  // 🎯 核心重構二：動態計算當前已被過濾後的各項子計數器數量，徹底根除計數器與表格打架的死角！
+  const currentTotalExceptions = baseFilteredRecords.filter(r => r.statusType === 'ABSENT' || r.statusType === 'MISSING_CLOCK' || r.statusType === 'LATE_EARLY').length;
+  const currentAbsentCount = baseFilteredRecords.filter(r => r.statusType === 'ABSENT').length;
+  const currentMissingClockCount = baseFilteredRecords.filter(r => r.statusType === 'MISSING_CLOCK').length;
+  const currentLateEarlyCount = baseFilteredRecords.filter(r => r.statusType === 'LATE_EARLY').length;
+
+  // 🎯 核心重構三：根據目前選取的檢視視圖（總覽大表 vs 異常中心）進行最終的呈現過濾
+  const finalFilteredRecords = baseFilteredRecords.filter(r => {
+    if (viewMode === 'ALL_STATUS') return true;
     
-    if (viewMode === 'ALL_STATUS') {
-      return matchesName && matchesUnit;
-    }
-    
+    // 異常中心模式下：必須是實質異常列
     const isExceptionRow = r.statusType === 'ABSENT' || r.statusType === 'MISSING_CLOCK' || r.statusType === 'LATE_EARLY';
     if (!isExceptionRow) return false;
     
-    if (exceptionSubFilter === 'ALL_EXCEPTIONS') return matchesName && matchesUnit;
-    return matchesName && matchesUnit && r.statusType === exceptionSubFilter;
+    if (exceptionSubFilter === 'ALL_EXCEPTIONS') return true;
+    return r.statusType === exceptionSubFilter;
   });
 
-  const sortedRecords = [...filteredRecords].sort((a, b) => {
+  const sortedRecords = [...finalFilteredRecords].sort((a, b) => {
     if (!sortConfig.key) return 0;
     let aValue = a[sortConfig.key] || ''; let bValue = b[sortConfig.key] || '';
     if (aValue === bValue) return sortConfig.key === 'date' ? a.name.localeCompare(b.name) : a.date.localeCompare(b.date);
@@ -341,7 +349,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-xl border border-slate-200/50 dark:border-slate-700/50">
             <button 
               onClick={() => { setViewMode('ALL_STATUS'); setEditingRowId(null); }} 
-              className={`flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'ALL_STATUS' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-white shadow-xs' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+              className={`flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'ALL_STATUS' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
             >
               <FileText size={14} /><span>全月考勤總覽大表</span>
             </button>
@@ -353,13 +361,13 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             </button>
           </div>
 
-          {/* 僅在異常模式下，動態顯示子分類按鈕 */}
+          {/* 🎯 核心修正四：讓子過濾按鈕上的計數器，全面讀取即時聯動過濾後的變數，消除數據落差 */}
           {viewMode === 'EXCEPTIONS_ONLY' && !isMonthEmpty && (
             <div className="flex flex-wrap items-center gap-1 animate-in slide-in-from-left-2 duration-200">
-              <button onClick={() => setExceptionSubFilter('ALL_EXCEPTIONS')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>全部異常 ({filteredRecords.length})</button>
-              <button onClick={() => setExceptionSubFilter('ABSENT')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>曠職 ({records.filter(r=>r.statusType==='ABSENT').length})</button>
-              <button onClick={() => setExceptionSubFilter('MISSING_CLOCK')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>缺打卡 ({records.filter(r=>r.statusType==='MISSING_CLOCK').length})</button>
-              <button onClick={() => setExceptionSubFilter('LATE_EARLY')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
+              <button onClick={() => setExceptionSubFilter('ALL_EXCEPTIONS')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ALL_EXCEPTIONS' ? 'bg-slate-900 border-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>全部異常 ({currentTotalExceptions})</button>
+              <button onClick={() => setExceptionSubFilter('ABSENT')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'ABSENT' ? 'bg-red-600 border-red-600 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>曠職 ({currentAbsentCount})</button>
+              <button onClick={() => setExceptionSubFilter('MISSING_CLOCK')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'MISSING_CLOCK' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>缺打卡 ({currentMissingClockCount})</button>
+              <button onClick={() => setExceptionSubFilter('LATE_EARLY')} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${exceptionSubFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700'}`}>遲到/早退 ({currentLateEarlyCount})</button>
             </div>
           )}
         </div>
@@ -389,7 +397,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           
           <div className="flex items-center justify-end space-x-2">
             <button onClick={fetchData} disabled={isLoading} className="flex items-center space-x-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-600 rounded-xl text-xs font-bold transition-all"><RefreshCw size={12} className={isLoading ? "animate-spin text-indigo-500" : "text-indigo-500"} /><span>整理重新比對</span></button>
-            <button onClick={handleExportCurrentViewExcel} disabled={isLoading || records.length === 0} className="flex items-center space-x-1.5 px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-xs transition-all" ><Download size={12} /><span>匯出明細 Excel</span></button>
+            <button onClick={handleExportCurrentViewExcel} disabled={isLoading || sortedRecords.length === 0} className="flex items-center space-x-1.5 px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-xs transition-all" ><Download size={12} /><span>匯出明細 Excel</span></button>
           </div>
         </div>
 
@@ -404,7 +412,13 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               <p className="text-xs text-slate-400 mt-1.5">請先點擊下方按鈕關閉視窗，並透過「匯入出勤紀錄」功能上傳對應的 Excel 報表。</p>
             </div>
           ) : sortedRecords.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center py-12"><CheckCircle2 size={44} className="text-emerald-500 mb-3" /><p className="text-sm font-bold text-slate-700 dark:text-slate-300">{viewMode === 'ALL_STATUS' ? '目前查無符合條件之考勤紀錄' : '本月份目前查無任何考勤異常件，配置完全合規！'}</p></div>
+            // 🎯 核心修正五：當前篩選視圖真的沒異常時，動態顯示「該組別查無異常」，完美消滅矛盾
+            <div className="flex flex-col items-center justify-center h-full text-center py-12">
+              <CheckCircle2 size={44} className="text-emerald-500 mb-3" />
+              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                {viewMode === 'ALL_STATUS' ? '目前查無符合條件之考勤紀錄' : '當前篩選條件下，查無任何考勤異常件，完全合規！'}
+              </p>
+            </div>
           ) : (
             <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto shadow-sm bg-white dark:bg-slate-800 max-h-full">
               <table className="w-full text-left border-collapse relative">
@@ -459,7 +473,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                           <div className="flex items-center space-x-1.5">
                             {renderStatusBadge(r)}
                             
-                            {/* 🔒 特赦令一鍵點擊解鎖安全閥按鈕 */}
+                            {/* 🔒 特赦令手動解除鎖定 */}
                             {r.isManualMaintained && (
                               <button
                                 type="button"
