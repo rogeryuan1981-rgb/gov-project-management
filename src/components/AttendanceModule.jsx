@@ -8,7 +8,6 @@ import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
 // 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心，徹底相容雙維度面板切換
 import AttendanceViewModal from './AttendanceViewModal';
 
-// 🎯 語法導正：使用與 Sidebar.jsx 100% 相同且安全的行內環境變數初始化，徹底根除 SyntaxError 死當
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
@@ -436,7 +435,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         
         <div onClick={() => setIsCalendarSettingsOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><CalendarDays size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">工作日曆與法定假別設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定應上班日曆與假期</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -444,7 +443,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
         <div onClick={() => setIsProxySettingsModalOpen(true)} className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-sm flex items-center justify-between cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-colors group">
           <div className="flex items-center space-x-5">
-            <div className="p-3.5 bg-indigo-50 dark:indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
+            <div className="p-3.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform"><Sliders size={24} /></div>
             <div><p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">規政代理與合規防呆設定</p><p className="text-sm font-black text-slate-800 dark:text-white">點擊設定連續與累計請假天數</p></div>
           </div>
           <div className="text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight size={16} /></div>
@@ -459,7 +458,7 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      {/* 🎯 控制列一體化中樞：大面板改採極穩固、100% 共享規則的核心大方塊 */}
+      {/* 🎯 控制列一體化大中樞 */}
       <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm border-slate-200/70">
         <div className="space-y-1.5">
           <h4 className="font-black text-slate-800 dark:text-white text-base flex items-center">
@@ -682,7 +681,7 @@ export default function AttendanceModule({ user, selectedProject }) {
 
       <AttendanceImportModal isOpen={isAttendanceImportOpen} onClose={() => setIsAttendanceImportOpen(false)} selectedProject={selectedProject} projectName={projectName} />
       
-      {/* 🎯 子元件通訊整併打通：傳入由一體化洗出來的全局現況與歷史聯集 units 大陣列 */}
+      {/* 🎯 子元件通訊整併打通：將洗出來的聯集單位大陣列，與點擊按鈕後產生的模式傳入大彈窗 */}
       <AttendanceViewModal 
         isOpen={isAttendanceViewOpen} 
         onClose={() => setIsAttendanceViewOpen(false)} 
