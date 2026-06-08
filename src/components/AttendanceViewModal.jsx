@@ -73,7 +73,6 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             let currentDayUnit = '已匯入人員';
 
             if (personInfo) {
-              // 🎯 依據人事模組歷史轉任歷程 history 進行精確配對
               if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
                 const matchedHistory = personInfo.history.find(h => {
                   const startValid = !h.startDate || dateStr >= h.startDate;
@@ -84,11 +83,9 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 if (matchedHistory && matchedHistory.unit) {
                   currentDayUnit = matchedHistory.unit;
                 } else {
-                  // 🎯 歷程中完全沒有任何區間包含此日期，拋出精確警示
                   currentDayUnit = '⚠️ 歷程未涵蓋此日期';
                 }
               } else {
-                // 人員完全沒有歷程資料
                 currentDayUnit = '⚠️ 歷程未涵蓋此日期';
               }
             }
@@ -115,6 +112,8 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
               unit: currentDayUnit, 
               date: dateStr,
               checkIn, checkOut, leaveRangeInfo, leaveType, isOffDay,
+              // 💡 將最初到職日向下傳遞，供工時狀態交叉判定引擎做動態放行使用
+              hireDate: personInfo ? personInfo.hireDate : null,
               isGeneratedMissing: dayRecords.length === 0
             });
           }
@@ -166,14 +165,33 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
     return sortConfig.direction === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
   });
 
+  // 🎯 核心優化：修改後的工時判定狀態機
   const getStatusText = (r) => {
     if (r.isOffDay) return (r.checkIn || r.checkOut) ? "假日加班" : "例假日/放假";
     if (r.leaveType) return `已請假 (${r.leaveType})`;
     if (!r.checkIn && !r.checkOut) return "曠職 (應上班未打卡)";
-    if (!r.checkIn || !r.checkOut) return "異常: 缺打卡";
+    if (!r.checkIn || !r.checkOut) {
+      // 💡 核心新增：判斷當天是否為駐點人員「最初到職日當天」，若是且下班時間 >= 17:30 則特赦免責
+      if (r.hireDate && r.date === r.hireDate && r.checkOut) {
+        const outMins = timeToMinutes(r.checkOut);
+        const amnestyOutMins = 17 * 60 + 30; // 17:30 的分鐘數
+        if (outMins !== null && outMins >= amnestyOutMins) {
+          return "正常出勤";
+        }
+      }
+      return "異常: 缺打卡";
+    }
 
     const inMins = timeToMinutes(r.checkIn); const outMins = timeToMinutes(r.checkOut);
     if (inMins !== null && outMins !== null) {
+      // 💡 同步優化首日雙打卡皆有但上班較晚的情況
+      if (r.hireDate && r.date === r.hireDate) {
+        const amnestyOutMins = 17 * 60 + 30;
+        if (outMins >= amnestyOutMins) {
+          return "正常出勤"; // 到職日當天只要 17:30 之後下班一律算正常
+        }
+      }
+
       const maxStartMins = 9 * 60;      
       let isLate = inMins > maxStartMins; let lateMinutes = isLate ? inMins - maxStartMins : 0;
       let legalMinOutMins = isLate ? 18 * 60 : Math.max(inMins, 8 * 60) + (9 * 60);
@@ -291,7 +309,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 dark:text-slate-300" />
-            <input type="text" placeholder="搜尋人員姓名..." value={searchName} onChange={(e) => setSearchName(e.target.value)} className="pl-9 pr-4 py-2 w-full bg-white border border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-white rounded-xl text-xs outline-none focus:border-indigo-500" />
+            <input type="text" placeholder="搜尋人員姓名..." value={searchName} onChange={(e) => setSearchName(e.target.value)} className="pl-9 pr-4 py-2 w-full bg-white border border-slate-200 dark:bg-slate-800/80 dark:border-slate-700 dark:text-white rounded-xl text-xs outline-none focus:border-indigo-500" />
           </div>
           
           <div className="flex items-center justify-end space-x-2">
