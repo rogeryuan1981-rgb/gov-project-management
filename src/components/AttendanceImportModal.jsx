@@ -141,11 +141,11 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位) - 本次修改重點
+      // 【分流 C】考勤表 C (駐點單位) - 修正完畢
       // ----------------------------------------------------
       else if (importType === 'C') {
         let currentEmployeeName = "";
-        const importedNamesInFile = new Set(); // 記錄本次檔案中實際匯入的人員姓名
+        const importedNamesInFile = new Set(); // 記錄本檔案中有涉及考勤的人名
         let minFileDateMs = Infinity;
         let maxFileDateMs = -Infinity;
         
@@ -153,7 +153,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const cols = rawRows[i];
           if (cols.length < 2) continue;
 
-          // 定位姓名 B欄 (cols[1])
+          // B欄固定姓名欄位識別
           const nameField = cols[1] || "";
           if (nameField.includes('名：')) {
             currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
@@ -161,16 +161,16 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
 
           const rawDate = cols[0];
-          // 驗證 A欄格式是否為 115/04/01
+          // 驗證 A欄是否為日期格式 115/04/01
           if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
             if (!currentEmployeeName) continue; 
 
-            const checkIn = cols[3] || "";   // C欄：上班時間
-            const checkOut = cols[4] || "";  // D欄：下班時間
-            const leaveInfo = cols[5] || "";  // E欄：請假區間
-            const leaveType = cols[7] || "";  // F欄：請假假別
+            const checkIn = cols[3] || "";   // C欄
+            const checkOut = cols[4] || "";  // D欄
+            const leaveInfo = cols[5] || "";  // E欄
+            const leaveType = cols[7] || "";  // F欄
 
-            // 🎯 需求 2：當日刷卡紀錄=空 且 沒有請假記錄的資料則不用匯入系統，避免存入不需要的資料
+            // 🎯 當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不匯入
             if (!checkIn.trim() && !checkOut.trim() && !leaveInfo.trim() && !leaveType.trim()) {
               continue;
             }
@@ -179,18 +179,17 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             const westernYear = parseInt(dateParts[0], 10) + 1911;
             const dateStr = `${westernYear}-${dateParts[1]}-${dateParts[2]}`;
 
-            // 計算檔案內資料包含的最小日與最大日，用作缺少區間的動態依據
+            // 動態統計本次考勤表所涵蓋的實際最小與最大日期
             const currentMs = new Date(dateStr).getTime();
             if (currentMs < minFileDateMs) minFileDateMs = currentMs;
             if (currentMs > maxFileDateMs) maxFileDateMs = currentMs;
 
-            // 標記該人員在檔案中確實有打卡/請假數據
             importedNamesInFile.add(currentEmployeeName);
 
-            const docId = `${selectedProject}_${currentEmployeeName}_${ पश्चिमी年}-${dateParts[1]}-${dateParts[2]}`;
+            const docId = `${selectedProject}_${currentEmployeeName}_${dateStr}`;
             const docRef = doc(attendanceRef, docId);
 
-            // 💡 同步實裝特赦防蓋
+            // 特赦防蓋邏輯
             const docSnap = await getDoc(docRef);
             if (docSnap.exists() && docSnap.data().isManualMaintained === true) {
               skippedCount++;
@@ -213,18 +212,18 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
         }
 
-        // 🎯 需求 1 的後半段：依據人事模組的人員歷程，判斷缺了「誰」以及「哪一段區間」的考勤並提醒用戶
+        // 🎯 依據人事模組存的人員職務轉任歷程，判斷缺失的考勤並提醒用戶
         let warningMessage = "";
         try {
           const hrRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'personnel');
           const hrSnap = await getDocs(hrRef);
           const projectPersonnel = hrSnap.docs
             .map(doc => doc.data())
-            .filter(p => p.projectId === selectedProject && p.isResident === true); // 篩選屬於當前專案的駐點人員
+            .filter(p => p.projectId === selectedProject && p.isResident === true);
 
           const missingAlerts = [];
 
-          // 定位要比對的考勤完整區間：若有抓到檔案日期則以檔案為準，否則以選擇的月份整月為準
+          // 確定要比對的區間範圍
           let checkStartStr = `${selectedMonth}-01`;
           let checkEndStr = new Date(new Date(selectedMonth + "-01").getFullYear(), new Date(selectedMonth + "-01").getMonth() + 1, 0).toISOString().split('T')[0];
           
@@ -237,25 +236,20 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           const checkEndMs = new Date(checkEndStr).getTime();
 
           projectPersonnel.forEach(p => {
-            // 如果此人員姓名根本沒出現在本次匯入的 Excel 中
             if (!importedNamesInFile.has(p.name)) {
-              // 分析其歷史合約與職務歷程軌跡歷史，找出他在這段比對區間內，哪些天是有在職合規需求的
               let activeStartMs = null;
               let activeEndMs = null;
 
               const contractStartMs = p.contractStart ? new Date(p.contractStart).getTime() : 0;
-              const contractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+              const contractEndMs = p.contractEnd ? (p.contractEnd === '至今' ? Infinity : new Date(p.contractEnd).getTime()) : Infinity;
 
-              // 歷程軌跡循序比對
               (p.history || []).forEach(h => {
                 const historyStartMs = h.startDate ? new Date(h.startDate).getTime() : 0;
                 const historyEndMs = h.endDate ? new Date(h.endDate).getTime() : Infinity;
 
-                // 算出該段歷程與合約交集的實質在職時間點
                 const realStartMs = Math.max(historyStartMs, contractStartMs);
                 const realEndMs = Math.min(historyEndMs, contractEndMs);
 
-                // 再與本次考勤報表區間取交集
                 const overlapStartMs = Math.max(realStartMs, checkStartMs);
                 const overlapEndMs = Math.min(realEndMs, checkEndMs);
 
@@ -265,7 +259,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 }
               });
 
-              // 如果該駐點人員在該考勤區間內有實質的在職歷程，但 Excel 卻漏掉了，則列入警告
               if (activeStartMs && activeEndMs) {
                 const startStr = new Date(activeStartMs).toISOString().split('T')[0];
                 const endStr = new Date(activeEndMs).toISOString().split('T')[0];
@@ -288,9 +281,8 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     } catch (error) {
       console.error("考勤匯入發生錯誤:", error);
       setUploadStatus('error');
-      setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
-    } finally {
+    } fileRef: {
       setIsUploading(false);
       if (e && e.target) {
         e.target.value = '';
@@ -346,4 +338,48 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               className="flex items-center space-x-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 w-full justify-center rounded-xl transition-colors text-xs font-bold border border-slate-200 dark:border-slate-600"
             >
               <Download size={14} className="text-indigo-500" />
-              <span>下載結構範本 (.
+              <span>下載結構範本 (.csv)</span>
+            </button>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1.5">選擇檔案上傳</label>
+            <label className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-2xl cursor-pointer transition-colors text-center ${isUploading ? 'bg-slate-50 border-slate-300 dark:bg-slate-900/30' : 'bg-white border-indigo-200 hover:border-indigo-400 dark:bg-slate-800/50 dark:border-slate-700 dark:hover:border-slate-500'}`}>
+              <input type="file" accept=".csv" className="hidden" onChange={handleFileChange} disabled={isUploading} />
+              
+              {isUploading ? (
+                <div className="flex flex-col items-center space-y-2">
+                  <Loader2 size={32} className="text-indigo-500 animate-spin" />
+                  <span className="text-sm font-bold text-slate-600 dark:text-slate-400">系統正在執行一體化欄位對應與覆蓋...</span>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center space-y-1.5">
+                  <div className="p-3 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><Upload size={20} /></div>
+                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">點擊選擇或拖放對應 CSV 報表</span>
+                  <span className="text-[10px] text-slate-400">系統將全自動繞過並特赦保護人工維護欄位</span>
+                </div>
+              )}
+            </label>
+          </div>
+
+          {uploadStatus && (
+            <div className={`p-4 rounded-xl border flex items-start text-xs ${uploadStatus === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400' : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-500/10 dark:border-red-500/20 dark:text-red-400'}`}>
+              {uploadStatus === 'success' ? <CheckCircle2 size={16} className="mr-2 shrink-0 mt-0.5" /> : <AlertCircle size={16} className="mr-2 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-bold">{uploadStatus === 'success' ? '數據導入及覆蓋校對完成' : '解析失敗'}</p>
+                <p className="mt-0.5 opacity-90 leading-relaxed whitespace-pre-line">{statusMessage}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
+          <button onClick={onClose} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors">
+            關閉
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
