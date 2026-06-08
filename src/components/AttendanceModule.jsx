@@ -5,10 +5,10 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 
 import AttendanceImportModal from './AttendanceImportModal';
 import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
-// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心 facts，徹底刪除舊的引用
+// 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心，徹底刪除舊的引用
 import AttendanceViewModal from './AttendanceViewModal';
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(/\s+/g, '') : {};
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 
