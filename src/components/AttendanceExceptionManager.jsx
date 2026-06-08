@@ -14,11 +14,10 @@ const LEAVE_TYPES_CONFIG = [
   { value: '補休', label: '補休' }
 ];
 
-// 💡 外部傳入 allExistingUnits 參數以利下拉選單動態渲染組別
 export default function AttendanceExceptionManager({ selectedProject, personnel = [], allExistingUnits = [] }) {
   const [targetMonth, setTargetMonth] = useState(new Date().toISOString().substring(0, 7));
   const [searchName, setSearchName] = useState('');
-  const [selectedUnit, setSelectedUnit] = useState('ALL'); // 🎯 新增：所選取的單位過濾狀態，預設為全部 (ALL)
+  const [selectedUnit, setSelectedUnit] = useState('ALL'); 
   const [exceptionFilter, setExceptionFilter] = useState('ALL_EXCEPTIONS'); // 'ALL_EXCEPTIONS' | 'ABSENT' | 'MISSING_CLOCK' | 'LATE_EARLY'
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,6 +30,32 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     const parts = timeStr.split(':');
     return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
   };
+
+  // 🎯 核心防呆機制：參考人事模組設定，動態從現有名冊與歷史歷程中即時提煉出 100% 存在過的計畫單位聯集
+  const getCalculatedUnits = () => {
+    const unitSet = new Set();
+    
+    // 先塞入外部傳進來的單位防呆
+    if (Array.isArray(allExistingUnits)) {
+      allExistingUnits.forEach(u => u && unitSet.add(u));
+    }
+    
+    // 精準挖出名冊中所有人不論是「現在現況」還是「歷史歷程 history」去過的所有實質組別
+    if (Array.isArray(personnel)) {
+      personnel.forEach(p => {
+        if (p.unit) unitSet.add(p.unit);
+        if (p.history && Array.isArray(p.history)) {
+          p.history.forEach(h => {
+            if (h.unit) unitSet.add(h.unit);
+          });
+        }
+      });
+    }
+    
+    return [...unitSet].filter(u => u && !u.includes('⚠️'));
+  };
+
+  const dynamicUnits = getCalculatedUnits();
 
   const fetchExceptions = async () => {
     if (!selectedProject) return;
@@ -132,7 +157,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               id: `exc_${empName}_${dateStr}`,
               realDocId: (dayRecords.length > 0 && dayRecords[0].id) || `${selectedProject}_${empName}_${dateStr}`,
               name: personInfo ? personInfo.name : empName,
-              unit: currentDayUnit, // 💡 寫入動態追蹤後的最精確歷史組別
+              unit: currentDayUnit, 
               date: dateStr,
               checkIn, checkOut, leaveRangeInfo, leaveType, statusType, statusText, isManualMaintained
             });
@@ -152,7 +177,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
     fetchExceptions();
   }, [targetMonth, selectedProject, personnel]);
 
-  // 🎯 前端三維複合過濾邏輯聯動 (姓名檢索 + 異常類別 + 計畫單位過濾)
+  // 前端三維複合過濾邏輯聯動 (姓名檢索 + 異常類別 + 計畫單位過濾)
   const filteredRecords = records.filter(r => {
     const matchesName = r.name.toLowerCase().includes(searchName.trim().toLowerCase());
     const matchesUnit = selectedUnit === 'ALL' || r.unit === selectedUnit;
@@ -178,7 +203,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
         leaveRangeInfo: editForm.leaveRangeInfo,
         leaveType: editForm.leaveType,
         recordType: 'MANUAL_MAINTAINED',
-        isManualMaintained: true, // 手動修訂直接注入特赦令
+        isManualMaintained: true, 
         updatedAt: new Date().getTime()
       };
 
@@ -217,7 +242,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
           <button onClick={() => setExceptionFilter('LATE_EARLY')} className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${exceptionFilter === 'LATE_EARLY' ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400'}`}>遲到/早退 ({records.filter(r=>r.statusType==='LATE_EARLY').length})</button>
         </div>
         
-        {/* 🎯 控制列右側合流：完美的計畫單位過濾 + 姓名快速檢索 */}
+        {/* 控制列右側合流：改採動態歷史追蹤洗出來的 dynamicUnits，徹底根除打開下拉選單只有 ALL 的 Bug */}
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
           <div className="flex items-center space-x-1.5 w-full sm:w-56 shrink-0">
             <Filter size={12} className="text-slate-400 dark:text-indigo-400" />
@@ -227,7 +252,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
               className="p-1.5 bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-700 dark:text-white rounded-xl text-xs font-bold w-full outline-none focus:border-indigo-500"
             >
               <option value="ALL">全部計畫單位 (ALL)</option>
-              {allExistingUnits.map(unit => (
+              {dynamicUnits.map(unit => (
                 <option key={unit} value={unit}>{unit}</option>
               ))}
             </select>
@@ -275,8 +300,7 @@ export default function AttendanceExceptionManager({ selectedProject, personnel 
                       <td className="py-3 px-4">
                         <div className="flex flex-col">
                           <span className="font-bold text-slate-900 dark:text-slate-100">{r.name}</span>
-                          {/* 💡 單位 Badge 樣式優化，若包含 ⚠️ 則呈現高亮警示色 */}
-                          <span className={`text-[10px] px-1 py-0.5 border rounded w-fit mt-0.5 font-bold tracking-wide ${
+                          <span className={`text-[10px] px-1 py-0.5 border rounded w-fit shadow-2xs mt-0.5 font-bold tracking-wide ${
                             r.unit.includes('⚠️') 
                               ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-500/20 font-extrabold'
                               : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-900 dark:text-slate-400 dark:border-slate-700'
