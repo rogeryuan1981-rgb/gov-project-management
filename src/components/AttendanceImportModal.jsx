@@ -65,7 +65,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       .filter(cols => cols.length > 0 && cols.some(c => c !== ''));
   };
 
-  // 💡 核心注入：動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
+  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
   const loadSheetJS = () => {
     return new Promise((resolve, reject) => {
       if (window.XLSX) {
@@ -154,12 +154,10 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位 - 升級為標準動態 Excel 多頁籤讀取引擎)
+      // 【分流 C】考勤表 C (駐點單位 - 支援多頁籤、請整天假欄位左移相容)
       // ----------------------------------------------------
       else if (importType === 'C') {
-        // 🚀 在運行時才動態加載 SheetJS，100% 避開 Rollup 的編譯錯誤
         const XLSXLib = await loadSheetJS();
-        
         const data = await file.arrayBuffer();
         const workbook = XLSXLib.read(data, { type: 'array' });
         
@@ -167,7 +165,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
         let minFileDateMs = Infinity;
         let maxFileDateMs = -Infinity;
 
-        // 🔄 遍歷 Excel 內所有的工作表頁籤 (實現單一檔案多人、多工作表一次匯入)
+        // 🔄 遞迴遍歷 Excel 內所有的工作表頁籤 (實現單一檔案多人一鍵匯入)
         for (const sheetName of workbook.SheetNames) {
           const worksheet = workbook.Sheets[sheetName];
           const sheetRows = XLSXLib.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
@@ -178,7 +176,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             const cols = sheetRows[i];
             if (!cols || cols.length < 2) continue;
 
-            // 🎯 依照真實 Excel 結構：姓名固定在 B 欄且格式包含 '名：'
+            // 姓名固定在包含 '名：' 的 B 欄位
             const nameField = cols[1] ? cols[1].toString() : "";
             if (nameField.includes('名：')) {
               currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
@@ -186,15 +184,25 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             }
 
             const rawDate = cols[0] ? cols[0].toString().trim() : "";
-            // 驗證 A 欄是否為真實的民國日期格式 (例如 115/04/01)
+            // 驗證 A 欄是否為民國日期格式 (例如 115/04/01)
             if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
               if (!currentEmployeeName) continue; 
 
-              // 🎯 導正真實物理欄位索引位置：A=0(日期), B=1(星期), C=2(上班), D=3(下班), E=4(請假區間), F=5(請假假別)
-              const checkIn = cols[2] ? cols[2].toString().trim() : "";   
-              const checkOut = cols[3] ? cols[3].toString().trim() : "";  
-              const leaveInfo = cols[4] ? cols[4].toString().trim() : ""; 
-              const leaveType = cols[5] ? cols[5].toString().trim() : ""; 
+              // 原始標準欄位定義位置
+              let checkIn = cols[2] ? cols[2].toString().trim() : "";   // C欄
+              let checkOut = cols[3] ? cols[3].toString().trim() : "";  // D欄
+              let leaveInfo = cols[4] ? cols[4].toString().trim() : ""; // E欄
+              let leaveType = cols[5] ? cols[5].toString().trim() : ""; // F欄
+
+              // 💡 核心優化：動態特徵防禦！判斷是否因為請整天假導致「請假區間和假別移到 C 欄和 D 欄」
+              // 特徵：如果 C 欄字串包含日期連接符號 ' - '，且 D 欄字串長度大於 0 且不包含時間冒號 ':'
+              if (checkIn.includes(' - ') || (checkIn.includes('/') && checkIn.length > 10)) {
+                // 判定發生整天請假之欄位左移位移現象，執行全自動歸位校正
+                leaveInfo = checkIn;   // 將 C 欄的請假區間導回給 leaveInfo
+                leaveType = checkOut;  // 將 D 欄的假別導回給 leaveType
+                checkIn = "";          // 清空被誤填的上班時間
+                checkOut = "";         // 清空被誤填的下班時間
+              }
 
               // 🎯 需求 2：當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不存入系統，避免存入不需要的垃圾空白資料
               if (!checkIn && !checkOut && !leaveInfo && !leaveType) {
@@ -238,9 +246,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
         }
 
-        // ----------------------------------------------------
         // 🎯 需求 1 的後半段：比對人事模組歷程，揪出「缺了誰」與「缺少哪段區間」
-        // ----------------------------------------------------
         let warningMessage = "";
         try {
           const hrRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'personnel');
@@ -301,7 +307,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           console.error("比對人事模組空缺時發生錯誤:", hrError);
         }
 
-        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄。${warningMessage}`);
+        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄並自動相容整天請假位移。${warningMessage}`);
       }
 
       setUploadStatus('success');
@@ -383,7 +389,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 <div className="flex flex-col items-center space-y-1.5">
                   <div className="p-3 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-400"><Upload size={20} /></div>
                   <span className="text-sm font-bold text-slate-700 dark:text-slate-300">點擊選擇或拖放對應 Excel (.xlsx) 報表</span>
-                  <span className="text-[10px] text-slate-400">系統將支援多頁籤人員識別並特赦保護人工欄位</span>
+                  <span className="text-[10px] text-slate-400">系統將支援多頁籤人員識別並全自動相容整天請假位移</span>
                 </div>
               )}
             </label>
