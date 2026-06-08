@@ -8,7 +8,7 @@ import WorkCalendarSettingsModal from './WorkCalendarSettingsModal';
 // 🎯 核心整併：統一部署 AttendanceViewModal 這一個檔案作為全局考勤與異常判定的唯一核心 facts，徹底刪除舊的引用
 import AttendanceViewModal from './AttendanceViewModal';
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : {};
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(/\s+/g, '') : {};
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 
@@ -21,8 +21,7 @@ export default function AttendanceModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [dbError, setDbError] = useState(null);
 
-  // 考勤控制總覽切換狀態
-  const [attendanceSubTab, setAttendanceSubTab] = useState('exception');
+  // 考勤控制開窗狀態
   const [isAttendanceImportOpen, setIsAttendanceImportOpen] = useState(false);
   const [isCalendarSettingsOpen, setIsCalendarSettingsOpen] = useState(false);
   const [isAttendanceViewOpen, setIsAttendanceViewOpen] = useState(false);
@@ -459,24 +458,28 @@ export default function AttendanceModule({ user, selectedProject }) {
         <div className="flex items-center space-x-3 shrink-0"><button onClick={() => setIsAttendanceImportOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">匯入考勤 CSV</button></div>
       </div>
 
-      {/* 🎯 母面板控制一體化：完全對齊一體化視窗參數通道，點選後依據不同情境將 initialMode 發給同一個判斷核心組件 */}
-      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs border-slate-200/60">
-        <div className="space-y-1">
-          <h4 className="font-extrabold text-slate-800 dark:text-white text-sm">考勤明細審查與維護數據中心</h4>
-          <p className="text-xs text-slate-400">底層判定規則全面打通，落實首日到職特赦、轉任歷程比對與全計畫過濾功能。</p>
+      {/* 🎯 母面板控制一體化大底座：徹底移除舊的 attendanceSubTab 渲染分支，改採最穩固的雙入口覆核大按鈕 */}
+      <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm border-slate-200/70">
+        <div className="space-y-1.5">
+          <h4 className="font-black text-slate-800 dark:text-white text-base flex items-center">
+            <CheckCircle2 size={18} className="mr-2 text-emerald-500" /> 考勤明細審查與維護數據中心 已就緒
+          </h4>
+          <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
+            子系統已將「全月日曆大表」與「異常審查中心」一體化收攏。點選下方對應按鈕，即可開啟統一的大型覆核視窗，底層終身共享首日到職特赦放行、全局月份防禦、與轉任歷程比對規則。
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button 
             onClick={() => { setInitialViewMode('EXCEPTIONS_ONLY'); setIsAttendanceViewOpen(true); }} 
-            className="px-4 py-2 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-black rounded-xl transition-all flex items-center shadow-2xs border border-red-200/40"
+            className="px-5 py-3 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl transition-all flex items-center shadow-2xs border border-rose-200"
           >
             <ShieldAlert size={14} className="mr-1.5" /> ⚠️ 進入考勤異常審查與維護中心
           </button>
           <button 
             onClick={() => { setInitialViewMode('ALL_STATUS'); setIsAttendanceViewOpen(true); }} 
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-extrabold rounded-xl transition-all flex items-center border"
+            className="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-all flex items-center shadow-md shadow-indigo-600/10"
           >
-            <CalendarDays size={14} className="mr-1.5 text-indigo-500" /> 📅 進入全月考勤總覽大表
+            <CalendarDays size={14} className="mr-1.5" /> 📅 進入全月考勤總覽大表
           </button>
         </div>
       </div>
