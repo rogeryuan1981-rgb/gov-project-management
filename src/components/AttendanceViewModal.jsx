@@ -73,7 +73,7 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
             let currentDayUnit = '已匯入人員';
 
             if (personInfo) {
-              // 🎯 核心演算邏輯升級：依據人事模組轉任歷程 history 精準判定當天單位
+              // 🎯 依據人事模組歷史轉任歷程 history 進行精確配對
               if (personInfo.history && Array.isArray(personInfo.history) && personInfo.history.length > 0) {
                 const matchedHistory = personInfo.history.find(h => {
                   const startValid = !h.startDate || dateStr >= h.startDate;
@@ -84,11 +84,11 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                 if (matchedHistory && matchedHistory.unit) {
                   currentDayUnit = matchedHistory.unit;
                 } else {
-                  // 🎯 核心優化：若歷史歷程陣列完全沒有任何一段涵蓋到當前日期，直接提出警示標記！
+                  // 🎯 歷程中完全沒有任何區間包含此日期，拋出精確警示
                   currentDayUnit = '⚠️ 歷程未涵蓋此日期';
                 }
               } else {
-                // 如果這個在職人員完全沒有填寫任何歷程，也直接提出警告
+                // 人員完全沒有歷程資料
                 currentDayUnit = '⚠️ 歷程未涵蓋此日期';
               }
             }
@@ -353,4 +353,23 @@ export default function AttendanceViewModal({ isOpen, onClose, selectedProject, 
                         <td className="py-3.5 px-4">{renderStatusBadge(r)}</td>
                         <td className="py-3.5 px-4 text-right">
                           {isRowEditing ? (
-                            <div className="flex items-center justify
+                            <div className="flex items-center justify-end space-x-1.5"><button type="button" onClick={() => setEditingRowId(null)} className="px-2.5 py-1 text-slate-500 hover:bg-slate-100 text-[11px] font-bold rounded-lg">取消</button><button type="button" onClick={() => handleSaveRowChange(r)} className="px-2.5 py-1 bg-indigo-600 text-white text-[11px] font-bold rounded-lg flex items-center shadow-xs"><Save size={12} className="mr-1" />儲存</button></div>
+                          ) : <button type="button" onClick={() => startEditingRow(r)} className="text-indigo-600 hover:bg-indigo-50 px-2.5 py-1 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/10 text-[11px] font-bold flex items-center justify-end ml-auto"><Edit2 size={12} className="mr-1" />維護修訂</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
+          <button onClick={onClose} className="px-6 py-2 bg-slate-100 text-slate-700 dark:text-white font-bold text-sm rounded-xl">關閉視窗</button>
+        </div>
+      </div>
+    </div>
+  );
+}
