@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import { X, Upload, Download, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { doc, setDoc, getDoc, getFirestore, collection, getDocs } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
-// 💡 引入標準 Excel 解析套件，用來處理真正的多頁籤 .xlsx 檔案
-import * as XLSX from 'xlsx';
 
 const db = getFirestore(getApp());
 
@@ -16,7 +14,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
   if (!isOpen) return null;
 
-  // ================= 1. 下載範本功能 (同步美化範本預期導出檔名與格式說明) =================
+  // ================= 1. 下載範本功能 =================
   const handleDownloadTemplate = () => {
     let csvContent = "";
     let fileName = "";
@@ -41,7 +39,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     link.click();
   };
 
-  // ================= 2. 核心解析 CSV 引擎 (供 A 表純文字使用) =================
+  // ================= 2. 核心解析 CSV 引擎 (供 A 表專案辦公室使用) =================
   const parseCSVRows = (text) => {
     const lines = text.split(/\r?\n/);
     return lines
@@ -65,6 +63,21 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
         return result;
       })
       .filter(cols => cols.length > 0 && cols.some(c => c !== ''));
+  };
+
+  // 💡 核心注入：動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
+  const loadSheetJS = () => {
+    return new Promise((resolve, reject) => {
+      if (window.XLSX) {
+        resolve(window.XLSX);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+      script.onload = () => resolve(window.XLSX);
+      script.onerror = (err) => reject(new Error("無法自動加載 Excel 解析套件，請檢查網路連線。"));
+      document.body.appendChild(script);
+    });
   };
 
   const handleFileChange = async (e) => {
@@ -141,22 +154,23 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位 - 升級為真正的 Excel 多頁籤讀取引擎)
+      // 【分流 C】考勤表 C (駐點單位 - 升級為標準動態 Excel 多頁籤讀取引擎)
       // ----------------------------------------------------
       else if (importType === 'C') {
-        // 使用 ArrayBuffer 方式讀取二進位 Excel 檔案
+        // 🚀 在運行時才動態加載 SheetJS，100% 避開 Rollup 的編譯錯誤
+        const XLSXLib = await loadSheetJS();
+        
         const data = await file.arrayBuffer();
-        const workbook = XLSX.read(data, { type: 'array' });
+        const workbook = XLSXLib.read(data, { type: 'array' });
         
         const importedNamesInFile = new Set(); 
         let minFileDateMs = Infinity;
         let maxFileDateMs = -Infinity;
 
-        // 🔄 遞迴遍歷 Excel 內所有的工作表頁籤 (每一頁代表不同人員)
+        // 🔄 遍歷 Excel 內所有的工作表頁籤 (實現單一檔案多人、多工作表一次匯入)
         for (const sheetName of workbook.SheetNames) {
           const worksheet = workbook.Sheets[sheetName];
-          // 將該頁籤轉為二維陣列 (格式：[ [A1, B1, C1], [A2, B2, C2] ])
-          const sheetRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const sheetRows = XLSXLib.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
           
           let currentEmployeeName = "";
 
@@ -164,7 +178,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             const cols = sheetRows[i];
             if (!cols || cols.length < 2) continue;
 
-            // 🎯 規則：姓名固定在 B2 欄位 (索引列 1, 欄 1)，或只要任何一列的 B 欄包含 '名：'
+            // 🎯 依照真實 Excel 結構：姓名固定在 B 欄且格式包含 '名：'
             const nameField = cols[1] ? cols[1].toString() : "";
             if (nameField.includes('名：')) {
               currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
@@ -172,16 +186,17 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             }
 
             const rawDate = cols[0] ? cols[0].toString().trim() : "";
-            // 驗證 A 欄是否為民國日期格式 (例如 115/04/01)
+            // 驗證 A 欄是否為真實的民國日期格式 (例如 115/04/01)
             if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
               if (!currentEmployeeName) continue; 
 
-              const checkIn = cols[3] ? cols[3].toString().trim() : "";   // C欄：上班時間
-              const checkOut = cols[4] ? cols[4].toString().trim() : "";  // D欄：下班時間
-              const leaveInfo = cols[5] ? cols[5].toString().trim() : ""; // E欄：請假區間
-              const leaveType = cols[7] ? cols[7].toString().trim() : ""; // F欄：請假假別
+              // 🎯 導正真實物理欄位索引位置：A=0(日期), B=1(星期), C=2(上班), D=3(下班), E=4(請假區間), F=5(請假假別)
+              const checkIn = cols[2] ? cols[2].toString().trim() : "";   
+              const checkOut = cols[3] ? cols[3].toString().trim() : "";  
+              const leaveInfo = cols[4] ? cols[4].toString().trim() : ""; 
+              const leaveType = cols[5] ? cols[5].toString().trim() : ""; 
 
-              // 🎯 需求 2：當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不存入資料庫
+              // 🎯 需求 2：當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不存入系統，避免存入不需要的垃圾空白資料
               if (!checkIn && !checkOut && !leaveInfo && !leaveType) {
                 continue;
               }
@@ -223,7 +238,9 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
         }
 
-        // 🎯 需求 1：比對人事模組歷程，揪出「缺了誰」與「缺少哪段區間」
+        // ----------------------------------------------------
+        // 🎯 需求 1 的後半段：比對人事模組歷程，揪出「缺了誰」與「缺少哪段區間」
+        // ----------------------------------------------------
         let warningMessage = "";
         try {
           const hrRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'personnel');
@@ -278,7 +295,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           });
 
           if (missingAlerts.length > 0) {
-            warningMessage = `\n\n【🚨 發現人員歷程空缺提示】\n系統比對人事模組後，發現下列在職駐點人員完全缺少 Excel 中的考勤記錄：\n` + missingAlerts.join('\n');
+            warningMessage = `\n\n【🚨 發現人員歷程空缺提示】\n系統比對人事模組歷程後，發現下列在職駐點人員完全缺少 Excel 中的考勤記錄：\n` + missingAlerts.join('\n');
           }
         } catch (hrError) {
           console.error("比對人事模組空缺時發生錯誤:", hrError);
