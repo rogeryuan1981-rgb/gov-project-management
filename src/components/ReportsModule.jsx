@@ -145,7 +145,7 @@ export default function ReportsModule({ user, selectedProject }) {
       let pdfPagesHtml = "";
       let printedTargetCount = 0;
 
-      // 🎯 建立扣薪彙總表專用暫存字典物件
+      // 建立扣薪彙總表專用暫存字典物件
       const deductionSummaryMap = {};
 
       activePersonnelInMonth.forEach(person => {
@@ -191,7 +191,7 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayUnit = sortedHistory[matchedIdx].unit;
               currentDayRole = sortedHistory[matchedIdx].role || sortedHistory[matchedIdx].position || currentDayRole;
               currentDayHistoryIdx = matchedIdx;
-              personFinalUnit = currentDayUnit; // 滾動更新最終單位
+              personFinalUnit = currentDayUnit; 
             }
           } else {
             if (person.name === 'A' || person.name === '于家源') {
@@ -324,7 +324,7 @@ export default function ReportsModule({ user, selectedProject }) {
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
 
-          // 🎯 修正一：請假區間去日期化。如果請假區間包含當日日期，予以清除精簡，防止超出表格範圍
+          // 🎯 修正一：請假區間去日期化。只留下純時間，防止超出 A4 寬度
           let cleanLeaveRangeText = '--';
           if (leaveType) {
             cleanLeaveRangeText = `${leaveType} ` + leaveRangeInfo.replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
@@ -351,7 +351,7 @@ export default function ReportsModule({ user, selectedProject }) {
           .map(([type, hrs]) => `${type} ${hrs}H`)
           .join(', ') || '無請假紀錄';
 
-        // 🎯 隨時同步紀錄至彙總表暫存字典中
+        // 同步紀錄至彙總表暫存字典中
         deductionSummaryMap[person.name] = {
           name: person.name,
           unit: personFinalUnit,
@@ -422,7 +422,7 @@ export default function ReportsModule({ user, selectedProject }) {
 
       // 🎯 修正二：建立最末頁獨立頁面「當月請假扣薪彙總表」HTML 結構與同單位 RowSpan 合併計算
       const summaryList = Object.values(deductionSummaryMap);
-      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); // 必須先依單位排序才能正確合併
+      summaryList.sort((a, b) => a.unit.localeCompare(b.unit)); // 排序
 
       let lastPageRowsHtml = "";
       let currentUnitName = null;
@@ -436,7 +436,7 @@ export default function ReportsModule({ user, selectedProject }) {
           rowSpanMap[currentUnitStartIndex] = 1;
         } else {
           rowSpanMap[currentUnitStartIndex] += 1;
-          rowSpanMap[index] = 0; // 被合併的行，設為 0 不渲染 <td>
+          rowSpanMap[index] = 0; 
         }
       });
 
@@ -630,7 +630,10 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (!assigned) overstaffSlots.push({ unit: group.unit, role: group.role, slotIndex: 99, label: '(超編員額)', occupants: [seg] });
             }
         });
-        slots.concat(overstaffSlots).forEach(slot => {
+
+        // 🎯 修正二：將舊版 slots.concat 修正為完備的 slots 變數遍歷，防止 ReferenceError
+        const allCombinedSlots = slots.concat(overstaffSlots);
+        allCombinedSlots.forEach(slot => {
             const finalTimeline = []; let currentTime = groupStartLimitMs;
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             sortedOccs.forEach(occ => {
@@ -823,7 +826,7 @@ export default function ReportsModule({ user, selectedProject }) {
               />
             </div>
             {/* 單位過濾 */}
-            <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-800/10 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-indigo-500" />計畫單位</span>
               <select 
                 value={attendanceSelectedUnit} 
