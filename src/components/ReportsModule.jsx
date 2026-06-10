@@ -15,9 +15,10 @@ export default function ReportsModule({ user, selectedProject }) {
   const [projectEndDate, setProjectEndDate] = useState('');
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
-  
-  // 區塊 3 專用獨立讀取狀態
   const [isLoadingExcel, setIsLoadingExcel] = useState(false);
+
+  // 🎯 全新防呆卡控嚴格校對開關狀態 (預設關閉)
+  const [isStrictValidation, setIsStrictValidation] = useState(false);
 
   // 1. 人員考勤表卡片專用過濾狀態（月份 ＋ 單位）
   const [attendanceYearMonth, setAttendanceYearMonth] = useState(new Date().toISOString().substring(0, 7));
@@ -149,9 +150,17 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', '選定月份內之計畫名冊中查無人員建檔。');
       }
 
+      // 🎯 嚴格校對防線：開啟時，若發現有請假但時數為0或未維護者，禁止產出
+      if (isStrictValidation) {
+        const hasInvalidRecord = importedRecords.some(r => r.isLeave === true && (!r.parsedLeaveHours || r.parsedLeaveHours === 0));
+        if (hasInvalidRecord) {
+          setIsLoadingAttendance(false);
+          return showMessage('error', '❌ 產出失敗！部分同仁有請假紀錄但未維護時數，請補齊資料後再行導出。');
+        }
+      }
+
       let pdfPagesHtml = "";
       let printedTargetCount = 0;
-
       const deductionSummaryMap = {};
 
       activePersonnelInMonth.forEach(person => {
@@ -160,11 +169,8 @@ export default function ReportsModule({ user, selectedProject }) {
 
         let totalDutyDays = 0;
         let totalActualWorkDays = 0;
-        let totalLateCount = 0;
-        let totalLateMinutes = 0;
-        let totalEarlyLeaveCount = 0;
-        let totalEarlyLeaveMinutes = 0;
-        let totalAbsentCount = 0;
+        let totalAbsentCount = 0; // 改為存放總曠職天數
+        let totalAbsentHours = 0; // 累計總曠職小時數
 
         let leaveHoursSummary = {}; 
         let totalLeaveDeduction = 0;
@@ -191,11 +197,7 @@ export default function ReportsModule({ user, selectedProject }) {
           let currentDayHistoryIdx = -1;
 
           if (sortedHistory.length > 0) {
-            const matchedIdx = sortedHistory.findIndex(h => {
-              const startValid = dateStr >= h.startDate;
-              const endValid = !h.endDate || dateStr <= h.endDate;
-              return startValid && endValid;
-            });
+            const matchedIdx = sortedHistory.findIndex(h => dateStr >= h.startDate && (!h.endDate || dateStr <= h.endDate));
             if (matchedIdx !== -1) {
               currentDayUnit = sortedHistory[matchedIdx].unit;
               currentDayRole = sortedHistory[matchedIdx].role || sortedHistory[matchedIdx].position || currentDayRole;
@@ -211,101 +213,79 @@ export default function ReportsModule({ user, selectedProject }) {
           hasValidUnitDayInMonth = true;
 
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
-          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = ""; let leaveType = "";
+          let checkIn = ""; let checkOut = ""; let leaveRangeInfo = "";
+          let isLeave = false; let parsedLeaveType = ""; let parsedLeaveHours = 0;
           let proxySegments = [];
 
           if (dayRecords.length > 0) {
-            const validIn = dayRecords.find(r => r.checkIn && r.checkIn !== '');
-            const validOut = dayRecords.find(r => r.checkOut && r.checkOut !== '');
-            const validLeave = dayRecords.find(r => r.leaveType && r.leaveType !== '');
-            checkIn = validIn ? validIn.checkIn : (dayRecords[0].checkIn || "");
-            checkOut = validOut ? validOut.checkOut : (dayRecords[0].checkOut || "");
-            leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0]?.leaveRangeInfo || "");
-            leaveType = validLeave ? validLeave.leaveType : (dayRecords[0]?.leaveType || "");
-            proxySegments = dayRecords.find(r => r.proxySegments)?.proxySegments || [];
+            const r = dayRecords[0];
+            checkIn = r.checkIn || "";
+            checkOut = r.checkOut || "";
+            leaveRangeInfo = r.leaveRangeInfo || "";
+            // 直接抓取資料庫正規化欄位
+            isLeave = r.isLeave || false;
+            parsedLeaveType = r.parsedLeaveType || "";
+            parsedLeaveHours = parseInt(r.parsedLeaveHours, 10) || 0;
+            proxySegments = r.proxySegments || [];
           }
 
-          let normalizedLeaveType = "";
-          const leaveTargetString = `${leaveType || ''} ${leaveRangeInfo || ''}`;
-          const leaveMatch = leaveTargetString.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
-          if (leaveMatch) {
-            normalizedLeaveType = leaveMatch[1];
-          }
-
-          let finalStatusText = "--"; let rowBgStyle = "";
+          let rowBgStyle = "";
+          let cleanLeaveRangeText = '--';
 
           if (isOffDay) {
-            if (checkIn || checkOut) finalStatusText = "假日加班";
-            else finalStatusText = "例假日/放假";
+            cleanLeaveRangeText = "--";
           } else {
             totalDutyDays++; 
-            if (normalizedLeaveType) {
-              finalStatusText = `已請假 (${normalizedLeaveType})`;
-              
-              if (!leaveHoursSummary[normalizedLeaveType]) {
-                leaveHoursSummary[normalizedLeaveType] = 0;
+            
+            // 🎯 出勤與精準最小曠職時數判定引擎 (無遲到早退，只有曠職)
+            let dailyWorkMinutes = 0;
+            if (checkIn && checkOut) {
+              dailyWorkMinutes = getEffectiveMinutes(checkIn, checkOut);
+            }
+
+            // 換算成總有效工時 (打卡分鐘數 + 請假換算分鐘數)
+            const totalEffectiveMinutes = dailyWorkMinutes + (parsedLeaveHours * 60);
+
+            if (isLeave) {
+              // 處理假別展示文字呈現：未寫請假時間區間又不符上班時間就秀假別與時數
+              if (leaveRangeInfo) {
+                const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
+                const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`, 'g');
+                const cleanRange = formattedRange.replace(datePattern, '').replace(new RegExp(parsedLeaveType, 'g'), '');
+                cleanLeaveRangeText = `${parsedLeaveType} ${cleanRange}`;
+              } else {
+                cleanLeaveRangeText = `${parsedLeaveType} (${parsedLeaveHours}小時)`;
               }
 
-              let currentDayLeaveHours = 0; 
+              // 累計各假別時數至上方彙總
+              if (parsedLeaveType) {
+                if (!leaveHoursSummary[parsedLeaveType]) leaveHoursSummary[parsedLeaveType] = 0;
+                leaveHoursSummary[parsedLeaveType] += parsedLeaveHours;
 
-              if (leaveRangeInfo && typeof leaveRangeInfo === 'string') {
-                const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(new RegExp(dateStr, 'g'), '').replace(/\s+/g, '');
-                
-                if (formattedRange.includes('~')) {
-                  const parts = formattedRange.split('~');
-                  if (parts.length === 2 && parts[0] && parts[1]) {
-                    const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                    currentDayLeaveHours = Math.ceil(effectiveMins / 60);
-                  }
-                } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
-                  currentDayLeaveHours = 4;
-                } else if (formattedRange.includes('8小時') || formattedRange.includes('全天') || formattedRange === '' || formattedRange.includes(normalizedLeaveType)) {
-                  currentDayLeaveHours = 8;
+                // 勞基法請假扣款計算
+                const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
+                const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
+                if (approvedSalary > 0) {
+                  const hourlyWage = approvedSalary / 240;
+                  let deductionWeight = 0;
+                  if (parsedLeaveType === '事假') deductionWeight = 1.0;
+                  else if (parsedLeaveType === '病假' || parsedLeaveType === '生理假') deductionWeight = 0.5;
+                  totalLeaveDeduction += parsedLeaveHours * hourlyWage * deductionWeight;
                 }
               }
+            }
 
-              if (currentDayLeaveHours === 0) {
-                currentDayLeaveHours = 8;
-              }
-
-              leaveHoursSummary[normalizedLeaveType] += currentDayLeaveHours;
-
-              const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
-              const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
+            // 曠職判定：當日總工時不滿 8 小時 (480 分鐘)
+            if (totalEffectiveMinutes < 480) {
+              rowBgStyle = "background-color: #fef2f2;";
+              // 依照可以計算最小的曠職時數來計算，計算完後無條件進入到整數位
+              const missingMinutes = 480 - totalEffectiveMinutes;
+              const currentDayAbsentHours = Math.ceil(missingMinutes / 60);
               
-              if (approvedSalary > 0) {
-                const hourlyWage = approvedSalary / 240;
-                let deductionWeight = 0;
-                if (normalizedLeaveType === '事假') {
-                  deductionWeight = 1.0;
-                } else if (normalizedLeaveType === '病假' || normalizedLeaveType === '生理假') {
-                  deductionWeight = 0.5;
-                }
-                const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
-                totalLeaveDeduction += currentDeduction;
-              }
-
-            } else if (!checkIn && !checkOut) {
-              finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
-            } else if (!checkIn || !checkOut) {
-              finalStatusText = "異常: 缺打卡"; rowBgStyle = "background-color: #fff7ed;"; 
+              totalAbsentHours += currentDayAbsentHours;
+              totalAbsentCount++; // 記錄有曠職發生之天數
             } else {
-              const inMins = timeToMinutes(checkIn); const outMins = timeToMinutes(checkOut);
-              if (inMins !== null && outMins !== null) {
-                totalActualWorkDays++;
-                const maxStartMins = 9 * 60; 
-                let isLate = inMins > maxStartMins; let lateMinutes = isLate ? inMins - maxStartMins : 0;
-                let legalMinOutMins = isLate ? 18 * 60 : Math.max(inMins, 8 * 60) + (9 * 60);
-                let isEarlyLeave = outMins < legalMinOutMins; let earlyLeaveMinutes = isEarlyLeave ? legalMinOutMins - outMins : 0;
-
-                if (isLate) { totalLateCount++; totalLateMinutes += lateMinutes; }
-                if (isEarlyLeave) { totalEarlyLeaveCount++; totalEarlyLeaveMinutes += earlyLeaveMinutes; }
-
-                if (isLate && isEarlyLeave) { finalStatusText = `遲到 ${lateMinutes} 分 / 早退 ${earlyLeaveMinutes} 分`; rowBgStyle = "background-color: #fef2f2;"; }
-                else if (isLate) { finalStatusText = `遲到 ${lateMinutes} 分`; rowBgStyle = "background-color: #fff7ed;"; }
-                else if (isEarlyLeave) { finalStatusText = `早退 ${earlyLeaveMinutes} 分`; rowBgStyle = "background-color: #fff7ed;"; }
-                else { finalStatusText = "正常出勤"; }
-              }
+              totalActualWorkDays++;
             }
           }
 
@@ -319,29 +299,15 @@ export default function ReportsModule({ user, selectedProject }) {
               const prevPeriod = sortedHistory[currentDayHistoryIdx - 1];
               finalCommentsArray.push(`✨ 轉調首日 (前屬：${prevPeriod.unit}-${prevPeriod.role || prevPeriod.position || '未指定'})。`);
             }
-            if (currentPeriod.endDate && dateStr === currentPeriod.endDate && currentDayHistoryIdx < sortedHistory.length - 1) {
-              const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
-              finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || nextPeriod.position || '未指定'})。`);
-            }
           }
 
           if (proxySegments.length > 0) {
             const proxyString = proxySegments.map(seg => `${seg.proxyName}(${seg.startHour}-${seg.endHour})`).join(', ');
             finalCommentsArray.push(`[職務代理] ${proxyString}`);
-          } else if (dayRecords.length > 0 && dayRecords[0].proxyName) {
-            finalCommentsArray.push(`[職務代理] ${dayRecords[0].proxyName}`);
           }
 
           const dateTextStyle = isOffDay ? "color: #ef4444; font-shrink: 0;" : "";
           const commentDisplayStr = finalCommentsArray.join(' ') || '--';
-
-          let cleanLeaveRangeText = '--';
-          if (normalizedLeaveType) {
-            const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
-            const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}|\\d{3}/\\d{2}/\\d{2}`, 'g');
-            const cleanRange = formattedRange.replace(datePattern, '').replace(new RegExp(normalizedLeaveType, 'g'), '');
-            cleanLeaveRangeText = `${normalizedLeaveType} ${cleanRange}`;
-          }
 
           dailyRowsHtml += `
             <tr style="${rowBgStyle}">
@@ -395,10 +361,8 @@ export default function ReportsModule({ user, selectedProject }) {
                 <td class="info-label">篩選區間應到</td><td class="info-value font-mono" style="font-weight: bold; color: #4f46e5;">${totalDutyDays} 天</td>
                 <td class="info-label" style="background: #fdf2f8; color: #be185d;">本區間彙總統計</td>
                 <td class="info-value" style="font-size: 11px; line-height: 1.4; background: #fffdfd;">
-                  正常到工：<span class="text-emerald">${totalActualWorkDays} 天</span> | 
-                  判定曠職：<span class="${totalAbsentCount > 0 ? 'text-danger font-bold' : ''}">${totalAbsentCount} 天</span><br/>
-                  累計遲到：<span>${totalLateCount} 次 (${totalLateMinutes} 分)</span> | 
-                  累計早退：<span>${totalEarlyLeaveCount} 次 (${totalEarlyLeaveMinutes} 分)</span><br/>
+                  正常滿時：<span class="text-emerald">${totalActualWorkDays} 天</span> | 
+                  累計曠職：<span class="${totalAbsentHours > 0 ? 'text-danger font-bold' : 'text-emerald'}">${totalAbsentHours} 小時 (${totalAbsentCount} 天次)</span><br/>
                   <div style="margin-top: 2px; padding-top: 2px; border-top: 1px dashed #e2e8f0;">
                     <strong>各假別時數統計：</strong> <span style="color: #4f46e5; font-weight: 600;">${leaveDetailsText}</span><br/>
                     <strong>勞基法請假扣款：</strong> <span class="${totalLeaveDeduction > 0 ? 'text-danger font-black font-mono text-sm' : 'text-emerald font-bold'}" style="font-size: 11px;">$${Math.round(totalLeaveDeduction).toLocaleString()} 元</span>
@@ -490,7 +454,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <div style="text-align: center; font-size: 15px; font-weight: bold; color: #dc2626; margin-bottom: 20px;">各群組人員當月請假扣薪核銷彙總大表</div>
           
           <div style="font-size: 10px; background: #fffbeb; border: 1px solid #fef3c7; color: #b45309; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold; line-height: 1.4;">
-            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假及生理假扣除 0.5 半薪，其優特休、喪假、公出、補休依法不予扣薪。
+            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假及生理假扣除 0.5 半薪，其餘特休、喪假、公出、補休依法不予扣薪。
           </div>
 
           <table class="data-table" style="border: 2px solid #0f172a; width: 100%; border-collapse: collapse;">
@@ -536,7 +500,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </head>
         <body>
           <div class="no-print-bar">
-            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 放末頁扣薪彙總表</button>
+            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 末頁扣薪彙總表</button>
           </div>
           ${pdfPagesHtml}
         </body>
@@ -555,7 +519,7 @@ export default function ReportsModule({ user, selectedProject }) {
     } catch (error) {
       console.error("生成考勤憑證發生致命錯誤:", error);
       showMessage('error', '考勤憑證生成失敗，請檢查權限關聯。');
-    } window.setIsLoadingAttendance ? window.setIsLoadingAttendance(false) : setIsLoadingAttendance(false);
+    } setIsLoadingAttendance(false);
   };
 
   // ================= 功能：2. 異動與空缺紀錄表 =================
@@ -652,7 +616,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 if (occ.startMs > currentTime) { const vStart = currentTime; const vEnd = occ.startMs - 86400000; if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); }
                 finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr }); currentTime = occ.endMs + 86400000;
             });
-            if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
+            if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], textEndStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
             slot.timeline = finalTimeline;
         });
         expandedSlots.push(...slots, ...overstaffSlots);
@@ -802,10 +766,6 @@ export default function ReportsModule({ user, selectedProject }) {
 
     setIsLoadingExcel(true);
     try {
-      const calendarDocRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'calendars', selectedProject);
-      const calendarSnap = await getDoc(calendarDocRef);
-      const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
-
       const attendanceRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       const q = query(attendanceRef, where('projectId', '==', selectedProject), where('month', '==', excelYearMonth));
       const querySnapshot = await getDocs(q);
@@ -826,6 +786,15 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', '選定月份內之計畫名冊中查無人員。');
       }
 
+      // 🎯 嚴格校對防線：開啟時，若發現有請假紀錄但時數未維護（為0）者，禁止產出
+      if (isStrictValidation) {
+        const hasInvalidRecord = importedRecords.some(r => r.isLeave === true && (!r.parsedLeaveHours || r.parsedLeaveHours === 0));
+        if (hasInvalidRecord) {
+          setIsLoadingExcel(false);
+          return showMessage('error', '❌ 產出失敗！部分同仁有請假紀錄但時數未確實填寫，請補齊後再行導出。');
+        }
+      }
+
       let excelRows = [];
 
       activePersonnelInMonth.forEach(person => {
@@ -836,11 +805,14 @@ export default function ReportsModule({ user, selectedProject }) {
 
         let localLeaveSummary = {};
 
-        for (let d = 1; d <= daysInMonth; d++) {
-          const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-          const isOffDay = !!currentOffDays[dateStr];
+        // 撈出該人員的所有打卡紀錄
+        const personRecords = importedRecords.filter(r => r.name === person.name);
 
-          if (person.hireDate && dateStr < person.hireDate) continue;
+        personRecords.forEach(r => {
+          const dateStr = r.date;
+          if (!dateStr || !dateStr.startsWith(excelYearMonth)) return;
+
+          if (person.hireDate && dateStr < person.hireDate) return;
 
           let currentDayUnit = person.unit || '未指定單位';
           if (sortedHistory.length > 0) {
@@ -849,57 +821,26 @@ export default function ReportsModule({ user, selectedProject }) {
           }
 
           if (excelSelectedUnit !== 'ALL' && currentDayUnit !== excelSelectedUnit) {
-            continue;
+            return;
           }
 
-          const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
-          let leaveRangeInfo = ""; let leaveType = "";
-
-          if (dayRecords.length > 0) {
-            const validLeave = dayRecords.find(r => r.leaveType && r.leaveType !== '');
-            leaveRangeInfo = validLeave ? validLeave.leaveRangeInfo : (dayRecords[0]?.leaveRangeInfo || "");
-            leaveType = validLeave ? validLeave.leaveType : (dayRecords[0]?.leaveType || "");
-          }
-
-          let normalizedLeaveType = "";
-          const leaveTargetString = `${leaveType || ''} ${leaveRangeInfo || ''}`;
-          const leaveMatch = leaveTargetString.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
-          if (leaveMatch) {
-            normalizedLeaveType = leaveMatch[1];
-          }
-
-          if (!isOffDay && normalizedLeaveType) {
-            if (!localLeaveSummary[normalizedLeaveType]) {
-              localLeaveSummary[normalizedLeaveType] = 0;
+          // 直接讀取正規化預處理欄位
+          if (r.isLeave && r.parsedLeaveType) {
+            const hours = parseInt(r.parsedLeaveHours, 10) || 0;
+            if (!localLeaveSummary[r.parsedLeaveType]) {
+              localLeaveSummary[r.parsedLeaveType] = 0;
             }
-
-            let currentDayLeaveHours = 0;
-            if (leaveRangeInfo && typeof leaveRangeInfo === 'string') {
-              const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
-              if (formattedRange.includes('~')) {
-                const parts = formattedRange.split('~');
-                if (parts.length === 2 && parts[0] && parts[1]) {
-                  const effectiveMins = getEffectiveMinutes(parts[0], parts[1]);
-                  currentDayLeaveHours = Math.ceil(effectiveMins / 60);
-                }
-              } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
-                currentDayLeaveHours = 4;
-              } else if (formattedRange.includes('8小時') || formattedRange.includes('全天') || formattedRange === '' || formattedRange.includes(normalizedLeaveType)) {
-                currentDayLeaveHours = 8;
-              }
-            }
-
-            if (currentDayLeaveHours === 0) currentDayLeaveHours = 8;
-            localLeaveSummary[normalizedLeaveType] += currentDayLeaveHours;
+            localLeaveSummary[r.parsedLeaveType] += hours;
           }
-        }
+        });
 
         Object.entries(localLeaveSummary).forEach(([lType, hours]) => {
+          // 不管防呆有無生效，都只收集有累計大於 0 的紀錄（若時數為 0 則不列入 Excel 列中）
           if (hours > 0) {
             excelRows.push({
               name: person.name,
               type: lType,
-              hrs: hours // 🎯 修正關鍵：移除原本的 " 小時" 字串，直接輸出純數值
+              hrs: hours
             });
           }
         });
@@ -983,15 +924,32 @@ export default function ReportsModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* 頂部純粹標題說明區 */}
-      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
-          <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業報表中心
-        </h2>
-        <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
+      {/* 頂部純粹標題說明區與全模組嚴格防呆控制開關 */}
+      <div className="bg-white dark:bg-slate-800 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-700/80 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
+            <Calculator className="mr-3 text-indigo-500" size={24} />核銷作業報表中心
+          </h2>
+          <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
+        </div>
+        
+        {/* 🎯 測試與過渡期間嚴格卡控開關 UI (精美 Checkbox 卡片) */}
+        <div className="flex items-center space-x-3 p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shrink-0 select-none">
+          <input 
+            type="checkbox" 
+            id="strict_validate" 
+            checked={isStrictValidation}
+            onChange={(e) => setIsStrictValidation(e.target.checked)}
+            className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+          />
+          <label htmlFor="strict_validate" className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer flex flex-col">
+            <span>開啟請假時數與區間嚴格校對防呆</span>
+            <span className="text-[10px] text-slate-400 font-normal mt-0.5">開啟後，時數未確實填寫將全面禁止產出報表</span>
+          </label>
+        </div>
       </div>
 
-      {/* 區塊分流：grid-cols-1 md:grid-cols-3 三欄並排卡片佈局 */}
+      {/* 區塊分流：三欄並排卡片佈局 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
         
         {/* 1. 人員考勤表卡片 */}
@@ -1073,7 +1031,7 @@ export default function ReportsModule({ user, selectedProject }) {
           </button>
         </div>
 
-        {/* 3. 人員請假彙總表(excel) 卡片結構 */}
+        {/* 3. 人員請假彙總表(excel) */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-emerald-100 dark:border-emerald-500/20 shadow-sm flex flex-col group hover:border-emerald-500 transition-colors relative overflow-hidden h-full">
           <div className="absolute top-0 right-0 bg-emerald-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">試算導出</div>
           <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><FileSpreadsheet className="text-emerald-600" size={28} /></div>
@@ -1082,7 +1040,6 @@ export default function ReportsModule({ user, selectedProject }) {
           <p className="text-xs text-slate-400 leading-relaxed mb-4">具備完全獨立過濾條件，高速提煉出指定單位的姓名、假別與時數，直接輸出標準試算表格式。</p>
           
           <div className="space-y-2.5 mb-5 mt-auto">
-            {/* 獨立月份篩選 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 flex items-center"><Calendar size={12} className="mr-1 text-emerald-500" />結算月份</span>
               <input 
@@ -1092,7 +1049,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer dark:[&::-webkit-calendar-picker-indicator]:invert" 
               />
             </div>
-            {/* 獨立計畫單位篩選 */}
             <div className="p-2.5 bg-slate-50 dark:bg-slate-800/10 rounded-2xl border border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-400 flex items-center"><Filter size={12} className="mr-1 text-emerald-500" />計畫單位</span>
               <select 
