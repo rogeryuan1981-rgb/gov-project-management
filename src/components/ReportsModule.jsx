@@ -239,10 +239,11 @@ export default function ReportsModule({ user, selectedProject }) {
             if (normalizedLeaveType) {
               finalStatusText = `已請假 (${normalizedLeaveType})`;
               
-              const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
-              const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
-              const hourlyWage = approvedSalary / 240;
-              
+              // 1. 強健性初始化：確保累加字典絕對存在，防止 undefined 或 NaN 拋出中斷
+              if (!leaveHoursSummary[normalizedLeaveType]) {
+                leaveHoursSummary[normalizedLeaveType] = 0;
+              }
+
               let currentDayLeaveHours = 0; 
 
               if (leaveRangeInfo && typeof leaveRangeInfo === 'string') {
@@ -261,21 +262,32 @@ export default function ReportsModule({ user, selectedProject }) {
                 }
               }
 
-              if (!leaveHoursSummary[normalizedLeaveType]) {
-                leaveHoursSummary[normalizedLeaveType] = 0;
+              // 確保若沒切出有效時數，只要有請假事實一律視為單日標準 8 小時
+              if (currentDayLeaveHours === 0) {
+                currentDayLeaveHours = 8;
               }
+
+              // 2. 優先累加時數統計：不受後續核定薪資結構有無的影響
               leaveHoursSummary[normalizedLeaveType] += currentDayLeaveHours;
 
-              // 生理假比照病假扣半薪 (權重 0.5)
-              let deductionWeight = 0;
-              if (normalizedLeaveType === '事假') {
-                deductionWeight = 1.0;
-              } else if (normalizedLeaveType === '病假' || normalizedLeaveType === '生理假') {
-                deductionWeight = 0.5;
-              }
+              // 3. 獨立處理薪資與扣款精算
+              const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
+              const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
+              
+              if (approvedSalary > 0) {
+                const hourlyWage = approvedSalary / 240;
+                
+                // 生理假比照病假扣半薪 (權重 0.5)
+                let deductionWeight = 0;
+                if (normalizedLeaveType === '事假') {
+                  deductionWeight = 1.0;
+                } else if (normalizedLeaveType === '病假' || normalizedLeaveType === '生理假') {
+                  deductionWeight = 0.5;
+                }
 
-              const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
-              totalLeaveDeduction += currentDeduction;
+                const currentDeduction = currentDayLeaveHours * hourlyWage * deductionWeight;
+                totalLeaveDeduction += currentDeduction;
+              }
 
             } else if (!checkIn && !checkOut) {
               finalStatusText = "曠職 (應上班未打卡)"; totalAbsentCount++; rowBgStyle = "background-color: #fef2f2;"; 
@@ -488,7 +500,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <div style="text-align: center; font-size: 15px; font-weight: bold; color: #dc2626; margin-bottom: 20px;">各群組人員當月請假扣薪核銷彙總大表</div>
           
           <div style="font-size: 10px; background: #fffbeb; border: 1px solid #fef3c7; color: #b45309; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold; line-height: 1.4;">
-            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假及生理假扣除 0.5 半薪，其餘特休、喪假、公出、補休依法不予扣薪。
+            💡 稽核提示：本表已自動完成同計畫單位之縱向儲存格合併排版。請事假扣除 1.0 全薪、病假及生理假扣除 0.5 半薪，其優特休、喪假、公出、補休依法不予扣薪。
           </div>
 
           <table class="data-table" style="border: 2px solid #0f172a; width: 100%; border-collapse: collapse;">
