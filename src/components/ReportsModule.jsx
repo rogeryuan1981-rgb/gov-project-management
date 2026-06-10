@@ -197,12 +197,6 @@ export default function ReportsModule({ user, selectedProject }) {
               currentDayHistoryIdx = matchedIdx;
               personFinalUnit = currentDayUnit; 
             }
-          } else {
-            if (person.name === 'A' || person.name === '于家源') {
-              if (dateStr <= '2026-05-17') { currentDayUnit = '企劃組'; currentDayRole = '專案助理'; }
-              else { currentDayUnit = '專案辦公室'; currentDayRole = person.role || '專案小組長'; }
-              personFinalUnit = currentDayUnit;
-            }
           }
 
           if (attendanceSelectedUnit !== 'ALL' && currentDayUnit !== attendanceSelectedUnit) {
@@ -263,7 +257,6 @@ export default function ReportsModule({ user, selectedProject }) {
                 } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
                   currentDayLeaveHours = 4;
                 } else if (formattedRange.includes('8小時') || formattedRange.includes('全天') || formattedRange === '' || formattedRange.includes(normalizedLeaveType)) {
-                  // 🎯 防呆相容：如果含有該假別字眼且切不出特定小時，依法核定為標準單日 8 小時
                   currentDayLeaveHours = 8;
                 }
               }
@@ -324,16 +317,6 @@ export default function ReportsModule({ user, selectedProject }) {
               const nextPeriod = sortedHistory[currentDayHistoryIdx + 1];
               finalCommentsArray.push(`🔄 轉調前夕 (預計轉至：${nextPeriod.unit}-${nextPeriod.role || nextPeriod.position || '未指定'})。`);
             }
-          } else {
-            if (person.name === 'A' || person.name === '于家源') {
-              if (dateStr === '2025-03-11') finalCommentsArray.push("ℹ️ 今日到職起聘。");
-              if (dateStr === '2025-12-31') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-01-01') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案主任)。");
-              if (dateStr === '2026-04-30') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：企劃組-專案主任)。");
-              if (dateStr === '2026-05-01') finalCommentsArray.push("✨ 轉調首日 (前屬：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-05-17') finalCommentsArray.push("🔄 轉調前夕 (預計轉至：專案辦公室-專案小組長)。");
-              if (dateStr === '2026-05-18') finalCommentsArray.push("✨ 轉調首日 (前屬：企劃組-專案助理)。"); 
-            }
           }
 
           if (proxySegments.length > 0) {
@@ -369,7 +352,7 @@ export default function ReportsModule({ user, selectedProject }) {
         if (!hasValidUnitDayInMonth) return;
         printedTargetCount++;
 
-        const displayRoleHeader = person.name === 'Yuan Roger' || person.name === '于家源' ? (attendanceSelectedUnit === '企劃組' ? '專案助理' : person.role || '專案小組長') : (person.role || '未指定');
+        const displayRoleHeader = person.role || '未指定';
 
         const leaveDetailsText = Object.entries(leaveHoursSummary)
           .filter(([_, hrs]) => hrs > 0)
@@ -499,7 +482,6 @@ export default function ReportsModule({ user, selectedProject }) {
         `;
       });
 
-      // 移除下方核章簽名區塊
       pdfPagesHtml += `
         <div class="a4-page" style="page-break-before: always;">
           <div style="text-align: center; font-size: 20px; font-weight: bold; color: #1e293b; letter-spacing: 1px; margin-bottom: 2px;">【${projectName}】</div>
@@ -585,8 +567,11 @@ export default function ReportsModule({ user, selectedProject }) {
 
     if (startMs > endMs) return showMessage('error', '開始日期不能晚於結束日期。');
 
-    const unitWeights = { '企劃組': 1, '婦幼健康組': 2, '癌症防治組': 3, '專案辦公室': 4 };
-    const getUnitWeight = (unit) => unitWeights[unit] || 99;
+    const getUnitWeight = (unit) => {
+      const idx = allExistingUnits.indexOf(unit);
+      return idx !== -1 ? idx : 99;
+    };
+    
     const roleWeights = { '專案主任': 1, '專案小組長': 2, '專案專業人員': 3, '專案助理': 4 };
     const getRoleWeight = (role) => roleWeights[role] || 99;
 
