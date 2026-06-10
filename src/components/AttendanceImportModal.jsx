@@ -27,7 +27,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     } else {
       csvContent = "\uFEFFColumn1,Column2,Column3,Column4,Column5,Column6,Column7,Column8,Column9\n" +
                    "出退勤日期,姓名：江婉茜,,到勤時間,退勤時間,差假狀況,,假別,狀況註記\n" +
-                   "115/04/01,職  稱：廠商駐點,,08:01,18:11,,,,,\n" +
+                   "115/04/01,職 稱：廠商駐點,,08:01,18:11,,,,,\n" +
                    "115/04/08,,,12:40,18:03,115/04/08 08:30 - 115/04/08 12:30,,喪假(祖父),";
       fileName = `駐點單位範本_${selectedMonth}.csv`;
     }
@@ -65,7 +65,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       .filter(cols => cols.length > 0 && cols.some(c => c !== ''));
   };
 
-  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
+  // 運行時動態載入 CDN SheetJS 庫的方法
   const loadSheetJS = () => {
     return new Promise((resolve, reject) => {
       if (window.XLSX) {
@@ -78,6 +78,32 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       script.onerror = (err) => reject(new Error("無法自動加載 Excel 解析套件，請檢查網路連線。"));
       document.body.appendChild(script);
     });
+  };
+
+  // 輔助預處理工具：時間轉分鐘
+  const timeToMinutes = (timeStr) => {
+    if (!timeStr || !timeStr.includes(':')) return 0;
+    const parts = timeStr.split(':');
+    return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+  };
+
+  // 輔助預處理工具：精算扣除中午休息(12:30-13:30)的有效請假時數
+  const getEffectiveLeaveHours = (startStr, endStr) => {
+    const startM = timeToMinutes(startStr);
+    const endM = timeToMinutes(endStr);
+    if (endM <= startM) return 0;
+
+    let totalMinutes = endM - startM;
+    const breakStart = 12 * 60 + 30; 
+    const breakEnd = 13 * 60 + 30;   
+
+    const overlapStart = Math.max(startM, breakStart);
+    const overlapEnd = Math.min(endM, breakEnd);
+
+    if (overlapEnd > overlapStart) {
+      totalMinutes -= (overlapEnd - overlapStart);
+    }
+    return Math.ceil(totalMinutes / 60);
   };
 
   const handleFileChange = async (e) => {
@@ -154,7 +180,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       }
 
       // ----------------------------------------------------
-      // 【分流 C】考勤表 C (駐點單位 - 支援多頁籤、請整天假欄位左移相容)
+      // 【分流 C】考勤表 C (駐點單位 - 支援多頁籤與寫入時正則清洗預處理)
       // ----------------------------------------------------
       else if (importType === 'C') {
         const XLSXLib = await loadSheetJS();
@@ -165,7 +191,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
         let minFileDateMs = Infinity;
         let maxFileDateMs = -Infinity;
 
-        // 🔄 遞迴遍歷 Excel 內所有的工作表頁籤 (實現單一檔案多人一鍵匯入)
+        // 🔄 遞迴遍歷 Excel 內所有的工作表頁籤
         for (const sheetName of workbook.SheetNames) {
           const worksheet = workbook.Sheets[sheetName];
           const sheetRows = XLSXLib.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
@@ -176,7 +202,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             const cols = sheetRows[i];
             if (!cols || cols.length < 2) continue;
 
-            // 姓名固定在包含 '名：' 的 B 欄位
             const nameField = cols[1] ? cols[1].toString() : "";
             if (nameField.includes('名：')) {
               currentEmployeeName = sanitizeName(nameField.split('名：')[1]);
@@ -184,27 +209,22 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             }
 
             const rawDate = cols[0] ? cols[0].toString().trim() : "";
-            // 驗證 A 欄是否為民國日期格式 (例如 115/04/01)
             if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
               if (!currentEmployeeName) continue; 
 
-              // 原始標準欄位定義位置
               let checkIn = cols[2] ? cols[2].toString().trim() : "";   // C欄
               let checkOut = cols[3] ? cols[3].toString().trim() : "";  // D欄
               let leaveInfo = cols[4] ? cols[4].toString().trim() : ""; // E欄
               let leaveType = cols[5] ? cols[5].toString().trim() : ""; // F欄
 
-              // 💡 核心優化：動態特徵防禦！判斷是否因為請整天假導致「請假區間和假別移到 C 欄和 D 欄」
-              // 特徵：如果 C 欄字串包含日期連接符號 ' - '，且 D 欄字串長度大於 0 且不包含時間冒號 ':'
+              // 動態特徵防禦：自動歸位位移現象
               if (checkIn.includes(' - ') || (checkIn.includes('/') && checkIn.length > 10)) {
-                // 判定發生整天請假之欄位左移位移現象，執行全自動歸位校正
-                leaveInfo = checkIn;   // 將 C 欄的請假區間導回給 leaveInfo
-                leaveType = checkOut;  // 將 D 欄的假別導回給 leaveType
-                checkIn = "";          // 清空被誤填的上班時間
-                checkOut = "";         // 清空被誤填的下班時間
+                leaveInfo = checkIn;  
+                leaveType = checkOut; 
+                checkIn = "";          
+                checkOut = "";         
               }
 
-              // 🎯 需求 2：當日刷卡紀錄皆為空 且 沒有任何請假紀錄的資料列則跳過不存入系統，避免存入不需要的垃圾空白資料
               if (!checkIn && !checkOut && !leaveInfo && !leaveType) {
                 continue;
               }
@@ -219,6 +239,39 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
               importedNamesInFile.add(currentEmployeeName);
 
+              // 🎯 核心預處理洗滌引擎：入庫前進行正則拆解
+              let parsedLeaveType = "";
+              let parsedLeaveHours = 0;
+              let isLeave = false;
+
+              const leaveTargetString = `${leaveType || ''} ${leaveInfo || ''}`;
+              const leaveMatch = leaveTargetString.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
+              
+              if (leaveMatch) {
+                parsedLeaveType = leaveMatch[1];
+                isLeave = true;
+
+                // 時數動態推導
+                if (leaveInfo && typeof leaveInfo === 'string') {
+                  const formattedRange = leaveInfo.replace(/-/g, '~').replace(/\s+/g, '');
+                  
+                  // 檢查是否含有具體時間區段 (如 08:30~17:30)
+                  const timeMatch = formattedRange.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/);
+                  if (timeMatch && timeMatch[1] && timeMatch[2]) {
+                    parsedLeaveHours = getEffectiveLeaveHours(timeMatch[1], timeMatch[2]);
+                  } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
+                    parsedLeaveHours = 4;
+                  } else if (formattedRange.includes('8小時') || formattedRange.includes('全天')) {
+                    parsedLeaveHours = 8;
+                  }
+                }
+
+                // 補底防護：若有請假事實卻無法切出特定時數，依法核定為標準單日 8 小時
+                if (parsedLeaveHours === 0) {
+                  parsedLeaveHours = 8;
+                }
+              }
+
               const docId = `${selectedProject}_${currentEmployeeName}_${dateStr}`;
               const docRef = doc(attendanceRef, docId);
 
@@ -229,6 +282,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 continue;
               }
 
+              // 寫入帶有精算完畢純數字欄位的乾淨物件
               await setDoc(docRef, {
                 projectId: selectedProject,
                 month: dateStr.substring(0, 7), 
@@ -238,7 +292,11 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 checkOut,
                 leaveRangeInfo: leaveInfo, 
                 leaveType,
-                recordType: 'C_TRACK'
+                recordType: 'C_TRACK',
+                // 🚀 新增清洗預處理欄位
+                isLeave: isLeave,
+                parsedLeaveType: parsedLeaveType,
+                parsedLeaveHours: parsedLeaveHours
               }, { merge: true });
 
               successCount++;
@@ -246,7 +304,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
         }
 
-        // 🎯 需求 1 的後半段：比對人事模組歷程，揪出「缺了誰」與「缺少哪段區間」
+        // 比對人事模組歷程，揪出「缺了誰」
         let warningMessage = "";
         try {
           const hrRef = collection(db, 'artifacts', 'gov-project-saas', 'public', 'data', 'personnel');
@@ -307,7 +365,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           console.error("比對人事模組空缺時發生錯誤:", hrError);
         }
 
-        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄並自動相容整天請假位移。${warningMessage}`);
+        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功清洗並預處理 ${successCount} 筆明細（已直接將假別與時數轉為純數字入庫），安全保護了 ${skippedCount} 筆人工維護紀錄。${warningMessage}`);
       }
 
       setUploadStatus('success');
@@ -315,7 +373,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       console.error("考勤匯入發生錯誤:", error);
       setUploadStatus('error');
       setStatusMessage(error.message || '檔案解析或上傳失敗，請檢查欄位格式。');
-    } finally {
+    } finaly: {
       setIsUploading(false);
       if (e && e.target) {
         e.target.value = '';
