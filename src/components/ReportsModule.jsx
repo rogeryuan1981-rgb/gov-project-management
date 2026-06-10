@@ -17,7 +17,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
   const [isLoadingExcel, setIsLoadingExcel] = useState(false);
 
-  // 🎯 全新防呆卡控嚴格校對開關狀態 (預設關閉)
+  // 全新防呆卡控嚴格校對開關狀態 (預設關閉)
   const [isStrictValidation, setIsStrictValidation] = useState(false);
 
   // 1. 人員考勤表卡片專用過濾狀態（月份 ＋ 單位）
@@ -150,12 +150,15 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', '選定月份內之計畫名冊中查無人員建檔。');
       }
 
-      // 🎯 嚴格校對防線：開啟時，若發現有請假但時數為0或未維護者，禁止產出
+      // 🎯 升級版嚴格校對防線：開啟時，只要有請假事實 (isLeave)，時數為 0 或 請假區間 (leaveRangeInfo) 為空者，一律禁止產出
       if (isStrictValidation) {
-        const hasInvalidRecord = importedRecords.some(r => r.isLeave === true && (!r.parsedLeaveHours || r.parsedLeaveHours === 0));
+        const hasInvalidRecord = importedRecords.some(r => 
+          r.isLeave === true && 
+          (!r.parsedLeaveHours || r.parsedLeaveHours === 0 || !r.leaveRangeInfo || r.leaveRangeInfo.trim() === '')
+        );
         if (hasInvalidRecord) {
           setIsLoadingAttendance(false);
-          return showMessage('error', '❌ 產出失敗！部分同仁有請假紀錄但未維護時數，請補齊資料後再行導出。');
+          return showMessage('error', '❌ 產出失敗！偵測到部分同仁有請假紀錄，但請假「時數」或「明確時間區間」未確實維護，請補齊資料後再行導出。');
         }
       }
 
@@ -169,8 +172,8 @@ export default function ReportsModule({ user, selectedProject }) {
 
         let totalDutyDays = 0;
         let totalActualWorkDays = 0;
-        let totalAbsentCount = 0; // 改為存放總曠職天數
-        let totalAbsentHours = 0; // 累計總曠職小時數
+        let totalAbsentCount = 0; 
+        let totalAbsentHours = 0; 
 
         let leaveHoursSummary = {}; 
         let totalLeaveDeduction = 0;
@@ -222,7 +225,6 @@ export default function ReportsModule({ user, selectedProject }) {
             checkIn = r.checkIn || "";
             checkOut = r.checkOut || "";
             leaveRangeInfo = r.leaveRangeInfo || "";
-            // 直接抓取資料庫正規化欄位
             isLeave = r.isLeave || false;
             parsedLeaveType = r.parsedLeaveType || "";
             parsedLeaveHours = parseInt(r.parsedLeaveHours, 10) || 0;
@@ -237,32 +239,29 @@ export default function ReportsModule({ user, selectedProject }) {
           } else {
             totalDutyDays++; 
             
-            // 🎯 出勤與精準最小曠職時數判定引擎 (無遲到早退，只有曠職)
             let dailyWorkMinutes = 0;
             if (checkIn && checkOut) {
               dailyWorkMinutes = getEffectiveMinutes(checkIn, checkOut);
             }
 
-            // 換算成總有效工時 (打卡分鐘數 + 請假換算分鐘數)
+            // 換算總工時 (刷卡分鐘數 + 請假核銷分鐘數)
             const totalEffectiveMinutes = dailyWorkMinutes + (parsedLeaveHours * 60);
 
             if (isLeave) {
-              // 處理假別展示文字呈現：未寫請假時間區間又不符上班時間就秀假別與時數
               if (leaveRangeInfo) {
                 const formattedRange = leaveRangeInfo.replace(/-/g, '~').replace(/\s+/g, '');
                 const datePattern = new RegExp(`${year}[-/]${String(month).padStart(2, '0')}[-/]${String(d).padStart(2, '0')}|${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`, 'g');
                 const cleanRange = formattedRange.replace(datePattern, '').replace(new RegExp(parsedLeaveType, 'g'), '');
                 cleanLeaveRangeText = `${parsedLeaveType} ${cleanRange}`;
               } else {
+                // 防呆未生效下，沒寫時間區間則只秀假別與時數
                 cleanLeaveRangeText = `${parsedLeaveType} (${parsedLeaveHours}小時)`;
               }
 
-              // 累計各假別時數至上方彙總
               if (parsedLeaveType) {
                 if (!leaveHoursSummary[parsedLeaveType]) leaveHoursSummary[parsedLeaveType] = 0;
                 leaveHoursSummary[parsedLeaveType] += parsedLeaveHours;
 
-                // 勞基法請假扣款計算
                 const matchedReq = requirements.find(r => r.unit === currentDayUnit && r.position === currentDayRole);
                 const approvedSalary = matchedReq && matchedReq.approvedSalary ? parseFloat(matchedReq.approvedSalary) : 0;
                 if (approvedSalary > 0) {
@@ -278,12 +277,11 @@ export default function ReportsModule({ user, selectedProject }) {
             // 曠職判定：當日總工時不滿 8 小時 (480 分鐘)
             if (totalEffectiveMinutes < 480) {
               rowBgStyle = "background-color: #fef2f2;";
-              // 依照可以計算最小的曠職時數來計算，計算完後無條件進入到整數位
               const missingMinutes = 480 - totalEffectiveMinutes;
               const currentDayAbsentHours = Math.ceil(missingMinutes / 60);
               
               totalAbsentHours += currentDayAbsentHours;
-              totalAbsentCount++; // 記錄有曠職發生之天數
+              totalAbsentCount++; 
             } else {
               totalActualWorkDays++;
             }
@@ -759,7 +757,7 @@ export default function ReportsModule({ user, selectedProject }) {
     }
   };
 
-  // ================= 功能：3. 人員請假彙總表 (Excel 轉出引擎) =================
+  // ================= 功能：3. 人員請假彙總表 (Excel) =================
   const exportLeaveSummaryExcel = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!excelYearMonth) return showMessage('error', '請選擇請假結算月份。');
@@ -786,12 +784,15 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', '選定月份內之計畫名冊中查無人員。');
       }
 
-      // 🎯 嚴格校對防線：開啟時，若發現有請假紀錄但時數未維護（為0）者，禁止產出
+      // 🎯 升級版嚴格校對防線：開啟時，只要有請假事實 (isLeave)，時數為 0 或 請假區間 (leaveRangeInfo) 為空者，一律禁止產出
       if (isStrictValidation) {
-        const hasInvalidRecord = importedRecords.some(r => r.isLeave === true && (!r.parsedLeaveHours || r.parsedLeaveHours === 0));
+        const hasInvalidRecord = importedRecords.some(r => 
+          r.isLeave === true && 
+          (!r.parsedLeaveHours || r.parsedLeaveHours === 0 || !r.leaveRangeInfo || r.leaveRangeInfo.trim() === '')
+        );
         if (hasInvalidRecord) {
           setIsLoadingExcel(false);
-          return showMessage('error', '❌ 產出失敗！部分同仁有請假紀錄但時數未確實填寫，請補齊後再行導出。');
+          return showMessage('error', '❌ 產出失敗！偵測到部分同仁有請假紀錄，但請假「時數」或「明確時間區間」未確實填寫，請補齊後再行導出。');
         }
       }
 
@@ -804,14 +805,11 @@ export default function ReportsModule({ user, selectedProject }) {
           .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
         let localLeaveSummary = {};
-
-        // 撈出該人員的所有打卡紀錄
         const personRecords = importedRecords.filter(r => r.name === person.name);
 
         personRecords.forEach(r => {
           const dateStr = r.date;
           if (!dateStr || !dateStr.startsWith(excelYearMonth)) return;
-
           if (person.hireDate && dateStr < person.hireDate) return;
 
           let currentDayUnit = person.unit || '未指定單位';
@@ -820,11 +818,8 @@ export default function ReportsModule({ user, selectedProject }) {
             if (matchedIdx !== -1) currentDayUnit = sortedHistory[matchedIdx].unit;
           }
 
-          if (excelSelectedUnit !== 'ALL' && currentDayUnit !== excelSelectedUnit) {
-            return;
-          }
+          if (excelSelectedUnit !== 'ALL' && currentDayUnit !== excelSelectedUnit) return;
 
-          // 直接讀取正規化預處理欄位
           if (r.isLeave && r.parsedLeaveType) {
             const hours = parseInt(r.parsedLeaveHours, 10) || 0;
             if (!localLeaveSummary[r.parsedLeaveType]) {
@@ -835,7 +830,6 @@ export default function ReportsModule({ user, selectedProject }) {
         });
 
         Object.entries(localLeaveSummary).forEach(([lType, hours]) => {
-          // 不管防呆有無生效，都只收集有累計大於 0 的紀錄（若時數為 0 則不列入 Excel 列中）
           if (hours > 0) {
             excelRows.push({
               name: person.name,
@@ -908,7 +902,7 @@ export default function ReportsModule({ user, selectedProject }) {
     } catch (err) {
       console.error("轉出 Excel 失敗:", err);
       showMessage('error', '轉出 Excel 發生錯誤，請重新確認資料格式。');
-    } finally {
+    } finaly: {
       setIsLoadingExcel(false);
     }
   };
@@ -933,7 +927,6 @@ export default function ReportsModule({ user, selectedProject }) {
           <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
         </div>
         
-        {/* 🎯 測試與過渡期間嚴格卡控開關 UI (精美 Checkbox 卡片) */}
         <div className="flex items-center space-x-3 p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shrink-0 select-none">
           <input 
             type="checkbox" 
@@ -944,7 +937,7 @@ export default function ReportsModule({ user, selectedProject }) {
           />
           <label htmlFor="strict_validate" className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer flex flex-col">
             <span>開啟請假時數與區間嚴格校對防呆</span>
-            <span className="text-[10px] text-slate-400 font-normal mt-0.5">開啟後，時數未確實填寫將全面禁止產出報表</span>
+            <span className="text-[10px] text-slate-400 font-normal mt-0.5">開啟後，時數或時間區間未確實填寫將全面禁止產出報表</span>
           </label>
         </div>
       </div>
