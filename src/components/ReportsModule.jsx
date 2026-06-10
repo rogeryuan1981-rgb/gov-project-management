@@ -16,14 +16,14 @@ export default function ReportsModule({ user, selectedProject }) {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
   
-  // 新增：區塊 3 專用獨立讀取狀態
+  // 區塊 3 專用獨立讀取狀態
   const [isLoadingExcel, setIsLoadingExcel] = useState(false);
 
-  // 1. 人員考勤表專用過濾狀態（月份 ＋ 單位）
+  // 1. 人員考勤表卡片專用過濾狀態（月份 ＋ 單位）
   const [attendanceYearMonth, setAttendanceYearMonth] = useState(new Date().toISOString().substring(0, 7));
   const [attendanceSelectedUnit, setAttendanceSelectedUnit] = useState('專案辦公室');
 
-  // 2. 異動與空缺紀錄表專用統計區間狀態
+  // 2. 異動與空缺紀錄表卡片專用統計區間狀態
   const currentYear = new Date().getFullYear();
   const getLocalTodayStr = () => {
     const d = new Date();
@@ -33,7 +33,7 @@ export default function ReportsModule({ user, selectedProject }) {
   const [startDate, setStartDate] = useState(`${currentYear}-01-01`);
   const [endDate, setEndDate] = useState(getLocalTodayStr());
 
-  // 3. 新增：區塊 3 人員請假彙總表(excel) 專用獨立過濾狀態（完全不共用）
+  // 3. 人員請假彙總表(excel)卡片專用獨立過濾狀態（完全不共用）
   const [excelYearMonth, setExcelYearMonth] = useState(new Date().toISOString().substring(0, 7));
   const [excelSelectedUnit, setExcelSelectedUnit] = useState('專案辦公室');
 
@@ -536,7 +536,7 @@ export default function ReportsModule({ user, selectedProject }) {
         </head>
         <body>
           <div class="no-print-bar">
-            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 末頁扣薪彙總表</button>
+            <button class="print-btn" onclick="window.print()">🖨️ 啟動列印 / 儲存【${attendanceSelectedUnit}】共 ${printedTargetCount} 份憑證 ＋ 放末頁扣薪彙總表</button>
           </div>
           ${pdfPagesHtml}
         </body>
@@ -795,14 +795,13 @@ export default function ReportsModule({ user, selectedProject }) {
     }
   };
 
-  // ================= 功能：3. 新增人員請假彙總表 (Excel 轉出引擎) =================
+  // ================= 功能：3. 人員請假彙總表 (Excel 轉出引擎) =================
   const exportLeaveSummaryExcel = async () => {
     if (!isDataLoaded) return showMessage('error', '資料載入中，請稍候。');
     if (!excelYearMonth) return showMessage('error', '請選擇請假結算月份。');
 
     setIsLoadingExcel(true);
     try {
-      // A. 抓取專案行事曆與該月所有打卡及請假原始資料
       const calendarDocRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'calendars', selectedProject);
       const calendarSnap = await getDoc(calendarDocRef);
       const currentOffDays = calendarSnap.exists() ? (calendarSnap.data().offDays || {}) : {};
@@ -816,7 +815,6 @@ export default function ReportsModule({ user, selectedProject }) {
       const month = parseInt(excelYearMonth.split('-')[1], 10);
       const daysInMonth = new Date(year, month, 0).getDate();
 
-      // B. 篩選該月份內處於合約期內之人員
       const activePersonnelInMonth = personnel.filter(p => {
         if (p.hireDate && p.hireDate > `${year}-${String(month).padStart(2, '0')}-${daysInMonth}`) return false;
         if (p.contractEnd && p.contractEnd < `${year}-${String(month).padStart(2, '0')}-01`) return false;
@@ -828,17 +826,14 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', '選定月份內之計畫名冊中查無人員。');
       }
 
-      // 建立主要數據表格陣列
       let excelRows = [];
 
-      // C. 逐日逐人精算並填入
       activePersonnelInMonth.forEach(person => {
         const rawHistoryList = person.assignmentHistory || person.history || [];
         const sortedHistory = [...rawHistoryList]
           .filter(h => h.unit && h.startDate)
           .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
-        // 追蹤計算該員當月所有假別的時數大字典
         let localLeaveSummary = {};
 
         for (let d = 1; d <= daysInMonth; d++) {
@@ -853,12 +848,10 @@ export default function ReportsModule({ user, selectedProject }) {
             if (matchedIdx !== -1) currentDayUnit = sortedHistory[matchedIdx].unit;
           }
 
-          // 核心獨立過濾：若非全選，且與目前選定單位不符則直接跳過
           if (excelSelectedUnit !== 'ALL' && currentDayUnit !== excelSelectedUnit) {
             continue;
           }
 
-          // 撈取打卡記錄
           const dayRecords = importedRecords.filter(r => r.name === person.name && r.date === dateStr);
           let leaveRangeInfo = ""; let leaveType = "";
 
@@ -868,7 +861,6 @@ export default function ReportsModule({ user, selectedProject }) {
             leaveType = validLeave ? validLeave.leaveType : (dayRecords[0]?.leaveType || "");
           }
 
-          // 🎯 雙重防線提取假別名稱
           let normalizedLeaveType = "";
           const leaveTargetString = `${leaveType || ''} ${leaveRangeInfo || ''}`;
           const leaveMatch = leaveTargetString.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
@@ -902,13 +894,12 @@ export default function ReportsModule({ user, selectedProject }) {
           }
         }
 
-        // D. 將該同仁有具體請假時數的紀錄轉化為 Excel 列
         Object.entries(localLeaveSummary).forEach(([lType, hours]) => {
           if (hours > 0) {
             excelRows.push({
               name: person.name,
               type: lType,
-              hrs: `${hours} 小時`
+              hrs: hours // 🎯 修正關鍵：移除原本的 " 小時" 字串，直接輸出純數值
             });
           }
         });
@@ -919,7 +910,6 @@ export default function ReportsModule({ user, selectedProject }) {
         return showMessage('error', `⚠️ 於選定月份與條件下，該群組內無 any 人員請假紀錄。`);
       }
 
-      // E. 組裝包含「查詢日期區間表頭」之純前端 Excel XML/HTML 格式字串
       const displayUnitFilename = excelSelectedUnit === 'ALL' ? '全部單位' : excelSelectedUnit;
       const rangeHeaderStr = `查詢日期區間：${excelYearMonth}-01 至 ${excelYearMonth}-${daysInMonth}`;
 
@@ -953,7 +943,7 @@ export default function ReportsModule({ user, selectedProject }) {
           <tr>
             <td class="data-cell font-bold" style="text-align: left; padding: 4px;">${r.name}</td>
             <td class="data-cell text-center" style="color: #4f46e5; font-weight: bold;">${r.type}</td>
-            <td class="data-cell text-center" style="font-weight: bold;">${r.hrs}</td>
+            <td class="data-cell text-center" style="font-weight: bold;" x:num>${r.hrs}</td>
           </tr>
         `;
       });
@@ -964,7 +954,6 @@ export default function ReportsModule({ user, selectedProject }) {
         </html>
       `;
 
-      // F. 轉為 Blob 並觸發實體瀏覽器下載
       const blob = new Blob([tableHtml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -974,7 +963,7 @@ export default function ReportsModule({ user, selectedProject }) {
       link.click();
       document.body.removeChild(link);
 
-      showMessage('success', `✅ 已成功匯出 Excel 請假時數彙總表。`);
+      showMessage('success', `✅ 已成功匯出純數字版 Excel 請假時數彙總表。`);
     } catch (err) {
       console.error("轉出 Excel 失敗:", err);
       showMessage('error', '轉出 Excel 發生錯誤，請重新確認資料格式。');
@@ -1002,7 +991,7 @@ export default function ReportsModule({ user, selectedProject }) {
         <p className="text-sm text-slate-500 mt-2">選定專屬之統計參數。系統將實時比對出勤與動態異動歷程，產出符合政府專案核銷標準之法定附件憑證。</p>
       </div>
 
-      {/* 區塊分流：改為 grid-cols-1 md:grid-cols-3 以完美呈現 3 欄並排卡片佈局 */}
+      {/* 區塊分流：grid-cols-1 md:grid-cols-3 三欄並排卡片佈局 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
         
         {/* 1. 人員考勤表卡片 */}
@@ -1062,7 +1051,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 type="date" 
                 value={startDate} 
                 onChange={(e) => setStartDate(e.target.value)} 
-                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
               />
             </div>
             
@@ -1074,7 +1063,7 @@ export default function ReportsModule({ user, selectedProject }) {
                 type="date" 
                 value={endDate} 
                 onChange={(e) => setEndDate(e.target.value)} 
-                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
+                className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer" 
               />
             </div>
           </div>
@@ -1084,7 +1073,7 @@ export default function ReportsModule({ user, selectedProject }) {
           </button>
         </div>
 
-        {/* 3. 新增：人員請假彙總表(excel) 卡片結構 */}
+        {/* 3. 人員請假彙總表(excel) 卡片結構 */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-emerald-100 dark:border-emerald-500/20 shadow-sm flex flex-col group hover:border-emerald-500 transition-colors relative overflow-hidden h-full">
           <div className="absolute top-0 right-0 bg-emerald-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">試算導出</div>
           <div className="p-4 bg-emerald-50 dark:bg-emerald-500/10 rounded-2xl w-fit mb-4"><FileSpreadsheet className="text-emerald-600" size={28} /></div>
