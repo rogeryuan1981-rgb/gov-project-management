@@ -184,6 +184,47 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     setStatusMessage('');
 
     try {
+      // ----------------------------------------------------
+      // 【優先步驟】從後台載入專案 personnel 主檔，計算該月份在職交集
+      // ----------------------------------------------------
+      const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
+      const hrSnap = await getDocs(hrRef);
+      const activePersonnelInProject = hrSnap.docs
+        .map(doc => doc.data())
+        .filter(p => p.projectId === selectedProject);
+
+      // 計算當前 UI 選擇月份的第一天與最後一天時間戳 (ex. "2026-07-01" ~ "2026-07-31")
+      const yearStr = selectedMonth.split('-')[0];
+      const monthStr = selectedMonth.split('-')[1];
+      const monthStartStr = `${selectedMonth}-01`;
+      const monthEndStr = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10), 0).toISOString().split('T')[0];
+      
+      const monthStartMs = new Date(monthStartStr).getTime();
+      const monthEndMs = new Date(monthEndStr).getTime();
+
+      // 建立在職人員與過濾原因的快速比對 Map
+      // key: 員工姓名, value: true (代表該月至少有一天在職)
+      const validPersonnelMap = new Map();
+      // 用於統計過濾提示的清單
+      const filteredOutDetails = []; 
+
+      activePersonnelInProject.forEach(p => {
+        if (!p.name) return;
+        const contractStartMs = p.contractStart ? new Date(p.contractStart).getTime() : 0;
+        const contractEndMs = p.contractEnd ? new Date(p.contractEnd).getTime() : Infinity;
+
+        // 在職交集數學公式：Max(到職日, 月初) <= Min(離職日, 月末)
+        const realStartMs = Math.max(contractStartMs, monthStartMs);
+        const realEndMs = Math.min(contractEndMs, monthEndMs);
+
+        if (realStartMs <= realEndMs) {
+          validPersonnelMap.set(p.name, true);
+        } else {
+          // 留存過濾紀錄原因一：人事檔有此人，但該月份不在職 (未到職或已離職)
+          validPersonnelMap.set(p.name, { reason: 'not_active_in_month', start: p.contractStart, end: p.contractEnd || '至今' });
+        }
+      });
+
       const attendanceRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       let successCount = 0;
       let skippedCount = 0;
@@ -195,6 +236,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
       const errorLogs = [];
       const batchRecords = [];
+      const ignoredNamesSet = new Set(); // 記錄本檔案中因不在職而被忽略的名單
 
       // ----------------------------------------------------
       // 【分流 A】新版專案辦公室 - 欄位重配 (A=姓名, B=日期, D=上班, F=下班, K=假別前兩字, I=請假區間)
@@ -209,20 +251,33 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           for (let i = 1; i < sheetRows.length; i++) {
             const cols = sheetRows[i];
             if (!cols || cols.length === 0) continue;
-            const rowNum = i + 1; // 實體 Excel 行數
+            const rowNum = i + 1;
 
-            const name = sanitizeName(cols[0]); // A欄 姓名 (第 1 欄)
-            const rawDate = cols[1];            // B欄 日期 (第 2 欄)
-            const rawCheckIn = cols[3] ? cols[3].toString().trim() : "";   // D欄 上班 (第 4 欄)
-            const rawCheckOut = cols[5] ? cols[5].toString().trim() : "";  // F欄 下班 (第 6 欄)
-            let rawLeaveRangeField = cols[8] ? cols[8].toString().trim() : ""; // I欄 請假時間區間 (第 9 欄)
-            let rawLeaveTypeField = cols[10] ? cols[10].toString().trim() : ""; // K欄 請假假別 (第 11 欄)
+            const name = sanitizeName(cols[0]); // A欄 姓名
+            const rawDate = cols[1];            // B欄 日期
+            const rawCheckIn = cols[3] ? cols[3].toString().trim() : "";   // D欄 上班
+            const rawCheckOut = cols[5] ? cols[5].toString().trim() : "";  // F欄 下班
+            let rawLeaveRangeField = cols[8] ? cols[8].toString().trim() : ""; // I欄 請假時間區間
+            let rawLeaveTypeField = cols[10] ? cols[10].toString().trim() : ""; // K欄 請假假別
 
             // 🎯 垃圾資料行過濾防線
             if (!rawCheckIn && !rawCheckOut && !rawLeaveTypeField && !rawLeaveRangeField) continue;
 
             const dateStr = formatExcelDate(rawDate, XLSXLib);
             if (!name || !dateStr || !dateStr.startsWith(selectedMonth)) continue;
+
+            // 🛑 【方案 B 核心卡控】優先檢查該人員是否具有該月有效在職身分
+            const hrCheck = validPersonnelMap.get(name);
+            if (hrCheck !== true) {
+              if (!hrCheck) {
+                // 情況一：人事主檔完全找不到這個名字
+                ignoredNamesSet.add(`${name} (人事檔無此人)`);
+              } else if (hrCheck.reason === 'not_active_in_month') {
+                // 情況二：主檔有名字，但該月不在職 (未到職或已離職)
+                ignoredNamesSet.add(`${name} (在職區間不符: ${hrCheck.start} ~ ${hrCheck.end})`);
+              }
+              continue; // 方案 B：直接優雅跳過此列，不塞入 errorLogs，不寫入資料庫
+            }
 
             // 實施自動化排除清洗
             const cleanCheckIn = cleanTimeFormat(rawCheckIn);
@@ -241,7 +296,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             let isLeave = false;
             let leaveRangeInfo = "";
 
-            // 規則調整：精準擷取 K 欄前兩個字作為假別
             const shortLeaveType = rawLeaveTypeField.substring(0, 2);
             const isLeaveMatch = shortLeaveType.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
 
@@ -249,7 +303,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               parsedLeaveType = isLeaveMatch[1];
               isLeave = true;
 
-              // 將 I 欄的所有形式的分隔符號統一轉換為標準的波浪號 ~ 進行清洗
               const formattedRangeText = rawLeaveRangeField.replace(/-/g, '~').replace(/\s+/g, '');
               const timeMatch = formattedRangeText.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/);
 
@@ -261,7 +314,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 parsedLeaveHours = 8;
                 leaveRangeInfo = "08:30 ~ 17:30";
               } else {
-                // 如果無時間區間但包含其餘描述，嘗試擷取小時數字兜底
                 hasTimeDeductionWarning = true;
                 const hourMatch = formattedRangeText.match(/(\d+(\.\d+)?)/);
                 if (hourMatch && hourMatch[1]) {
@@ -271,7 +323,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 }
               }
 
-              // 🛑 驗證攔截：有請假事實但時數解析失敗或漏維護（時數小於等於 0）
               if (parsedLeaveHours <= 0) {
                 errorLogs.push(`第 ${rowNum} 行：【${name}】在 ${dateStr} 登錄了 [${parsedLeaveType}]，但 [請假時間區間] 解析後為 0 小時或不合規。`);
               }
@@ -296,12 +347,10 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
         }
 
-        // 🛑 如果第一階段有任何一列發生攔截報報錯，拒絕存入
         if (errorLogs.length > 0) {
           throw new Error(`檔案中包含無法自動校正的資料異常，已全面卡控拒絕寫入資料庫：\n\n` + errorLogs.join('\n'));
         }
 
-        // 分批（每 500 筆一包）安全寫入 Firestore (兼具人工特赦檢查)
         let batch = writeBatch(db);
         let operationCount = 0;
 
@@ -328,7 +377,9 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
         }
 
         let hintNotice = hasTimeDeductionWarning ? `\n\n【💡 提示：本月含有非全天假/小時假紀錄】\n系統已依據 K 欄假別與 I 欄時間區間自動清洗並完成跨中午扣除工時精算。` : "";
-        setStatusMessage(`[新版A表 - 專案辦公室] 匯入成功！已完成 ${successCount} 筆時間與時數正規化清洗入庫，安全特赦隔離保護了 ${skippedCount} 筆人工維護紀錄。${hintNotice}`);
+        let ignoreNotice = ignoredNamesSet.size > 0 ? `\n\n【⚠️ 方案 B 人事過濾提示】\n下列同仁因[查無此人]或[該月無在職歷程]，系統已自動忽略其數據：\n` + Array.from(ignoredNamesSet).join('\n') : "";
+        
+        setStatusMessage(`[新版A表 - 專案辦公室] 匯入成功！已完成 ${successCount} 筆在職人員時間與時數清洗入庫，安全特赦隔離保護了 ${skippedCount} 筆人工維護紀錄。${hintNotice}${ignoreNotice}`);
       }
 
       // ----------------------------------------------------
@@ -358,6 +409,17 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             const rawDate = cols[0] ? cols[0].toString().trim() : "";
             if (rawDate && /^\d{2,3}\/\d{2}\/\d{2}$/.test(rawDate)) {
               if (!currentEmployeeName) continue; 
+
+              // 🛑 【方案 B 核心卡控】駐點人員同樣於此執行優先在職交集判定
+              const hrCheck = validPersonnelMap.get(currentEmployeeName);
+              if (hrCheck !== true) {
+                if (!hrCheck) {
+                  ignoredNamesSet.add(`${currentEmployeeName} (人事檔無此人)`);
+                } else if (hrCheck.reason === 'not_active_in_month') {
+                  ignoredNamesSet.add(`${currentEmployeeName} (在職區間不符: ${hrCheck.start} ~ ${hrCheck.end})`);
+                }
+                continue; // 方案 B：直接忽略，不存入系統
+              }
 
               let checkIn = cols[2] ? cols[2].toString().trim() : "";   
               let checkOut = cols[3] ? cols[3].toString().trim() : "";  
@@ -483,11 +545,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
         let warningMessage = "";
         try {
-          const hrRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'personnel');
-          const hrSnap = await getDocs(hrRef);
-          const projectPersonnel = hrSnap.docs
-            .map(doc => doc.data())
-            .filter(p => p.projectId === selectedProject && p.isResident === true);
+          const projectPersonnel = activePersonnelInProject.filter(p => p.isResident === true);
 
           const missingAlerts = [];
           let checkStartStr = `${selectedMonth}-01`;
@@ -534,7 +592,9 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           console.error("比對人事模組空缺時發生錯誤:", hrError);
         }
 
-        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄。${warningMessage}`);
+        let ignoreNotice = ignoredNamesSet.size > 0 ? `\n\n【⚠️ 方案 B 人事過濾提示】\n下列駐點人員因[查無此人]或[該月無在職歷程]，系統已自動忽略其數據：\n` + Array.from(ignoredNamesSet).join('\n') : "";
+
+        setStatusMessage(`[考勤表C - 駐點單位] 匯入完成！成功從多頁籤中解析並補充 ${successCount} 筆在職人員明細，安全隔離保護了 ${skippedCount} 筆人工維護紀錄。${ignoreNotice}${warningMessage}`);
       }
 
       setUploadStatus('success');
