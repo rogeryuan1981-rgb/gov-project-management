@@ -133,7 +133,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       const batchRecords = [];
 
       // ----------------------------------------------------
-      // 【分流 A】新版專案辦公室 - 固定 5 欄 (A, B, E, G, H) 洗滌與攔截
+      // 【分流 A】新版專案辦公室 - 欄位重配 (A=姓名, B=日期, D=上班, F=下班, H=假別前兩字, I=請假區間)
       // ----------------------------------------------------
       if (importType === 'A') {
         let hasTimeDeductionWarning = false;
@@ -149,12 +149,13 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
             const name = sanitizeName(cols[0]); // A欄 姓名
             const rawDate = cols[1];            // B欄 日期
-            const rawCheckIn = cols[4] ? cols[4].toString().trim() : "";   // E欄 上班
-            const rawCheckOut = cols[6] ? cols[6].toString().trim() : "";  // G欄 下班
-            let leaveText = cols[7] ? cols[7].toString().trim() : ""; // H欄 請假
+            const rawCheckIn = cols[3] ? cols[3].toString().trim() : "";   // D欄 上班
+            const rawCheckOut = cols[5] ? cols[5].toString().trim() : "";  // F欄 下班
+            let rawLeaveTypeField = cols[7] ? cols[7].toString().trim() : ""; // H欄 請假假別
+            let rawLeaveRangeField = cols[8] ? cols[8].toString().trim() : ""; // I欄 請假時間區間
 
             // 🎯 垃圾資料行過濾防線
-            if (!rawCheckIn && !rawCheckOut && !leaveText) continue;
+            if (!rawCheckIn && !rawCheckOut && !rawLeaveTypeField && !rawLeaveRangeField) continue;
 
             const dateStr = formatExcelDate(rawDate, XLSXLib);
             if (!name || !dateStr || !dateStr.startsWith(selectedMonth)) continue;
@@ -176,21 +177,31 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             let isLeave = false;
             let leaveRangeInfo = "";
 
-            const leaveMatch = leaveText.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
-            if (leaveMatch) {
-              parsedLeaveType = leaveMatch[1];
+            // 規則調整：精準擷取 H 欄前兩個字作為假別
+            const shortLeaveType = rawLeaveTypeField.substring(0, 2);
+            const isLeaveMatch = shortLeaveType.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
+
+            if (isLeaveMatch) {
+              parsedLeaveType = isLeaveMatch[1];
               isLeave = true;
 
-              if (!cleanCheckIn && !cleanCheckOut && (leaveText.includes('1天') || leaveText.includes('一天') || leaveText.includes('全天'))) {
+              // 將 I 欄的所有形式的分隔符號統一轉換為標準的波浪號 ~ 進行清洗
+              const formattedRangeText = rawLeaveRangeField.replace(/-/g, '~').replace(/\s+/g, '');
+              const timeMatch = formattedRangeText.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/);
+
+              if (timeMatch && timeMatch[1] && timeMatch[2]) {
+                hasTimeDeductionWarning = true;
+                parsedLeaveHours = getEffectiveLeaveHours(timeMatch[1], timeMatch[2]);
+                leaveRangeInfo = `${timeMatch[1]} ~ ${timeMatch[2]}`;
+              } else if (!cleanCheckIn && !cleanCheckOut && (formattedRangeText.includes('1天') || formattedRangeText.includes('一天') || formattedRangeText.includes('全天'))) {
                 parsedLeaveHours = 8;
                 leaveRangeInfo = "08:30 ~ 17:30";
               } else {
+                // 如果無時間區間但包含其餘描述，嘗試擷取小時數字兜底
                 hasTimeDeductionWarning = true;
-                const hourMatch = leaveText.match(/(\d+(\.\d+)?)/);
+                const hourMatch = formattedRangeText.match(/(\d+(\.\d+)?)/);
                 if (hourMatch && hourMatch[1]) {
                   parsedLeaveHours = Math.ceil(parseFloat(hourMatch[1]));
-                } else if (leaveText.includes('半天') || leaveText.includes('4小時')) {
-                  parsedLeaveHours = 4;
                 } else {
                   parsedLeaveHours = 8;
                 }
@@ -198,7 +209,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
               // 🛑 驗證攔截：有請假事實但時數解析失敗或漏維護（時數小於等於 0）
               if (parsedLeaveHours <= 0) {
-                errorLogs.push(`第 ${rowNum} 行：【${name}】在 ${dateStr} 登錄了 [${parsedLeaveType}]，但 [請假時數] 為空或為 0 小時。`);
+                errorLogs.push(`第 ${rowNum} 行：【${name}】在 ${dateStr} 登錄了 [${parsedLeaveType}]，但 [請假時間區間] 解析後為 0 小時或不合規。`);
               }
             }
 
@@ -226,8 +237,10 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           throw new Error(`檔案中包含無法自動校正的資料異常，已全面卡控拒絕寫入資料庫：\n\n` + errorLogs.join('\n'));
         }
 
-        // 批次寫入 Firestore (兼具人工特赦檢查)
-        const batch = writeBatch(db);
+        // 分批（每 500 筆一包）安全寫入 Firestore (兼具人工特赦檢查)
+        let batch = writeBatch(db);
+        let operationCount = 0;
+
         for (const record of batchRecords) {
           const docId = `${selectedProject}_${record.name}_${record.date}`;
           const docRef = doc(attendanceRef, docId);
@@ -238,10 +251,19 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
           batch.set(docRef, record, { merge: true });
           successCount++;
-        }
-        await batch.commit();
+          operationCount++;
 
-        let hintNotice = hasTimeDeductionWarning ? `\n\n【💡 提示：本月含有小時假紀錄】\n系統已自動清洗出假別與數字時數。因來源表無具體區間，明細表若需印出時間，請至維護中心補齊。` : "";
+          if (operationCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            operationCount = 0;
+          }
+        }
+        if (operationCount > 0) {
+          await batch.commit();
+        }
+
+        let hintNotice = hasTimeDeductionWarning ? `\n\n【💡 提示：本月含有非全天假/小時假紀錄】\n系統已依據 I 欄時間區間自動清洗並完成跨中午扣除工時精算。` : "";
         setStatusMessage(`[新版A表 - 專案辦公室] 匯入成功！已完成 ${successCount} 筆時間與時數正規化清洗入庫，安全特赦隔離保護了 ${skippedCount} 筆人工維護紀錄。${hintNotice}`);
       }
 
@@ -270,7 +292,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             }
 
             const rawDate = cols[0] ? cols[0].toString().trim() : "";
-            if (rawDate && /^\d{3}\/\d{2}\/\d{2}$/.test(rawDate)) {
+            if (rawDate && /^\d{2,3}\/\d{2}\/\d{2}$/.test(rawDate)) {
               if (!currentEmployeeName) continue; 
 
               let checkIn = cols[2] ? cols[2].toString().trim() : "";   
@@ -288,12 +310,15 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               if (!checkIn && !checkOut && !leaveInfo && !leaveType) continue;
 
               const dateParts = rawDate.split('/');
-              const westernYear = parseInt(dateParts[0], 10) + 1911;
-              const dateStr = `${westernYear}-${dateParts[1]}-${dateParts[2]}`;
+              let rawYear = parseInt(dateParts[0], 10);
+              const westernYear = rawYear < 1000 ? rawYear + 1911 : rawYear;
+              const dateStr = `${westernYear}-${dateParts[1].padStart(2, '0')}-${dateParts[2].padStart(2, '0')}`;
 
               const currentMs = new Date(dateStr).getTime();
-              if (currentMs < minFileDateMs) minFileDateMs = currentMs;
-              if (currentMs > maxFileDateMs) maxFileDateMs = maxFileDateMs;
+              if (!isNaN(currentMs)) {
+                if (currentMs < minFileDateMs) minFileDateMs = currentMs;
+                if (currentMs > maxFileDateMs) maxFileDateMs = currentMs; // 修正 Bug：不自代入
+              }
 
               importedNamesInFile.add(currentEmployeeName);
 
@@ -322,12 +347,18 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
                 if (leaveInfo && typeof leaveInfo === 'string') {
                   const formattedRange = leaveInfo.replace(/-/g, '~').replace(/\s+/g, '');
                   const timeMatch = formattedRange.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/);
+                  
                   if (timeMatch && timeMatch[1] && timeMatch[2]) {
                     parsedLeaveHours = getEffectiveLeaveHours(timeMatch[1], timeMatch[2]);
-                  } else if (formattedRange.includes('4小時') || formattedRange.includes('半天')) {
-                    parsedLeaveHours = 4;
-                  } else if (formattedRange.includes('8小時') || formattedRange.includes('全天')) {
+                  } else if (formattedRange.includes('8小時') || formattedRange.includes('全天') || formattedRange.includes('1天') || formattedRange.includes('一天')) {
                     parsedLeaveHours = 8;
+                  } else {
+                    const hourMatch = formattedRange.match(/(\d+(\.\d+)?)/);
+                    if (hourMatch && hourMatch[1]) {
+                      parsedLeaveHours = Math.ceil(parseFloat(hourMatch[1]));
+                    } else {
+                      parsedLeaveHours = 8;
+                    }
                   }
                 }
 
@@ -362,7 +393,10 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           throw new Error(`檔案中包含無法自動校正的資料異常，已全面卡控拒絕寫入：\n\n` + errorLogs.join('\n'));
         }
 
-        const batch = writeBatch(db);
+        // 分批（每 500 筆一包）安全寫入 Firestore (兼具人工特赦檢查)
+        let batch = writeBatch(db);
+        let operationCount = 0;
+
         for (const record of batchRecords) {
           const docId = `${selectedProject}_${record.name}_${record.date}`;
           const docRef = doc(attendanceRef, docId);
@@ -373,8 +407,17 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           }
           batch.set(docRef, record, { merge: true });
           successCount++;
+          operationCount++;
+
+          if (operationCount === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            operationCount = 0;
+          }
         }
-        await batch.commit();
+        if (operationCount > 0) {
+          await batch.commit();
+        }
 
         let warningMessage = "";
         try {
