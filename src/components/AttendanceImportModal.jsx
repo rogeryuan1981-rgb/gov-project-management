@@ -17,7 +17,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
   if (!isOpen) return null;
 
-  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編編譯錯誤
+  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
   const loadSheetJS = () => {
     return new Promise((resolve, reject) => {
       if (window.XLSX) {
@@ -123,7 +123,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
     try {
       const attendanceRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
       
-      // 依據當前選定的專案代碼與結算月份進行條件檢索
       const q = query(
         attendanceRef, 
         where('projectId', '==', selectedProject),
@@ -145,7 +144,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       for (const docSnap of querySnapshot.docs) {
         const data = docSnap.data();
         
-        // 人工特赦隔離保護：如果此筆資料已被人工手動調整過，予以隔離保護不抹除
         if (data.isManualMaintained === true) {
           protectedCount++;
           continue;
@@ -155,7 +153,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
         deleteCount++;
         operationCount++;
 
-        // 遵守 Firestore Batch 500筆限制上限防崩潰
         if (operationCount === 500) {
           await batch.commit();
           batch = writeBatch(db);
@@ -173,7 +170,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       console.error("清除考勤資料發生錯誤:", error);
       setUploadStatus('error');
       setStatusMessage(error.message || '清除考勤資料失敗，請確認資料庫權限。');
-    } finally {
+    } fillly {
       setIsDeleting(false);
     }
   };
@@ -200,7 +197,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       const batchRecords = [];
 
       // ----------------------------------------------------
-      // 【分流 A】新版專案辦公室 - 欄位重配 (A=姓名, B=日期, D=上班, F=下班, H=假別前兩字, I=請假區間)
+      // 【分流 A】新版專案辦公室 - 欄位重配 (A=姓名, B=日期, D=上班, F=下班, K=假別前兩字, I=請假區間)
       // ----------------------------------------------------
       if (importType === 'A') {
         let hasTimeDeductionWarning = false;
@@ -214,12 +211,12 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             if (!cols || cols.length === 0) continue;
             const rowNum = i + 1; // 實體 Excel 行數
 
-            const name = sanitizeName(cols[0]); // A欄 姓名
-            const rawDate = cols[1];            // B欄 日期
-            const rawCheckIn = cols[3] ? cols[3].toString().trim() : "";   // D欄 上班
-            const rawCheckOut = cols[5] ? cols[5].toString().trim() : "";  // F欄 下班
-            let rawLeaveTypeField = cols[7] ? cols[7].toString().trim() : ""; // H欄 請假假別
-            let rawLeaveRangeField = cols[8] ? cols[8].toString().trim() : ""; // I欄 請假時間區間
+            const name = sanitizeName(cols[0]); // A欄 姓名 (第 1 欄)
+            const rawDate = cols[1];            // B欄 日期 (第 2 欄)
+            const rawCheckIn = cols[3] ? cols[3].toString().trim() : "";   // D欄 上班 (第 4 欄)
+            const rawCheckOut = cols[5] ? cols[5].toString().trim() : "";  // F欄 下班 (第 6 欄)
+            let rawLeaveRangeField = cols[8] ? cols[8].toString().trim() : ""; // I欄 請假時間區間 (第 9 欄)
+            let rawLeaveTypeField = cols[10] ? cols[10].toString().trim() : ""; // K欄 請假假別 (第 11 欄)
 
             // 🎯 垃圾資料行過濾防線
             if (!rawCheckIn && !rawCheckOut && !rawLeaveTypeField && !rawLeaveRangeField) continue;
@@ -244,7 +241,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             let isLeave = false;
             let leaveRangeInfo = "";
 
-            // 規則調整：精準擷取 H 欄前兩個字作為假別
+            // 規則調整：精準擷取 K 欄前兩個字作為假別
             const shortLeaveType = rawLeaveTypeField.substring(0, 2);
             const isLeaveMatch = shortLeaveType.match(/(特休|事假|病假|生理假|喪假|公出|補休)/);
 
@@ -330,7 +327,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           await batch.commit();
         }
 
-        let hintNotice = hasTimeDeductionWarning ? `\n\n【💡 提示：本月含有非全天假/小時假紀錄】\n系統已依據 I 欄時間區間自動清洗並完成跨中午扣除工時精算。` : "";
+        let hintNotice = hasTimeDeductionWarning ? `\n\n【💡 提示：本月含有非全天假/小時假紀錄】\n系統已依據 K 欄假別與 I 欄時間區間自動清洗並完成跨中午扣除工時精算。` : "";
         setStatusMessage(`[新版A表 - 專案辦公室] 匯入成功！已完成 ${successCount} 筆時間與時數正規化清洗入庫，安全特赦隔離保護了 ${skippedCount} 筆人工維護紀錄。${hintNotice}`);
       }
 
@@ -389,7 +386,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
               importedNamesInFile.add(currentEmployeeName);
 
-              // 實施自動化排除清洗
               const cleanCheckIn = cleanTimeFormat(checkIn);
               const cleanCheckOut = cleanTimeFormat(checkOut);
 
@@ -460,7 +456,6 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
           throw new Error(`檔案中包含無法自動校正的資料異常，已全面卡控拒絕寫入：\n\n` + errorLogs.join('\n'));
         }
 
-        // 分批（每 500 筆一包）安全寫入 Firestore (兼具人工特赦檢查)
         let batch = writeBatch(db);
         let operationCount = 0;
 
