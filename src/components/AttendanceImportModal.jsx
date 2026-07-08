@@ -170,7 +170,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       console.error("清除考勤資料發生錯誤:", error);
       setUploadStatus('error');
       setStatusMessage(error.message || '清除考勤資料失敗，請確認資料庫權限。');
-    } fillly {
+    } finally {
       setIsDeleting(false);
     }
   };
