@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { X, Upload, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { doc, setDoc, getDoc, getFirestore, collection, getDocs, writeBatch } from 'firebase/firestore';
+import { X, Upload, Loader2, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react';
+import { doc, setDoc, getDoc, getFirestore, collection, getDocs, writeBatch, query, where } from 'firebase/firestore';
 import { getApp } from 'firebase/app';
 
 const db = getFirestore(getApp());
@@ -10,12 +10,14 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
   const [importType, setImportType] = useState('A'); // 'A' = 新版A表, 'C' = C表
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false); // 刪除狀態讀取中
   const [uploadStatus, setUploadStatus] = useState(null); // 'success' | 'error' | null
   const [statusMessage, setStatusMessage] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false); // 二階段刪除確認視窗切換
 
   if (!isOpen) return null;
 
-  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編譯錯誤
+  // 運行時動態載入 CDN SheetJS 庫的方法，徹底解決 Rollup 無法 resolve "xlsx" 的 Vercel 編編譯錯誤
   const loadSheetJS = () => {
     return new Promise((resolve, reject) => {
       if (window.XLSX) {
@@ -109,6 +111,71 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
       return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
     }
     return strDate;
+  };
+
+  // 🗑️ 核心刪除工具：一鍵抹除特定專案與月份之匯入考勤資料
+  const handleDeleteAttendance = async () => {
+    setIsDeleting(true);
+    setUploadStatus(null);
+    setStatusMessage('');
+    setShowDeleteConfirm(false);
+
+    try {
+      const attendanceRef = collection(db, 'artifacts', globalAppId, 'public', 'data', 'attendance_records');
+      
+      // 依據當前選定的專案代碼與結算月份進行條件檢索
+      const q = query(
+        attendanceRef, 
+        where('projectId', '==', selectedProject),
+        where('month', '==', selectedMonth)
+      );
+
+      const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
+        setUploadStatus('error');
+        setStatusMessage(`找不到該月份 [${selectedMonth}] 的任何匯入考勤紀錄，無需執行刪除。`);
+        return;
+      }
+
+      let deleteCount = 0;
+      let protectedCount = 0;
+      let batch = writeBatch(db);
+      let operationCount = 0;
+
+      for (const docSnap of querySnapshot.docs) {
+        const data = docSnap.data();
+        
+        // 人工特赦隔離保護：如果此筆資料已被人工手動調整過，予以隔離保護不抹除
+        if (data.isManualMaintained === true) {
+          protectedCount++;
+          continue;
+        }
+
+        batch.delete(docSnap.ref);
+        deleteCount++;
+        operationCount++;
+
+        // 遵守 Firestore Batch 500筆限制上限防崩潰
+        if (operationCount === 500) {
+          await batch.commit();
+          batch = writeBatch(db);
+          operationCount = 0;
+        }
+      }
+
+      if (operationCount > 0) {
+        await batch.commit();
+      }
+
+      setUploadStatus('success');
+      setStatusMessage(`[數據清除成功] 已完全從資料庫抹除該月份 [${selectedMonth}] 共 ${deleteCount} 筆自動匯入紀錄。 (另安全隔離保護了 ${protectedCount} 筆人工手動維護紀錄)`);
+    } catch (error) {
+      console.error("清除考勤資料發生錯誤:", error);
+      setUploadStatus('error');
+      setStatusMessage(error.message || '清除考勤資料失敗，請確認資料庫權限。');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleFileChange = async (e) => {
@@ -317,7 +384,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
               const currentMs = new Date(dateStr).getTime();
               if (!isNaN(currentMs)) {
                 if (currentMs < minFileDateMs) minFileDateMs = currentMs;
-                if (currentMs > maxFileDateMs) maxFileDateMs = currentMs; // 修正 Bug：不自代入
+                if (currentMs > maxFileDateMs) maxFileDateMs = currentMs; 
               }
 
               importedNamesInFile.add(currentEmployeeName);
@@ -531,13 +598,18 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
           <div>
             <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1.5">選擇檔案上傳</label>
-            <label className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-2xl cursor-pointer transition-colors text-center ${isUploading ? 'bg-slate-50 border-slate-300 dark:bg-slate-900/30' : 'bg-white border-indigo-200 hover:border-indigo-400 dark:bg-slate-800/50 dark:border-slate-700 dark:hover:border-slate-500'}`}>
-              <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileChange} disabled={isUploading} />
+            <label className={`flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-2xl cursor-pointer transition-colors text-center ${isUploading || isDeleting ? 'bg-slate-50 border-slate-300 dark:bg-slate-900/30 cursor-not-allowed' : 'bg-white border-indigo-200 hover:border-indigo-400 dark:bg-slate-800/50 dark:border-slate-700 dark:hover:border-slate-500'}`}>
+              <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileChange} disabled={isUploading || isDeleting} />
               
               {isUploading ? (
                 <div className="flex flex-col items-center space-y-2">
                   <Loader2 size={32} className="text-indigo-500 animate-spin" />
                   <span className="text-sm font-bold text-slate-600 dark:text-slate-400">系統正在執行一體化欄位對應與覆蓋...</span>
+                </div>
+              ) : isDeleting ? (
+                <div className="flex flex-col items-center space-y-2">
+                  <Loader2 size={32} className="text-red-500 animate-spin" />
+                  <span className="text-sm font-bold text-red-600 dark:text-red-400">系統正在抹除資料庫歷史考勤明細...</span>
                 </div>
               ) : (
                 <div className="flex flex-col items-center space-y-1.5">
@@ -549,11 +621,52 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
             </label>
           </div>
 
+          {/* 🗑️ 一鍵清除當月匯入考勤區塊 */}
+          {!isUploading && !isDeleting && (
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 flex flex-col space-y-2">
+              {!showDeleteConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="w-full py-2.5 px-4 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 text-red-600 dark:text-red-400 font-bold rounded-xl text-xs flex items-center justify-center transition-colors border border-red-200/50 dark:border-red-500/20"
+                >
+                  <Trash2 size={14} className="mr-1.5" /> 清除此專案於 [{selectedMonth}] 已匯入的考勤資料
+                </button>
+              ) : (
+                <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-xl p-3 flex flex-col space-y-2.5 animate-in slide-in-from-top-1 duration-200">
+                  <div className="flex items-start text-xs text-red-800 dark:text-red-400">
+                    <AlertCircle size={16} className="mr-2 shrink-0 text-red-500" />
+                    <div>
+                      <p className="font-bold">確定要執行刪除嗎？</p>
+                      <p className="mt-0.5 opacity-80 leading-relaxed">這將永久抹除本系統中該專案在 {selectedMonth} 的所有自動匯入出勤明細（已被標記人工維護的特赦紀錄會安全保留）。</p>
+                    </div>
+                  </div>
+                  <div className="flex space-x-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirm(false)}
+                      className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 text-[11px] font-bold rounded-lg transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteAttendance}
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-lg transition-colors shadow-sm"
+                    >
+                      確認永久清除
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {uploadStatus && (
             <div className={`p-4 rounded-xl border flex items-start text-xs ${uploadStatus === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400' : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-500/10 dark:border-red-500/20 dark:text-red-400'}`}>
               {uploadStatus === 'success' ? <CheckCircle2 size={16} className="mr-2 shrink-0 mt-0.5" /> : <AlertCircle size={16} className="mr-2 shrink-0 mt-0.5" />}
               <div>
-                <p className="font-bold">{uploadStatus === 'success' ? '數據導入及覆蓋校對完成' : '解析失敗'}</p>
+                <p className="font-bold">{uploadStatus === 'success' ? '數據處理完成' : '執行失敗'}</p>
                 <p className="mt-0.5 opacity-90 leading-relaxed whitespace-pre-line">{statusMessage}</p>
               </div>
             </div>
@@ -562,7 +675,7 @@ export default function AttendanceImportModal({ isOpen, onClose, selectedProject
 
         {/* Footer */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end">
-          <button onClick={onClose} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors">
+          <button onClick={onClose} disabled={isUploading || isDeleting} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             關閉
           </button>
         </div>
