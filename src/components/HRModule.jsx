@@ -456,6 +456,20 @@ export default function HRModule({ user, selectedProject }) {
     } catch (error) { console.error("更新人員失敗:", error); }
   };
 
+  // 新增：處理刪除人員資料的功能
+  const handleDeletePerson = async (personId, personName) => {
+    if (!confirm(`確定要刪除人員「${personName}」的所有資料嗎？此操作無法復原。`)) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'personnel', personId));
+      if (editingPerson && editingPerson.id === personId) {
+        setEditingPerson(null);
+      }
+    } catch (error) {
+      console.error("刪除人員失敗:", error);
+      alert("刪除失敗，請檢查權限或網路連線");
+    }
+  };
+
   const reqGroups = {};
   requirements.forEach(req => {
     const key = `${req.unit}::${req.position}`;
@@ -804,7 +818,16 @@ export default function HRModule({ user, selectedProject }) {
                             </label>
                           </div>
                         </td>
-                        <td className="py-4 px-6 text-right"><button onClick={() => handleOpenEditPerson(u)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors opacity-0 group-hover:opacity-100 flex items-center justify-end w-full"><Edit2 size={14} className="mr-1.5" /> 維護與檢視</button></td>
+                        <td className="py-4 px-6 text-right">
+                          <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => handleOpenEditPerson(u)} className="text-indigo-600 hover:bg-indigo-50 px-2 py-1.5 rounded-lg dark:text-indigo-400 dark:hover:bg-indigo-500/20 text-xs font-bold transition-colors flex items-center">
+                              <Edit2 size={14} className="mr-1" /> 檢視
+                            </button>
+                            <button onClick={() => handleDeletePerson(u.id, u.name)} className="text-red-500 hover:bg-red-50 px-2 py-1.5 rounded-lg dark:text-red-400 dark:hover:bg-red-500/10 text-xs font-bold transition-colors flex items-center" title="刪除人員">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })
@@ -979,9 +1002,14 @@ export default function HRModule({ user, selectedProject }) {
                 </div>
               </form>
             </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-end space-x-3">
-              <button onClick={() => setEditingPerson(null)} className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
-              <button type="submit" form="editPersonForm" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center shadow-sm"><Save size={16} className="mr-2" /> 儲存所有變更</button>
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-between items-center space-x-3">
+              <button type="button" onClick={() => handleDeletePerson(editingPerson.id, editingPerson.name)} className="px-4 py-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 text-sm font-bold rounded-lg transition-colors flex items-center">
+                <Trash2 size={16} className="mr-2" /> 刪除此人員
+              </button>
+              <div className="flex space-x-3">
+                <button onClick={() => setEditingPerson(null)} type="button" className="px-5 py-2 text-slate-600 dark:text-slate-300 text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">取消</button>
+                <button type="submit" form="editPersonForm" className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 transition-colors flex items-center shadow-sm"><Save size={16} className="mr-2" /> 儲存所有變更</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1031,7 +1059,6 @@ export default function HRModule({ user, selectedProject }) {
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">核定薪資 (月薪)</label>
-                      {/* 💡 修正1：移除 text-indigo-600 強制色，改用高對比適應色，深色模式下清晰不衝突 */}
                       <input type="number" min="0" value={editingReqId ? editReqForm.approvedSalary : newReq.approvedSalary} onChange={e => editingReqId ? setEditReqForm({...editReqForm, approvedSalary: e.target.value}) : setNewReq({...newReq, approvedSalary: e.target.value})} placeholder="請輸入核定薪資數字" className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-lg text-sm outline-none focus:border-indigo-500 font-bold font-mono" />
                     </div>
                     <div>
@@ -1059,7 +1086,7 @@ export default function HRModule({ user, selectedProject }) {
                     <div className="md:col-span-3 mt-2">
                       <label className="block text-[10px] font-bold text-slate-500 mb-2 text-indigo-600 dark:text-indigo-400">額外需求說明 (選填)</label>
                       <div className="space-y-2">
-                        {(editingReqId ? (editReqForm.noteItems || []) : (newReq.noteItems || []).map((item, idx) => (
+                        {(editingReqId ? (editReqForm.noteItems || []) : (newReq.noteItems || [])).map((item, idx) => (
                           <div key={idx} className="flex items-center space-x-2">
                             <input 
                               type="text" 
@@ -1094,7 +1121,7 @@ export default function HRModule({ user, selectedProject }) {
                               <X size={16} />
                             </button>
                           </div>
-                        )))}
+                        ))}
                         <button 
                           type="button" 
                           onClick={() => {
@@ -1127,11 +1154,9 @@ export default function HRModule({ user, selectedProject }) {
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">單位/職位</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">要求人數</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">駐點屬性</th>
-                      {/* 💡 修正2：移除薪資欄位表頭多餘的硬幣符號（🪙），底色同步調整為與其他表頭和諧的標準透明度灰底 */}
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">核定薪資</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase max-w-[180px]">額外需求說明</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">有效區間 (起~迄)</th>
-                      {/* 💡 修正3：將計畫起日（計罰起日）表頭底色調整為與其他表頭完全和諧一致的顏色，徹底解決刺眼與衝突問題 */}
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">計罰起日</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase text-center">目前狀態</th>
                       <th className="py-3 px-4 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase text-right">核心操作</th>
@@ -1155,7 +1180,6 @@ export default function HRModule({ user, selectedProject }) {
                             <td className="py-3 px-4 text-sm font-bold text-slate-800 dark:text-slate-200">{req.count} <span className="text-[10px] font-normal text-slate-500">人</span></td>
                             <td className="py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400">{req.isResident ? <span className="text-indigo-600 dark:text-indigo-400 font-extrabold">是</span> : <span className="text-slate-400">否</span>}</td>
                             
-                            {/* 💡 修正4：移除核定薪資儲存格原本突兀的強制深藍底色，改用高清晰、高對比且完美融入深淺色模式的藍字，不再吃字 */}
                             <td className="py-3 px-4 text-sm font-bold text-sky-600 dark:text-sky-400 font-mono">
                               {req.approvedSalary ? `$${req.approvedSalary.toLocaleString()}` : <span className="text-[10px] font-normal text-slate-400">未填寫</span>}
                             </td>
@@ -1169,7 +1193,6 @@ export default function HRModule({ user, selectedProject }) {
                             </td>
                             <td className="py-3 px-4 text-xs font-medium text-slate-600 dark:text-slate-400 font-mono">{req.startDate} ~ {req.endDate}</td>
                             
-                            {/* 💡 修正5：將計罰起日儲存格原本極度衝突的偏白背景完全移除，改用乾淨優雅的標準表格背景，文字改為清晰、舒適的暖橙色（text-orange-500），高對比不晃眼 */}
                             <td className="py-3 px-4 text-xs font-bold text-orange-500 dark:text-orange-400 font-mono">{penaltyDate}</td>
                             
                             <td className="py-3 px-4 text-center">{isActiveToday ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold rounded">現正要求中</span> : <span className="px-2 py-0.5 bg-slate-100 text-slate-500 dark:bg-slate-700 text-[10px] font-bold rounded">非現行區間</span>}</td>
