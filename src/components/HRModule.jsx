@@ -236,6 +236,7 @@ export default function HRModule({ user, selectedProject }) {
       name: '', email: '', role: '', unit: '', isResident: true, hireDate: '', roleStartDate: '', proxyAlert: false,
       contractStart: defaultStartDate, contractEnd: '', files: []
     });
+    setIsAddPersonModalOpen(false);
     setIsAddPersonModalOpen(true);
   };
 
@@ -456,7 +457,7 @@ export default function HRModule({ user, selectedProject }) {
     } catch (error) { console.error("更新人員失敗:", error); }
   };
 
-  // 新增：處理刪除人員資料的功能
+  // 處理刪除人員資料的功能
   const handleDeletePerson = async (personId, personName) => {
     if (!confirm(`確定要刪除人員「${personName}」的所有資料嗎？此操作無法復原。`)) return;
     try {
@@ -475,7 +476,9 @@ export default function HRModule({ user, selectedProject }) {
     const key = `${req.unit}::${req.position}`;
     if (!reqGroups[key]) reqGroups[key] = { unit: req.unit, role: req.position, reqs: [] };
     const rCount = parseInt(req.count, 10) || 1;
-    const sMs = req.startDate ? new Date(req.startDate).getTime() : 0;
+    // 💡 修正核心：以計罰起始日 (penaltyStartDate) 為準，若無則降級使用 startDate
+    const penaltyStartStr = req.penaltyStartDate || req.startDate;
+    const sMs = penaltyStartStr ? new Date(penaltyStartStr).getTime() : 0;
     const eMs = req.endDate ? new Date(req.endDate).getTime() : Infinity;
     reqGroups[key].reqs.push({ count: rCount, sMs, eMs, originalReq: req });
   });
@@ -1236,12 +1239,12 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 未來異動預測與職缺空窗警告 */}
+      {/* Modal: 近期異動預估與空窗預警 */}
       {isForecastModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
-              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><LineChart size={20} className="mr-2 text-indigo-500" />近期異動與空窗預測分析 (未來 60 天內)</h3>
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><LineChart size={20} className="mr-2 text-indigo-500" />近期異動預估與空窗預警 (未來 60 天內)</h3>
               <button onClick={() => setIsForecastModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-8">
@@ -1292,12 +1295,12 @@ export default function HRModule({ user, selectedProject }) {
         </div>
       )}
 
-      {/* Modal: 今日職位空缺明細 */}
+      {/* Modal: 異常空缺現況 */}
       {isVacancyModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-800 w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/80">
-              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><CalendarDays size={20} className="mr-2 text-orange-500" />今日職位異常空缺明細分析</h3>
+              <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center"><CalendarDays size={20} className="mr-2 text-orange-500" />異常空缺現況分析</h3>
               <button onClick={() => setIsVacancyModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"><X size={20} /></button>
             </div>
             <div className="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-900/20 space-y-6">
