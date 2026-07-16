@@ -611,7 +611,7 @@ export default function ReportsModule({ user, selectedProject }) {
             const finalTimeline = []; let currentTime = groupStartLimitMs;
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             sortedOccs.forEach(occ => {
-                // 處理空缺區間
+                // 處理空缺區間 (這段必須裁切以符合報表區間的計算)
                 if (occ.startMs > currentTime) { 
                     const vStart = currentTime; 
                     const vEnd = Math.min(occ.startMs - 86400000, validEndLimitMs); 
@@ -620,21 +620,23 @@ export default function ReportsModule({ user, selectedProject }) {
                     }
                 }
                 
-                // 核心修復：將在職顯示區間嚴格限制在使用者設定的統計區間內
+                // 處理在職區間的呈現字串
                 const displayStartMs = Math.max(occ.startMs, groupStartLimitMs);
                 const displayEndMs = Math.min(occ.endMs, validEndLimitMs);
                 
                 if (displayStartMs <= displayEndMs) {
-                    const displayStartStr = new Date(displayStartMs).toISOString().split('T')[0];
-                    const displayEndStr = (occ.endMs > validEndLimitMs) ? new Date(validEndLimitMs).toISOString().split('T')[0] : occ.endStr;
+                    // 顯示邏輯：到職日保持真實日期 (occ.startStr)
+                    // 離職日邏輯：如果真實離職日 (occ.endMs) 大於報表的結束日 (validEndLimitMs)
+                    // 代表在該報表區間內「尚未離職」，所以給予 '至今'，前端便會呈現為空
+                    const displayEndStr = (occ.endMs > validEndLimitMs) ? '至今' : occ.endStr;
                     
-                    finalTimeline.push({ isVacancy: false, name: occ.name, startStr: displayStartStr, endStr: displayEndStr }); 
+                    finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: displayEndStr }); 
                 }
                 
                 currentTime = Math.max(currentTime, occ.endMs + 86400000);
             });
             
-            // 處理末段空缺區間 (同時修復原本 textEndStr 的 typo)
+            // 處理末段空缺區間 (同時修復原本文字變數 typo)
             if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) {
                 finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
             }
@@ -687,7 +689,11 @@ export default function ReportsModule({ user, selectedProject }) {
                     if (eIdx === 0) table2Html += `<td rowspan="${slot.rowSpan}" class="text-center">${slot.label}</td>`;
                     if (event.isEmpty) { table2Html += `<td colspan="3" style="color:#94a3b8; text-align:center;">(此員額於期間內全段空缺)</td>`; }
                     else if (event.isVacancy) { table2Html += `<td class="highlight font-bold">空缺</td><td class="highlight font-mono">${event.startStr}</td><td class="highlight font-mono">${event.endStr}</td>`; }
-                    else { const displayEnd = event.endStr === '至今' ? '' : event.endStr; table2Html += `<td><strong>${event.name}</strong></td><td class="font-mono">${event.startStr}</td><td class="font-mono">${displayEnd}</td>`; }
+                    else { 
+                        // 在此處理空字串，如果 endStr 是 '至今' 就以空字串顯示
+                        const displayEnd = event.endStr === '至今' ? '' : event.endStr; 
+                        table2Html += `<td><strong>${event.name}</strong></td><td class="font-mono">${event.startStr}</td><td class="font-mono">${displayEnd}</td>`; 
+                    }
                     table2Html += `</tr>`;
                 });
             });
