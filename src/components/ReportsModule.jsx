@@ -611,10 +611,33 @@ export default function ReportsModule({ user, selectedProject }) {
             const finalTimeline = []; let currentTime = groupStartLimitMs;
             const sortedOccs = [...slot.occupants].sort((a, b) => a.startMs - b.startMs);
             sortedOccs.forEach(occ => {
-                if (occ.startMs > currentTime) { const vStart = currentTime; const vEnd = occ.startMs - 86400000; if (vStart <= vEnd) finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); }
-                finalTimeline.push({ isVacancy: false, name: occ.name, startStr: occ.startStr, endStr: occ.endStr }); currentTime = occ.endMs + 86400000;
+                // 處理空缺區間
+                if (occ.startMs > currentTime) { 
+                    const vStart = currentTime; 
+                    const vEnd = Math.min(occ.startMs - 86400000, validEndLimitMs); 
+                    if (vStart <= vEnd) {
+                        finalTimeline.push({ isVacancy: true, startStr: new Date(vStart).toISOString().split('T')[0], endStr: new Date(vEnd).toISOString().split('T')[0] }); 
+                    }
+                }
+                
+                // 核心修復：將在職顯示區間嚴格限制在使用者設定的統計區間內
+                const displayStartMs = Math.max(occ.startMs, groupStartLimitMs);
+                const displayEndMs = Math.min(occ.endMs, validEndLimitMs);
+                
+                if (displayStartMs <= displayEndMs) {
+                    const displayStartStr = new Date(displayStartMs).toISOString().split('T')[0];
+                    const displayEndStr = (occ.endMs > validEndLimitMs) ? new Date(validEndLimitMs).toISOString().split('T')[0] : occ.endStr;
+                    
+                    finalTimeline.push({ isVacancy: false, name: occ.name, startStr: displayStartStr, endStr: displayEndStr }); 
+                }
+                
+                currentTime = Math.max(currentTime, occ.endMs + 86400000);
             });
-            if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], textEndStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
+            
+            // 處理末段空缺區間 (同時修復原本 textEndStr 的 typo)
+            if (currentTime <= validEndLimitMs && slot.slotIndex !== 99) {
+                finalTimeline.push({ isVacancy: true, startStr: new Date(currentTime).toISOString().split('T')[0], endStr: new Date(validEndLimitMs).toISOString().split('T')[0] });
+            }
             slot.timeline = finalTimeline;
         });
         expandedSlots.push(...slots, ...overstaffSlots);
@@ -902,7 +925,7 @@ export default function ReportsModule({ user, selectedProject }) {
     } catch (err) {
       console.error("轉出 Excel 失敗:", err);
       showMessage('error', '轉出 Excel 發生錯誤，請重新確認資料格式。');
-    } finaly: {
+    } finally {
       setIsLoadingExcel(false);
     }
   };
